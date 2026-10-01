@@ -40,6 +40,8 @@ http_port = 80
 https_port = 443
 # Directory holding certbot per-domain certs: {cert_dir}/{domain}/{fullchain,privkey}.pem
 cert_dir = "/etc/letsencrypt/live"
+# Hostname routed to the dashboard itself. Empty = derive from server.public_url.
+dashboard_host = ""
 
 [monitor]
 # Seconds between health checks and /metrics scrapes.

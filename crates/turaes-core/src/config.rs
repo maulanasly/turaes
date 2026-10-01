@@ -79,6 +79,10 @@ pub struct ProxyConfig {
     pub https_port: u16,
     /// Directory holding certbot per-domain certificate folders.
     pub cert_dir: String,
+    /// Hostname routed to the turaes dashboard itself. Defaults to the host of
+    /// `server.public_url` when unset.
+    #[serde(default)]
+    pub dashboard_host: Option<String>,
 }
 
 /// Health and metrics collection settings.
@@ -171,6 +175,36 @@ impl Config {
             || origin.starts_with("http://[::1]")
     }
 
+    /// Hostname the proxy routes to the turaes dashboard itself.
+    ///
+    /// Uses `proxy.dashboard_host` when set; otherwise derives the host from
+    /// `server.public_url` (scheme and port stripped).
+    pub fn dashboard_host(&self) -> Option<String> {
+        if let Some(host) = self.proxy.dashboard_host.as_deref() {
+            if !host.is_empty() {
+                return Some(host.to_string());
+            }
+        }
+        let after_scheme = self
+            .server
+            .public_url
+            .split("://")
+            .nth(1)
+            .unwrap_or(&self.server.public_url);
+        let host = after_scheme
+            .split('/')
+            .next()
+            .unwrap_or("")
+            .split(':')
+            .next()
+            .unwrap_or("");
+        if host.is_empty() {
+            None
+        } else {
+            Some(host.to_string())
+        }
+    }
+
     /// The OAuth callback URL registered with GitHub.
     pub fn callback_url(&self) -> String {
         format!(
@@ -253,6 +287,9 @@ fn apply_env(cfg: &mut Config) -> Result<()> {
     env_parse("TURAES_PROXY_HTTP_PORT", &mut cfg.proxy.http_port);
     env_parse("TURAES_PROXY_HTTPS_PORT", &mut cfg.proxy.https_port);
     env_str("TURAES_CERT_DIR", &mut cfg.proxy.cert_dir);
+    if let Ok(host) = std::env::var("TURAES_PROXY_DASHBOARD_HOST") {
+        cfg.proxy.dashboard_host = Some(host);
+    }
 
     env_parse(
         "TURAES_MONITOR_INTERVAL_SECS",
