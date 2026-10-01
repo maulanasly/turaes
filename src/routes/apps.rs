@@ -14,7 +14,7 @@ use turaes_core::models::Application;
 use turaes_core::{Error, Result};
 use turaes_runtime::proc::ProcRuntime;
 use turaes_runtime::systemd::SystemdRuntime;
-use turaes_runtime::{AppSpec, Deployer, Runtime};
+use turaes_runtime::{AppSpec, DeployOutcome, Deployer, Runtime};
 
 use crate::state::AppState;
 
@@ -50,7 +50,7 @@ pub struct StatsQuery {
     pub hours: Option<i64>,
 }
 
-fn validate_name(name: &str) -> Result<()> {
+pub(crate) fn validate_name(name: &str) -> Result<()> {
     let valid = !name.is_empty()
         && name.len() <= 64
         && name
@@ -67,7 +67,7 @@ fn validate_name(name: &str) -> Result<()> {
     }
 }
 
-async fn fetch_app(pool: &Pool, id: &str) -> Result<Application> {
+pub(crate) async fn fetch_app(pool: &Pool, id: &str) -> Result<Application> {
     sqlx::query_as::<_, Application>("SELECT * FROM applications WHERE id = ?")
         .bind(id)
         .fetch_optional(pool)
@@ -100,7 +100,7 @@ pub fn runtime_for(cfg: &Config, driver: &str) -> Arc<dyn Runtime> {
     }
 }
 
-async fn load_env(state: &AppState, app_id: &str) -> Result<BTreeMap<String, String>> {
+pub(crate) async fn load_env(state: &AppState, app_id: &str) -> Result<BTreeMap<String, String>> {
     let rows: Vec<(String, String)> =
         sqlx::query_as("SELECT key, value_enc FROM env_vars WHERE application_id = ?")
             .bind(app_id)
@@ -204,8 +204,21 @@ pub async fn deploy(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>> {
     let app = fetch_app(&state.pool, &id).await?;
-    let env = load_env(&state, &id).await?;
-    let spec = spec_for(&state.cfg, &app);
+    let (dep_id, out) = deploy_app(&state, &app).await?;
+    Ok(Json(serde_json::json!({
+        "deployment_id": dep_id,
+        "state": out.state,
+        "artifact_hash": out.artifact_hash,
+        "log": out.log,
+    })))
+}
+
+/// Install + restart an app, persisting the deployment record.
+///
+/// Shared by the HTTP handler and the `turaes app deploy` CLI command.
+pub async fn deploy_app(state: &AppState, app: &Application) -> Result<(String, DeployOutcome)> {
+    let env = load_env(state, &app.id).await?;
+    let spec = spec_for(&state.cfg, app);
     let dep_id = uuid::Uuid::new_v4().to_string();
 
     sqlx::query(
@@ -213,7 +226,7 @@ pub async fn deploy(
          VALUES (?, ?, 'installing', datetime('now'))",
     )
     .bind(&dep_id)
-    .bind(&id)
+    .bind(&app.id)
     .execute(&state.pool)
     .await?;
 
@@ -228,7 +241,7 @@ pub async fn deploy(
                 "UPDATE applications SET status = ?, updated_at = datetime('now') WHERE id = ?",
             )
             .bind(status)
-            .bind(&id)
+            .bind(&app.id)
             .execute(&state.pool)
             .await?;
             sqlx::query(
@@ -241,12 +254,7 @@ pub async fn deploy(
             .bind(&dep_id)
             .execute(&state.pool)
             .await?;
-            Ok(Json(serde_json::json!({
-                "deployment_id": dep_id,
-                "state": out.state,
-                "artifact_hash": out.artifact_hash,
-                "log": out.log,
-            })))
+            Ok((dep_id, out))
         }
         Err(e) => {
             sqlx::query(
@@ -259,7 +267,7 @@ pub async fn deploy(
             sqlx::query(
                 "UPDATE applications SET status = 'failed', updated_at = datetime('now') WHERE id = ?",
             )
-            .bind(&id)
+            .bind(&app.id)
             .execute(&state.pool)
             .await?;
             Err(e)

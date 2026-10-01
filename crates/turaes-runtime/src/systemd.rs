@@ -35,6 +35,58 @@ impl SystemdRuntime {
         self.unit_dir.join(spec.unit_name())
     }
 
+    /// Create the service user/group if it does not already exist.
+    async fn ensure_user(&self, spec: &AppSpec) -> Result<()> {
+        let user = spec.user();
+        let exists = Command::new("id")
+            .arg("-u")
+            .arg(&user)
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if exists {
+            return Ok(());
+        }
+        let output = Command::new("useradd")
+            .arg("--system")
+            .arg("--no-create-home")
+            .arg("--home-dir")
+            .arg(&spec.state_dir)
+            .arg("--shell")
+            .arg("/usr/sbin/nologin")
+            .arg(&user)
+            .output()
+            .await
+            .map_err(|e| Error::Internal(format!("failed to run useradd: {e}")))?;
+        if !output.status.success() {
+            return Err(Error::Internal(format!(
+                "failed to create service user '{user}': {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Give the service user ownership of its state directory.
+    async fn chown_state(&self, spec: &AppSpec) {
+        let user = spec.user();
+        let owner = format!("{user}:{user}");
+        let _ = Command::new("chown")
+            .arg("-R")
+            .arg(&owner)
+            .arg(&spec.state_dir)
+            .output()
+            .await;
+        if let Some(env_file) = &spec.env_file {
+            let _ = Command::new("chown")
+                .arg(&owner)
+                .arg(env_file)
+                .output()
+                .await;
+        }
+    }
+
     async fn systemctl(&self, args: &[&str]) -> Result<()> {
         let output = Command::new("systemctl")
             .args(args)
@@ -131,11 +183,13 @@ impl Runtime for SystemdRuntime {
             })?;
         set_executable(&spec.installed_path).await?;
 
-        // 2. State + env files.
+        // 2. Service user, state dir + env file.
+        self.ensure_user(spec).await?;
         tokio::fs::create_dir_all(&spec.state_dir).await?;
         if let Some(env_file) = &spec.env_file {
             tokio::fs::write(env_file, render_env_file(env)).await?;
         }
+        self.chown_state(spec).await;
 
         // 3. Unit file.
         tokio::fs::create_dir_all(&self.unit_dir).await?;

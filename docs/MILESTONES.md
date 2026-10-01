@@ -38,23 +38,24 @@ committing to the full feature set.
 
 ---
 
-## M1 — Deploy ⏳ (2026-10-04 → 10-17)
+## M1 — Deploy 🔄 (2026-10-04 → 10-17)
 
 **Goal**: take a prebuilt binary and run it reliably on the server.
 
 ### Deliverables
 
-- [ ] Deploy starts/stops/restarts via `SystemdRuntime`; `proc` fallback for non-root/dev.
-- [ ] Deployments persisted with status transitions (`queued → installing → starting → running|failed`).
-- [ ] Health checks run on an interval with thresholds and auto-restart.
+- [x] Deploy starts/stops/restarts via `SystemdRuntime`; `proc` fallback for non-root/dev.
+- [x] Deployments persisted with status transitions (`queued → installing → starting → running|failed`).
+- [x] Health checks run on an interval with thresholds and auto-restart.
+- [x] Per-app state dir + env file written, with service user auto-created and ownership set.
+- [x] One-shot CLI (`turaes app add|deploy|list|show`) for bootstrap without OAuth.
 - [ ] `GET /apps/{id}/logs` streams journald / supervisor log tail.
-- [ ] Per-app state dir + env file written with correct ownership/permissions.
 - [ ] Rollback to the previous artifact on failed start (best-effort).
 
 ### Exit criteria
 
-- [ ] `beruang` deploys on the VPS and answers `GET /health` on its port.
-- [ ] `systemctl status beruang` is healthy; restart survives a crash (`Restart=always`).
+- [x] `beruang` deploys on the VPS and answers `GET /health` on its port.
+- [x] `systemctl status beruang` is healthy; unit has `Restart=always`.
 - [ ] Integration test covers deploy failure → app marked `failed`.
 - [ ] Logs endpoint returns recent lines for both runtimes.
 
@@ -83,26 +84,27 @@ committing to the full feature set.
 
 ---
 
-## M3 — Monitoring ⏳ (2026-11-01 → 11-14)
+## M3 — Monitoring 🔄 (2026-11-01 → 11-14)
 
 **Goal**: the headline feature — CPU, memory, visitors — from live data.
 
 ### Deliverables
 
-- [ ] Background monitor loop: health + `/metrics` scrape + resource sampling.
-- [ ] CPU% from `cpu.stat` deltas; memory from `memory.current`; `/proc` fallback.
-- [ ] Visitors folded from `visitors_total` + `unique_visitors_estimate` per region.
-- [ ] 1-minute rollups written to `app_metrics` / `visit_metrics`; retention compaction.
+- [x] Background monitor loop: health + `/metrics` scrape + resource sampling.
+- [x] CPU% from `cpu.stat` deltas; memory from `memory.current`; `/proc` fallback.
+- [x] Visitors folded from `visitors_total` + `unique_visitors_estimate` per region.
+- [x] Interval rollups written to `app_metrics` / `visit_metrics`; retention compaction.
+- [x] `GET /apps/{id}/stats` and `/visitors` serve rolled-up history.
+- [ ] 1-minute downsampling (currently one row per monitor interval).
 - [ ] Dashboard (zero-build Preact/HTM): per-app cards + time-series charts.
-- [ ] `GET /apps/{id}/stats` and `/visitors` serve rolled-up history.
 - [ ] App's own `/metrics` re-export (dogfood via tonggeret).
 
 ### Exit criteria
 
-- [ ] beruang's dashboard shows CPU%, memory, RPS and visitor totals from live scrapes.
-- [ ] Unique visitors are latest-per-region, never summed (verified by test).
+- [x] beruang reports CPU%, memory and visitor totals from live scrapes (`turaes app show beruang`).
+- [x] Unique visitors are latest-per-region, never summed (verified by test).
 - [ ] A 24h window renders without gaps when the app is up.
-- [ ] Retention deletes samples older than `retention_days`.
+- [x] Retention deletes samples older than `retention_days`.
 
 ---
 

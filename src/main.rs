@@ -3,6 +3,8 @@
 mod app;
 mod auth;
 mod cli;
+mod commands;
+mod monitor;
 mod routes;
 mod state;
 
@@ -38,6 +40,16 @@ async fn main() {
             println!("migrations applied");
         }
         Command::Doctor => doctor(&cfg),
+        Command::App { cmd } => {
+            let pool = db::connect(&cfg.database.url)
+                .await
+                .unwrap_or_else(|e| fatal(e));
+            db::migrate(&pool).await.unwrap_or_else(|e| fatal(e));
+            let state = AppState::new(cfg.clone(), pool);
+            commands::run(&state, cmd)
+                .await
+                .unwrap_or_else(|e| fatal(e));
+        }
         Command::Serve => serve(cfg).await,
     }
 }
@@ -105,6 +117,7 @@ async fn serve(cfg: Arc<Config>) {
     db::migrate(&pool).await.unwrap_or_else(|e| fatal(e));
 
     let state = AppState::new(cfg.clone(), pool);
+    tokio::spawn(monitor::run(state.clone()));
     let router = app::build_router(state);
 
     if cfg.proxy.enabled {

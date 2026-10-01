@@ -8,6 +8,32 @@ turaes itself is a single binary with an embedded UI.
 > run on macOS, but the Pingora data plane is Linux tier-1. Run the proxy inside
 > OrbStack/a Linux VM. See [ARCHITECTURE.md](./ARCHITECTURE.md).
 
+## Live instance
+
+| | |
+|---|---|
+| Host | `43.173.9.225` (Debian 13, systemd, 2 vCPU / 3.6 GB) |
+| Dashboard/API | `http://43.173.9.225:8787` (localhost confirmed; **open 8787 in the cloud security group** for remote access) |
+| Config | `/etc/turaes/turaes.env` (mode 0600) |
+| Data | `/var/lib/turaes/turaes.db` |
+| Source | `/srv/turaes` (build), binary at `/usr/local/bin/turaes` |
+| App | `beruang` → `/srv/beruang/target/release/beruang-gateway`, managed unit `beruang.service` |
+
+```bash
+sudo systemctl status turaes beruang
+turaes app list
+turaes app show beruang        # status + cpu/mem/visitors/health
+```
+
+**Outstanding on this host**
+
+- GitHub OAuth is unset, so the web dashboard 401s. Until credentials are added,
+  manage apps with the `turaes app` CLI (runs against the local DB, no auth).
+- No proxy/TLS yet (M2): beruang is only reachable on `127.0.0.1:8000`. Add the
+  domain/TLS once Pingora ships.
+- Update env with `sudo systemctl restart turaes` after editing
+  `/etc/turaes/turaes.env`.
+
 ## 1. Build
 
 ```bash
