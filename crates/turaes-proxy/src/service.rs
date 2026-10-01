@@ -3,6 +3,10 @@
 //! Host routing and certificate discovery are always compiled; only the Pingora
 //! data plane is behind the `pingora` feature. TLS certificates are issued by
 //! certbot and loaded from disk — turaes never speaks ACME itself.
+//!
+//! Pingora's `run_forever()` blocks and drives its own async runtime, so it must
+//! run on a **dedicated OS thread** — never inside the turaes Tokio runtime
+//! (otherwise: "Cannot start a runtime from within a runtime").
 
 use std::sync::Arc;
 
@@ -35,21 +39,32 @@ pub fn state(
     }
 }
 
-#[cfg(feature = "pingora")]
-pub use pingora_impl::serve;
-
 /// Whether this build includes the Pingora data plane.
 pub fn pingora_enabled() -> bool {
     cfg!(feature = "pingora")
 }
 
-#[cfg(not(feature = "pingora"))]
+/// Start the proxy on a background OS thread. Non-blocking.
+#[cfg(feature = "pingora")]
+pub fn spawn(proxy_cfg: ProxyConfig, state: ProxyState) {
+    let handle = std::thread::Builder::new()
+        .name("pingora-proxy".into())
+        .spawn(move || {
+            if let Err(e) = pingora_impl::serve(&proxy_cfg, state) {
+                tracing::error!(error = %e, "proxy exited");
+            }
+        });
+    if let Err(e) = handle {
+        tracing::error!(error = %e, "failed to start proxy thread");
+    }
+}
+
 /// No-op when the `pingora` feature is disabled.
-pub async fn serve(_proxy_cfg: &ProxyConfig, _state: ProxyState) -> turaes_core::Result<()> {
-    Err(turaes_core::Error::Config(
-        "turaes-proxy was built without the `pingora` feature; rebuild with --features pingora"
-            .into(),
-    ))
+#[cfg(not(feature = "pingora"))]
+pub fn spawn(_proxy_cfg: ProxyConfig, _state: ProxyState) {
+    tracing::warn!(
+        "proxy.enabled is set but this build lacks the `pingora` feature; rebuild with `--features proxy`"
+    );
 }
 
 #[cfg(feature = "pingora")]
@@ -98,8 +113,8 @@ mod pingora_impl {
         }
     }
 
-    /// Run the Pingora proxy until the process exits.
-    pub async fn serve(proxy_cfg: &ProxyConfig, state: ProxyState) -> turaes_core::Result<()> {
+    /// Build and run the Pingora server. Blocks until the process exits.
+    pub fn serve(proxy_cfg: &ProxyConfig, state: ProxyState) -> turaes_core::Result<()> {
         let mut server = Server::new(None).map_err(|e| {
             turaes_core::Error::Config(format!("failed to create pingora server: {e}"))
         })?;
