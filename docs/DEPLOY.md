@@ -13,26 +13,38 @@ turaes itself is a single binary with an embedded UI.
 | | |
 |---|---|
 | Host | `43.173.9.225` (Debian 13, systemd, 2 vCPU / 3.6 GB) |
-| Dashboard/API | `http://43.173.9.225:8787` (localhost confirmed; **open 8787 in the cloud security group** for remote access) |
+| Dashboard | **https://turaes.rayakala.ink** (Pingora :80/:443, certbot TLS) |
+| API (localhost) | `http://127.0.0.1:8787` (external 8787 blocked by the cloud SG) |
+| Binary | `/usr/local/bin/turaes` — built in GitHub Actions (no Rust on the box) |
 | Config | `/etc/turaes/turaes.env` (mode 0600) |
 | Data | `/var/lib/turaes/turaes.db` |
-| Source | `/srv/turaes` (build), binary at `/usr/local/bin/turaes` |
-| App | `beruang` → `/srv/beruang/target/release/beruang-gateway`, managed unit `beruang.service` |
+| Cert | `/etc/letsencrypt/live/turaes.rayakala.ink/` (renew hooks stop/start turaes) |
+| App | `beruang` → `beruang.service`, loopback `:8000` |
 
 ```bash
 sudo systemctl status turaes beruang
 turaes app list
 turaes app show beruang        # status + cpu/mem/visitors/health
+curl -sI https://turaes.rayakala.ink/health
+```
+
+**Deploy/update the platform:**
+
+```bash
+gh workflow run release.yml -f deploy=true     # CI builds --features proxy + deploys
 ```
 
 **Outstanding on this host**
 
-- GitHub OAuth is unset, so the web dashboard 401s. Until credentials are added,
-  manage apps with the `turaes app` CLI (runs against the local DB, no auth).
-- No proxy/TLS yet (M2): beruang is only reachable on `127.0.0.1:8000`. Add the
-  domain/TLS once Pingora ships.
-- Update env with `sudo systemctl restart turaes` after editing
-  `/etc/turaes/turaes.env`.
+- GitHub OAuth is unset, so web login is unavailable (the shell loads, `/auth/me`
+  → 401). Add `TURAES_GITHUB_CLIENT_ID/SECRET/ALLOWED_GITHUB_IDS`, set the OAuth
+  callback to `https://turaes.rayakala.ink/auth/callback`, then restart. Until
+  then, manage apps with the `turaes app` CLI (local DB, no auth).
+- HTTP (`:80`) serves the dashboard directly; an HTTP→HTTPS redirect is a planned
+  proxy enhancement.
+- beruang is localhost-only until given its own hostname (do **not** use
+  `kalkulator.rayakala.ink`; it points at another server).
+- Edit `/etc/turaes/turaes.env` then `sudo systemctl restart turaes`.
 
 ## 1. Build (in GitHub Actions)
 
