@@ -204,7 +204,7 @@ Rebuild the previous binary from the last good commit and reinstall if needed.
 | Cert strategy | **certbot standalone + hooks** (MVP) | move to webroot-in-Pingora later for zero-downtime renewals |
 | Multi-domain TLS | **single cert** (dashboard) for now | multi-cert SNI callback is the next step when apps get their own domains |
 | HTTP→HTTPS | planned redirect | not yet wired in the proxy; add `request_filter` |
-| Proxy process | **in-process** (`tokio::spawn`) alongside the API | one binary; restart on redeploy |
+| Proxy process | **in-process, dedicated OS thread** | one binary; Pingora's `run_forever()` blocks and owns its runtime, so it must not run inside the Tokio runtime ("cannot start a runtime from within a runtime") |
 | Proxy startup | route table from DB at boot + on deploy | `ArcSwap` publish, no locks on hot path |
 
 ### Next code steps (if not this pass)

@@ -128,14 +128,8 @@ async fn serve(cfg: Arc<Config>) {
             tracing::warn!(error = %e, "failed to build initial proxy routes");
         }
         let proxy_state = turaes_proxy::state(&cfg.proxy, proxy_router, cfg.dashboard_host());
-        let proxy_cfg = cfg.proxy.clone();
-        tokio::spawn(async move {
-            if let Err(e) = turaes_proxy::service::serve(&proxy_cfg, proxy_state).await {
-                tracing::error!(error = %e, "proxy stopped");
-            }
-        });
+        turaes_proxy::service::spawn(cfg.proxy.clone(), proxy_state);
     }
-
     tokio::spawn(monitor::run(state.clone()));
     let router = app::build_router(state);
 
