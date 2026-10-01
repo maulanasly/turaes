@@ -11,11 +11,15 @@ Status legend: ✅ done · 🔄 in progress · ⏳ planned
 | # | Milestone | Status | Target window | Outcome |
 |---|---|---|---|---|
 | **M0** | Scaffold | ✅ | 2026-10-01 → 10-03 | Workspace, data model, runtime/proxy/monitor primitives, authenticated API, CI |
-| **M1** | Deploy | ⏳ | 2026-10-04 → 10-17 | Prebuilt-binary deploy via systemd + `proc`, health checks, logs |
+| **M1** | Deploy | 🔄 | 2026-10-04 → 10-17 | Prebuilt-binary deploy via systemd + `proc`, health checks, logs |
 | **M2** | Proxy | ⏳ | 2026-10-18 → 10-31 | Pingora data plane, host routing, domains, certbot TLS + reload |
-| **M3** | Monitoring | ⏳ | 2026-11-01 → 11-14 | `/metrics` scrape + CPU/mem + visitors, rollups, dashboard |
+| **M3** | Monitoring | 🔄 | 2026-11-01 → 11-14 | `/metrics` scrape + CPU/mem + visitors, rollups, dashboard |
 | **M4** | Ops | ⏳ | 2026-11-15 → 11-28 | Deploy history + rollback, env editor, WebSocket realtime |
 | **M5** | Auto-deploy | ⏳ | 2026-11-29 → 12-12 | GitHub/GitLab webhooks, git-based build, multi-server (optional) |
+
+> **Live instance (2026-10-01):** turaes is deployed on `43.173.9.225`
+> (Debian 13, systemd) and beruang is running under it with live health, CPU,
+> memory and visitor monitoring. See [DEPLOY.md](./DEPLOY.md#live-instance).
 
 ## Timeline
 
