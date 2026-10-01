@@ -1,9 +1,8 @@
 //! The proxy data-plane entry point.
 //!
-//! The routing/cert logic lives here unconditionally; only the Pingora data
-//! plane is feature-gated. Enabling the `pingora` feature (Linux, M2) compiles
-//! the real proxy. Without it, [`serve`] returns a clear configuration error so
-//! the rest of turaes keeps working.
+//! Host routing and certificate discovery are always compiled; only the Pingora
+//! data plane is behind the `pingora` feature. TLS certificates are issued by
+//! certbot and loaded from disk — turaes never speaks ACME itself.
 
 use std::sync::Arc;
 
@@ -15,24 +14,31 @@ use crate::tls::CertStore;
 /// Shared proxy state handed to the data plane.
 #[derive(Clone)]
 pub struct ProxyState {
-    /// Host → upstream routing table.
+    /// Host → upstream routing table (hot-swappable).
     pub router: Arc<Router>,
     /// Certificate store (certbot layout).
     pub certs: CertStore,
+    /// Hostname of the turaes dashboard (TLS cert + default route).
+    pub dashboard_host: Option<String>,
 }
 
 /// Build proxy state from configuration and a router.
-pub fn state(proxy_cfg: &ProxyConfig, router: Router) -> ProxyState {
+pub fn state(
+    proxy_cfg: &ProxyConfig,
+    router: Arc<Router>,
+    dashboard_host: Option<String>,
+) -> ProxyState {
     ProxyState {
-        router: Arc::new(router),
+        router,
         certs: CertStore::new(&proxy_cfg.cert_dir),
+        dashboard_host,
     }
 }
 
 #[cfg(feature = "pingora")]
 pub use pingora_impl::serve;
 
-/// Report whether this build includes the Pingora data plane.
+/// Whether this build includes the Pingora data plane.
 pub fn pingora_enabled() -> bool {
     cfg!(feature = "pingora")
 }
@@ -48,18 +54,20 @@ pub async fn serve(_proxy_cfg: &ProxyConfig, _state: ProxyState) -> turaes_core:
 
 #[cfg(feature = "pingora")]
 mod pingora_impl {
+    use std::sync::Arc;
+
     use async_trait::async_trait;
+    use pingora::listeners::tls::TlsSettings;
     use pingora::prelude::*;
-    use pingora::proxy::{ProxyHttp, Session};
-    use pingora::upstreams::peer::HttpPeer;
 
     use turaes_core::config::ProxyConfig;
-    use turaes_core::{Error, Result};
+
+    use crate::router::Router;
 
     use super::ProxyState;
 
     struct Gateway {
-        state: ProxyState,
+        router: Arc<Router>,
     }
 
     #[async_trait]
@@ -71,18 +79,19 @@ mod pingora_impl {
             &self,
             session: &mut Session,
             _ctx: &mut Self::CTX,
-        ) -> pingora::Result<Box<HttpPeer>> {
+        ) -> Result<Box<HttpPeer>> {
             let host = session
                 .req_header()
                 .headers
                 .get(http::header::HOST)
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or_default();
-            match self.state.router.resolve(host) {
+            match self.router.resolve(host) {
+                // Loopback upstreams speak plain HTTP.
                 Some(upstream) => Ok(Box::new(HttpPeer::new(
                     upstream.addr(),
-                    upstream.tls,
-                    host.to_string(),
+                    false,
+                    String::new(),
                 ))),
                 None => Err(pingora::Error::new(pingora::ErrorType::HTTPStatus(404))),
             }
@@ -90,14 +99,48 @@ mod pingora_impl {
     }
 
     /// Run the Pingora proxy until the process exits.
-    pub async fn serve(proxy_cfg: &ProxyConfig, state: ProxyState) -> Result<()> {
-        let mut server = Server::new(None)
-            .map_err(|e| Error::Config(format!("failed to create pingora server: {e}")))?;
+    pub async fn serve(proxy_cfg: &ProxyConfig, state: ProxyState) -> turaes_core::Result<()> {
+        let mut server = Server::new(None).map_err(|e| {
+            turaes_core::Error::Config(format!("failed to create pingora server: {e}"))
+        })?;
         server.bootstrap();
 
-        let gateway = Gateway { state };
-        let mut service = pingora::proxy::http_proxy_service(&server.configuration, gateway);
+        let gateway = Gateway {
+            router: state.router.clone(),
+        };
+        let mut service = http_proxy_service(&server.configuration, gateway);
         service.add_tcp(&format!("0.0.0.0:{}", proxy_cfg.http_port));
+
+        if let Some(host) = state.dashboard_host.as_deref() {
+            let paths = state.certs.paths(host);
+            if paths.fullchain.is_file() && paths.private_key.is_file() {
+                match TlsSettings::intermediate(
+                    &paths.fullchain.to_string_lossy(),
+                    &paths.private_key.to_string_lossy(),
+                ) {
+                    Ok(mut tls) => {
+                        tls.enable_h2();
+                        service.add_tls_with_settings(
+                            &format!("0.0.0.0:{}", proxy_cfg.https_port),
+                            None,
+                            tls,
+                        );
+                        tracing::info!(
+                            host,
+                            https_port = proxy_cfg.https_port,
+                            "proxy TLS enabled"
+                        );
+                    }
+                    Err(e) => tracing::error!(error = %e, "failed to load TLS settings"),
+                }
+            } else {
+                tracing::warn!(
+                    host,
+                    "no certificate found for dashboard host; HTTPS disabled"
+                );
+            }
+        }
+
         server.add_service(service);
         tracing::info!(http_port = proxy_cfg.http_port, "pingora proxy listening");
         server.run_forever();

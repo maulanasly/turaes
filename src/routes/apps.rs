@@ -1,6 +1,6 @@
 //! Application CRUD, deploy, and per-app metric/visitor reads.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
@@ -12,6 +12,7 @@ use turaes_core::config::Config;
 use turaes_core::db::Pool;
 use turaes_core::models::Application;
 use turaes_core::{Error, Result};
+use turaes_proxy::{RouteTable, Upstream};
 use turaes_runtime::proc::ProcRuntime;
 use turaes_runtime::systemd::SystemdRuntime;
 use turaes_runtime::{AppSpec, DeployOutcome, Deployer, Runtime};
@@ -87,6 +88,50 @@ pub fn spec_for(cfg: &Config, app: &Application) -> AppSpec {
         env_file: Some(format!("{}/{}.env", cfg.runtime.env_dir, app.name)),
         user: None,
     }
+}
+
+/// Rebuild and publish the proxy routing table from the database.
+///
+/// Routes each app's domain and the dashboard host to their loopback ports.
+/// No-op when the proxy is disabled.
+pub async fn refresh_proxy_routes(state: &AppState) -> Result<()> {
+    let Some(router) = &state.proxy_router else {
+        return Ok(());
+    };
+    let apps = sqlx::query_as::<_, Application>(
+        "SELECT * FROM applications WHERE domain IS NOT NULL AND domain != ''",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+
+    let mut routes: HashMap<String, Upstream> = HashMap::new();
+    for app in apps {
+        if let Some(domain) = app.domain {
+            routes.insert(
+                domain.to_lowercase(),
+                Upstream {
+                    host: "127.0.0.1".into(),
+                    port: app.port as u16,
+                    tls: false,
+                },
+            );
+        }
+    }
+    if let Some(host) = state.cfg.dashboard_host() {
+        routes.insert(
+            host.to_lowercase(),
+            Upstream {
+                host: "127.0.0.1".into(),
+                port: state.cfg.server.port,
+                tls: false,
+            },
+        );
+    }
+    router.publish(RouteTable::new(
+        state.cfg.server.base_domain.clone(),
+        routes,
+    ));
+    Ok(())
 }
 
 /// Select a supervisor backend by name.
@@ -195,6 +240,7 @@ pub async fn delete(State(state): State<AppState>, Path(id): Path<String>) -> Re
         .bind(&id)
         .execute(&state.pool)
         .await?;
+    let _ = refresh_proxy_routes(&state).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -254,6 +300,7 @@ pub async fn deploy_app(state: &AppState, app: &Application) -> Result<(String, 
             .bind(&dep_id)
             .execute(&state.pool)
             .await?;
+            let _ = refresh_proxy_routes(state).await;
             Ok((dep_id, out))
         }
         Err(e) => {

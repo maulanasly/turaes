@@ -61,26 +61,35 @@ committing to the full feature set.
 
 ---
 
-## M2 — Proxy ⏳ (2026-10-18 → 10-31)
+## M2 — Proxy 🔄 (2026-10-18 → 10-31)
 
 **Goal**: route hostnames through the embedded Pingora proxy with TLS.
 
+Execution plan: [PLAN-M2-PROXY.md](./PLAN-M2-PROXY.md).
+
 ### Deliverables
 
-- [ ] `turaes-proxy` builds with `--features pingora` on Linux (CI job).
-- [ ] `ProxyHttp` impl resolves `Host` → upstream and proxies HTTP/1.1 (+ h2 if easy).
-- [ ] Route table rebuilt from DB and published on deploy/domain change.
-- [ ] Wildcard `*.{base_domain}` routing for multitenant apps.
-- [ ] TLS: load certbot `fullchain.pem`/`privkey.pem` per SNI; graceful reload on renewal.
-- [ ] Forward `X-Forwarded-For/Proto`, `X-Real-IP`, and CDN country headers.
-- [ ] Unknown host → 404; upstream down → 502.
+- [x] `ProxyHttp` impl resolves `Host` → upstream (verified compiling on Linux).
+- [x] Route table rebuilt from DB and published on boot + deploy/delete.
+- [x] Wildcard `*.{base_domain}` routing for multitenant apps.
+- [x] TLS settings loaded from certbot `fullchain.pem`/`privkey.pem` (single cert).
+- [x] Unknown host → 404.
+- [ ] `turaes-proxy` builds with `--features proxy` on Linux in CI (job currently non-blocking).
+- [ ] Multi-cert SNI selection (per-app domains).
+- [ ] HTTP→HTTPS redirect + ACME webroot route in the proxy.
+- [ ] Forward `X-Forwarded-For/Proto`, `X-Real-IP`, and CDN country headers explicitly.
+- [ ] Graceful cert reload on renewal (currently restart via certbot hooks).
 
 ### Exit criteria
 
-- [ ] `https://kalkulator.rayakala.ink` reaches beruang through Pingora.
+- [ ] `https://turaes.rayakala.ink` serves the dashboard with a valid cert.
 - [ ] Adding a domain takes effect without a process restart.
-- [ ] `CF-IPCountry` reaches beruang so visitor regions stop being `unknown`.
+- [ ] beruang reachable through the proxy on its own hostname.
 - [ ] A proxy integration test (curl through the proxy) passes in CI.
+
+**Blocked on**: cloud security group must allow inbound TCP 80/443 (Phase 0 of
+the plan); `kalkulator.rayakala.ink` must **not** be pointed here (it resolves to
+another server).
 
 ---
 

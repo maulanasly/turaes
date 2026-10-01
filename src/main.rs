@@ -116,14 +116,18 @@ async fn serve(cfg: Arc<Config>) {
         .unwrap_or_else(|e| fatal(e));
     db::migrate(&pool).await.unwrap_or_else(|e| fatal(e));
 
-    let state = AppState::new(cfg.clone(), pool);
-    tokio::spawn(monitor::run(state.clone()));
-    let router = app::build_router(state);
+    let mut state = AppState::new(cfg.clone(), pool);
 
     if cfg.proxy.enabled {
-        let proxy_router =
-            turaes_proxy::Router::new(cfg.server.base_domain.clone(), Default::default());
-        let proxy_state = turaes_proxy::state(&cfg.proxy, proxy_router);
+        let proxy_router = Arc::new(turaes_proxy::Router::new(
+            cfg.server.base_domain.clone(),
+            Default::default(),
+        ));
+        state.proxy_router = Some(proxy_router.clone());
+        if let Err(e) = routes::apps::refresh_proxy_routes(&state).await {
+            tracing::warn!(error = %e, "failed to build initial proxy routes");
+        }
+        let proxy_state = turaes_proxy::state(&cfg.proxy, proxy_router, cfg.dashboard_host());
         let proxy_cfg = cfg.proxy.clone();
         tokio::spawn(async move {
             if let Err(e) = turaes_proxy::service::serve(&proxy_cfg, proxy_state).await {
@@ -131,6 +135,9 @@ async fn serve(cfg: Arc<Config>) {
             }
         });
     }
+
+    tokio::spawn(monitor::run(state.clone()));
+    let router = app::build_router(state);
 
     let addr = format!("{}:{}", cfg.server.host, cfg.server.port);
     let listener = tokio::net::TcpListener::bind(&addr)

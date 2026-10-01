@@ -66,6 +66,7 @@ turaes binary (Axum API + embedded UI + SQLite)
 - [ARCHITECTURE.md](./docs/ARCHITECTURE.md) — components and data flow
 - [ROADMAP.md](./docs/ROADMAP.md) — milestones and timeline
 - [MILESTONES.md](./docs/MILESTONES.md) — detailed scope + exit criteria
+- [PLAN-M2-PROXY.md](./docs/PLAN-M2-PROXY.md) — proxy + TLS rollout plan
 - [API.md](./docs/API.md) — HTTP API
 - [DEPLOY.md](./docs/DEPLOY.md) — VPS install and operations
 - [AGENTS.md](./AGENTS.md) — contributor/agent workflow

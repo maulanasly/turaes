@@ -20,7 +20,7 @@ serde.workspace = true
 arc-swap.workspace = true
 async-trait.workspace = true
 http.workspace = true
-pingora = { workspace = true, optional = true }
+pingora = { workspace = true, optional = true, features = ["proxy", "openssl"] }
 
 [dev-dependencies]
 tempfile = "3"

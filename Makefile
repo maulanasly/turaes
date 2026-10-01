@@ -36,6 +36,9 @@ build: ## Release build
 proxy-check: ## Type-check with the optional Pingora proxy enabled (Linux)
 	$(CARGO) check -p turaes-proxy --features pingora
 
+proxy-build: ## Release build with the Pingora proxy enabled (Linux)
+	$(CARGO) build --release --features proxy
+
 verify: lint fmt-check test-all ## The gate: lint + fmt + all tests
 
 clean: ## Remove build artifacts

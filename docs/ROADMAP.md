@@ -20,6 +20,10 @@ Status legend: ✅ done · 🔄 in progress · ⏳ planned
 > **Live instance (2026-10-01):** turaes is deployed on `43.173.9.225`
 > (Debian 13, systemd) and beruang is running under it with live health, CPU,
 > memory and visitor monitoring. See [DEPLOY.md](./DEPLOY.md#live-instance).
+>
+> **Next:** M2 proxy + TLS for `turaes.rayakala.ink`. The code is written (Pingora
+> compiles on Linux); build/cert/deploy steps, blockers and rollback are in
+> [PLAN-M2-PROXY.md](./PLAN-M2-PROXY.md).
 
 ## Timeline
 

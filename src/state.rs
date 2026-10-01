@@ -20,6 +20,8 @@ pub struct AppState {
     pub secrets: SecretBox,
     /// Shared HTTP client (health probes, OAuth calls).
     pub http: reqwest::Client,
+    /// Reverse-proxy routing table, when the proxy is enabled.
+    pub proxy_router: Option<std::sync::Arc<turaes_proxy::Router>>,
     /// When true (debug builds + `AUTH_DISABLED=1`), requests run as a dev user.
     pub auth_disabled: bool,
 }
@@ -41,6 +43,7 @@ impl AppState {
             issuer: TokenIssuer::new(&cfg.auth.jwt_secret, cfg.auth.session_ttl_days),
             secrets: SecretBox::new(&cfg.auth.jwt_secret),
             http: reqwest::Client::new(),
+            proxy_router: None,
             auth_disabled,
             cfg,
             pool,

@@ -12,6 +12,10 @@ default-run = "turaes"
 name = "turaes"
 path = "src/main.rs"
 
+[features]
+# Enables the in-process Pingora reverse proxy in turaes-proxy.
+proxy = ["turaes-proxy/pingora"]
+
 [workspace]
 resolver = "2"
 members = [
@@ -80,7 +84,7 @@ urlencoding = "2"
 rust-embed = "8"
 
 # proxy (optional, enabled in turaes-proxy with the `pingora` feature)
-pingora = "0"
+pingora = "0.9"
 arc-swap = "1"
 
 [dependencies]
