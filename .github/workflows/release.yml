@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Deploy the built binary to the VPS"
+        type: boolean
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  build:
+    name: build (linux x86_64, proxy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install build deps (OpenSSL + cmake/zlib-ng)
+        run: sudo apt-get update && sudo apt-get install -y clang perl pkg-config libssl-dev cmake
+      - name: Build release with the Pingora proxy
+        run: cargo build --release --features proxy
+      - name: Strip
+        run: strip target/release/turaes || true
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: turaes-linux-x86_64
+          path: target/release/turaes
+          if-no-files-found: error
+      - name: Publish GitHub Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/turaes
+
+  deploy:
+    name: deploy (VPS)
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: turaes-linux-x86_64
+          path: dist
+      - name: Copy binary to the server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          source: dist/turaes
+          target: /tmp
+          strip_components: 1
+      - name: Install and restart
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+            install -m 0755 /tmp/turaes /usr/local/bin/turaes
+            rm -f /tmp/turaes
+            systemctl restart turaes
+            sleep 1
+            systemctl is-active turaes
+            curl -fsS http://127.0.0.1:8787/health || true

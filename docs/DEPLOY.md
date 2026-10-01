@@ -34,24 +34,26 @@ turaes app show beruang        # status + cpu/mem/visitors/health
 - Update env with `sudo systemctl restart turaes` after editing
   `/etc/turaes/turaes.env`.
 
-## 1. Build
+## 1. Build (in GitHub Actions)
+
+The binary is built by CI — the server does **not** need a Rust toolchain.
 
 ```bash
-# API + runtime + monitor (fast, any platform)
-cargo build --release
-
-# with the Pingora proxy data plane (Linux; needs clang + perl, OpenSSL backend)
-cargo build --release -p turaes-proxy --features pingora
-cargo build --release            # binary picks the feature up when enabled at build
+gh workflow run release.yml -f deploy=true   # build with --features proxy + deploy
+gh run watch
 ```
 
-Build the full binary with the feature on:
+`.github/workflows/release.yml` builds `turaes` on Ubuntu with `clang perl
+pkg-config libssl-dev cmake`, uploads the `turaes-linux-x86_64` artifact,
+attaches it to a GitHub Release on tags, and (when `deploy: true`) installs it
+on the VPS over SSH and restarts the service. Required secrets:
+`DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`.
+
+Local build (optional, Linux; needs the same deps):
 
 ```bash
-cargo build --release --features turaes-proxy/pingora
+cargo build --release --features proxy      # or: make proxy-build
 ```
-
-CI installs `clang` + `perl` for the proxy build (see `.github/workflows/ci.yml`).
 
 ## 2. Install
 

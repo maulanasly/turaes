@@ -87,9 +87,9 @@ Execution plan: [PLAN-M2-PROXY.md](./PLAN-M2-PROXY.md).
 - [ ] beruang reachable through the proxy on its own hostname.
 - [ ] A proxy integration test (curl through the proxy) passes in CI.
 
-**Blocked on**: cloud security group must allow inbound TCP 80/443 (Phase 0 of
-the plan); `kalkulator.rayakala.ink` must **not** be pointed here (it resolves to
-another server).
+**Network verified (Phase 0 ✅)**: inbound TCP 80/443 reach the box from the
+internet; `turaes.rayakala.ink` resolves here. Note `kalkulator.rayakala.ink`
+must **not** be pointed here (it resolves to another server).
 
 ---
 

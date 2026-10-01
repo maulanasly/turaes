@@ -21,8 +21,9 @@ Status legend: ✅ done · 🔄 in progress · ⏳ planned
 > (Debian 13, systemd) and beruang is running under it with live health, CPU,
 > memory and visitor monitoring. See [DEPLOY.md](./DEPLOY.md#live-instance).
 >
-> **Next:** M2 proxy + TLS for `turaes.rayakala.ink`. The code is written (Pingora
-> compiles on Linux); build/cert/deploy steps, blockers and rollback are in
+> **Next:** M2 proxy + TLS for `turaes.rayakala.ink`. The code is written and
+> merged (Pingora compiles on Linux) and inbound TCP 80/443 are verified open
+> from the internet (Phase 0 ✅). Build/cert/deploy steps and rollback are in
 > [PLAN-M2-PROXY.md](./PLAN-M2-PROXY.md).
 
 ## Timeline

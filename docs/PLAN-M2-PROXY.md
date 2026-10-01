@@ -4,56 +4,74 @@
 app hostnames to loopback ports, via the in-process Pingora proxy, with certs
 issued by certbot. Docker-less throughout.
 
-Status: **code written, not yet built/deployed on the server.** The data plane
-compiles on Linux with `--features proxy` (verified via `cargo check`); the
-remaining work is build, certs, config, and cloud-firewall access.
+Status: **code merged; network verified; build moved to CI.** The Pingora data
+plane compiles on Linux, inbound TCP 80/443 are reachable (Phase 0 ✅), and the
+release binary is now produced by GitHub Actions (`release.yml`, Phase 1).
+Remaining work: certs, config, and deploy.
 
 ---
 
-## Phase 0 — Unblock (owner action)
+## Phase 0 — Network access ✅ VERIFIED (2026-10-01)
 
 The box `43.173.9.225` is a Tencent Cloud VM with **no host firewall** (`iptables`,
 `nft`, `ufw` all empty). Reachability is controlled only by the **cloud security
 group**.
 
+Verified by binding temporary listeners on the host and connecting from the
+public internet:
+
 | Port | Needed for | State |
 |---|---|---|
 | 22 | SSH | open |
-| 80 | Let's Encrypt HTTP-01 **and** HTTP→HTTPS redirect | open the SYNs — confirm |
-| 443 | HTTPS dashboard | **must be opened** |
-| 8787 | direct dashboard access (dev only) | optional; currently rejected |
+| 80 | Let's Encrypt HTTP-01 **and** HTTP→HTTPS redirect | ✅ **open** (raw payload received) |
+| 443 | HTTPS dashboard | ✅ **open** (raw payload received) |
+| 8787 | direct dashboard access (dev only) | blocked (control test) |
+| DNS | `turaes.rayakala.ink` → `43.173.9.225`, 80/443 reachable | ✅ |
 
-- [ ] In the Tencent console, allow inbound **TCP 80** and **TCP 443** from
-      `0.0.0.0/0` on this instance's security group.
-- [ ] (Optional) allow **8787** for direct API access before DNS/TLS land.
+- [x] Inbound **TCP 80** confirmed from the internet (HTTP-01 will work).
+- [x] Inbound **TCP 443** confirmed from the internet.
+- [x] DNS resolves to this box.
+- [ ] (Optional) allow **8787** if direct API access is wanted.
 
-> Why this matters: certbot's HTTP-01 challenge must be reachable from the
-> public internet on port 80; users need 443. No host-side firewall changes
-> are required.
+No owner action required — proceed to Phase 1.
 
 ---
 
-## Phase 1 — Build with the proxy enabled
+## Phase 1 — Build in GitHub Actions (no Rust on the server)
 
-On the server (Linux; Pingora is Linux tier-1):
+The binary is built by CI, not on the VPS. `.github/workflows/release.yml`:
+
+- **`build`** — on tags `v*` and manual dispatch: installs `clang perl
+  pkg-config libssl-dev cmake`, runs `cargo build --release --features proxy`,
+  strips, uploads the `turaes-linux-x86_64` artifact, and attaches the binary to
+  a GitHub Release on tags.
+- **`deploy`** — on manual dispatch with `deploy: true`: downloads the artifact
+  and installs it over SSH (`install -m 0755` → `/usr/local/bin/turaes`,
+  `systemctl restart turaes`).
+
+`.github/workflows/ci.yml` now runs the proxy job as a **required** gate
+(`cargo check -p turaes-proxy --features pingora`).
+
+Required repository secrets (Settings → Secrets → Actions, or `gh secret set`):
+
+| Secret | Value |
+|---|---|
+| `DEPLOY_HOST` | `43.173.9.225` |
+| `DEPLOY_USER` | `root` |
+| `DEPLOY_SSH_KEY` | private key whose public key is in `/root/.ssh/authorized_keys` |
+
+- [ ] Workflows merged to `main`.
+- [ ] Deploy secrets set.
+
+Run it:
 
 ```bash
-sudo apt-get install -y build-essential pkg-config libssl-dev cmake   # already present
-cd /srv/turaes && . /root/.cargo/env
-cargo build --release --features proxy        # or: make proxy-build
+gh workflow run release.yml -f deploy=true     # build in CI + deploy to VPS
+gh run watch                                    # follow the run
 ```
 
-- Build deps: `libssl-dev` (OpenSSL backend links system OpenSSL), `cmake`
-  (`libz-ng-sys`, pulled transitively). `clang`/`perl` only needed for the
-  BoringSSL backend — not used here.
-- Output: `/srv/turaes/target/release/turaes` (with Pingora compiled in;
-  `turaes doctor` will show `proxy.pingora true`).
-
-- [ ] Release binary built with `--features proxy`.
-
-```bash
-sudo install -m 0755 /srv/turaes/target/release/turaes /usr/local/bin/turaes
-```
+> The server no longer needs a Rust toolchain; it only runs the released
+> binary. (The earlier server-side build is superseded.)
 
 ---
 
@@ -194,8 +212,8 @@ Rebuild the previous binary from the last good commit and reinstall if needed.
 1. HTTP→HTTPS redirect + ACME webroot route in `ProxyHttp::request_filter`.
 2. Multi-cert SNI via `TlsSettings::with_callbacks` implementing `TlsAccept`,
    selecting `{cert_dir}/{sni}/{fullchain,privkey}.pem` (BoringSSL/OpenSSL only).
-3. CI: flip the `proxy` job from `continue-on-error` to required once this
-   build is stable; publish a release binary so the server needs no Rust.
+3. ~~CI proxy job + release binary~~ — done: `release.yml` builds with
+   `--features proxy` and deploys; `ci.yml` proxy gate is required.
 
 ---
 
@@ -203,12 +221,11 @@ Rebuild the previous binary from the last good commit and reinstall if needed.
 
 | Phase | Work | Estimate |
 |---|---|---|
-| 0 | open 80/443 (owner) | minutes |
-| 1 | build `--features proxy` on server | ~5–10 min build |
+| 0 | open 80/443 | ✅ verified |
+| 1 | CI build + artifact + deploy workflow | ~10 min + CI minutes |
 | 2 | certbot issue + hooks | ~5 min |
-| 3–4 | env + restart | ~5 min |
+| 3–4 | env + deploy/restart | ~5 min |
 | 5 | verification | ~10 min |
-| | **total hands-on** | **~30–40 min** + build time |
+| | **total hands-on** | **~30 min** + CI build time |
 
-Blocked on **Phase 0** for public HTTPS; Phases 1–5 can proceed against
-`127.0.0.1` with a temporary self-signed cert in the meantime.
+Phase 0 ✅ verified, so the public HTTPS path is unblocked.

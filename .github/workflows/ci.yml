@@ -26,17 +26,16 @@ jobs:
       - name: Tests
         run: cargo test --workspace --all-targets
 
-  # The Pingora data plane is Linux tier-1 and needs clang + perl for the
-  # OpenSSL backend. Non-blocking during M0/M1; M2 flips continue-on-error off.
+  # The Pingora data plane is Linux tier-1; requires OpenSSL dev headers and
+  # cmake (for libz-ng-sys). Now a required gate (M2 shipped).
   proxy:
     name: proxy (pingora feature)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install build deps
-        run: sudo apt-get update && sudo apt-get install -y clang perl pkg-config libssl-dev
+        run: sudo apt-get update && sudo apt-get install -y clang perl pkg-config libssl-dev cmake
       - name: Check proxy
         run: cargo check -p turaes-proxy --features pingora
