@@ -95,13 +95,18 @@ mod pingora_impl {
             session: &mut Session,
             _ctx: &mut Self::CTX,
         ) -> Result<Box<HttpPeer>> {
-            let host = session
-                .req_header()
+            // HTTP/1.1 carries `Host`; HTTP/2 exposes the host via the URI
+            // authority (`:authority`). Pingora guarantees one of the two is
+            // present for a valid request.
+            let req = session.req_header();
+            let host = req
                 .headers
                 .get(http::header::HOST)
                 .and_then(|v| v.to_str().ok())
-                .unwrap_or_default();
-            match self.router.resolve(host) {
+                .or_else(|| req.uri.host())
+                .unwrap_or_default()
+                .to_string();
+            match self.router.resolve(&host) {
                 // Loopback upstreams speak plain HTTP.
                 Some(upstream) => Ok(Box::new(HttpPeer::new(
                     upstream.addr(),
