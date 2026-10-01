@@ -19,10 +19,12 @@ container layer.
 
 ## Status
 
-**M0 — scaffold.** The workspace, data model, runtime abstraction, proxy
-routing, monitoring primitives and authenticated API all build and are tested.
-The Pingora data plane and the live monitoring loop land in M2/M3. See
-[docs/ROADMAP.md](./docs/ROADMAP.md) and [docs/MILESTONES.md](./docs/MILESTONES.md).
+**M0–M2 shipped · M3 in progress.** Deploy (systemd + `proc`), the live
+monitoring loop (CPU/memory/visitors from tonggeret `/metrics`), and the Pingora
+proxy + Let's Encrypt TLS are running in production at
+**https://turaes.rayakala.ink**. The dashboard UI and GitHub OAuth login land in
+M3. See [docs/ROADMAP.md](./docs/ROADMAP.md), [docs/MILESTONES.md](./docs/MILESTONES.md)
+and [docs/PLAN-M2-PROXY.md](./docs/PLAN-M2-PROXY.md).
 
 ## Quickstart
 

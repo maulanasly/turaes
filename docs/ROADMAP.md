@@ -12,7 +12,7 @@ Status legend: ✅ done · 🔄 in progress · ⏳ planned
 |---|---|---|---|---|
 | **M0** | Scaffold | ✅ | 2026-10-01 → 10-03 | Workspace, data model, runtime/proxy/monitor primitives, authenticated API, CI |
 | **M1** | Deploy | 🔄 | 2026-10-04 → 10-17 | Prebuilt-binary deploy via systemd + `proc`, health checks, logs |
-| **M2** | Proxy | ⏳ | 2026-10-18 → 10-31 | Pingora data plane, host routing, domains, certbot TLS + reload |
+| **M2** | Proxy | ✅ | 2026-10-18 → 10-31 | Pingora data plane, host routing, domains, certbot TLS + reload |
 | **M3** | Monitoring | 🔄 | 2026-11-01 → 11-14 | `/metrics` scrape + CPU/mem + visitors, rollups, dashboard |
 | **M4** | Ops | ⏳ | 2026-11-15 → 11-28 | Deploy history + rollback, env editor, WebSocket realtime |
 | **M5** | Auto-deploy | ⏳ | 2026-11-29 → 12-12 | GitHub/GitLab webhooks, git-based build, multi-server (optional) |
@@ -21,10 +21,12 @@ Status legend: ✅ done · 🔄 in progress · ⏳ planned
 > (Debian 13, systemd) and beruang is running under it with live health, CPU,
 > memory and visitor monitoring. See [DEPLOY.md](./DEPLOY.md#live-instance).
 >
-> **Next:** M2 proxy + TLS for `turaes.rayakala.ink`. The code is written and
-> merged (Pingora compiles on Linux) and inbound TCP 80/443 are verified open
-> from the internet (Phase 0 ✅). Build/cert/deploy steps and rollback are in
-> [PLAN-M2-PROXY.md](./PLAN-M2-PROXY.md).
+> **M2 shipped (2026-10-01):** `https://turaes.rayakala.ink` serves the
+> dashboard over HTTP/2 with a Let's Encrypt cert, built in GitHub Actions and
+> deployed to the VPS. Rollout/fixes: [PLAN-M2-PROXY.md](./PLAN-M2-PROXY.md).
+>
+> **Next:** M3 dashboard UI (zero-build Preact/HTM charts) + GitHub OAuth login;
+> then per-app hostnames and multi-cert SNI.
 
 ## Timeline
 
@@ -53,8 +55,10 @@ Deploy `beruang` (Rust Axum, emits tonggeret metrics with visitors) on the VPS:
 1. **M1** — register `beruang`, binary `/srv/beruang/target/release/beruang-gateway`,
    port `8000`, health `/health`, metrics `/metrics`; deploy under systemd; verify
    `systemctl status beruang` and `GET /health`.
-2. **M2** — route `kalkulator.rayakala.ink` → `127.0.0.1:8000` through Pingora;
-   load the certbot certificate; pass `CF-IPCountry` so visitors get real regions.
+2. **M2** — route a hostname (e.g. `beruang.turaes.rayakala.ink`) →
+   `127.0.0.1:8000` through Pingora; load the certbot certificate; pass
+   `CF-IPCountry` so visitors get real regions. (`kalkulator.rayakala.ink` stays
+   on its existing server.)
 3. **M3** — scrape `http://127.0.0.1:8000/metrics`; show CPU%, memory, RPS and
    total/unique visitors on the dashboard from live data.
 

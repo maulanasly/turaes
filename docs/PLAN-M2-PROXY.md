@@ -4,10 +4,21 @@
 app hostnames to loopback ports, via the in-process Pingora proxy, with certs
 issued by certbot. Docker-less throughout.
 
-Status: **code merged; network verified; build moved to CI.** The Pingora data
-plane compiles on Linux, inbound TCP 80/443 are reachable (Phase 0 ✅), and the
-release binary is now produced by GitHub Actions (`release.yml`, Phase 1).
-Remaining work: certs, config, and deploy.
+Status: ✅ **SHIPPED (2026-10-01).** `https://turaes.rayakala.ink` serves the
+dashboard over HTTP/2 with a valid Let's Encrypt cert, built in GitHub Actions
+and deployed to the VPS.
+
+### Result
+
+- TLS handshake OK (`CN=turaes.rayakala.ink`, Let's Encrypt), HTTP/2 **200**,
+  HTTP/1.1 **200**, dashboard root **200**; unknown host → **404**.
+- Two runtime bugs found and fixed during rollout:
+  1. Pingora `run_forever()` panicked inside the Tokio runtime → proxy now runs
+     on a dedicated OS thread.
+  2. HTTP/2 has no `Host` header → host now resolves from the URI authority
+     (`req.uri.host()`).
+- Still open: dashboard login (GitHub OAuth creds), HTTP→HTTPS redirect,
+  multi-cert SNI, per-app hostnames.
 
 ---
 
@@ -60,8 +71,8 @@ Required repository secrets (Settings → Secrets → Actions, or `gh secret set
 | `DEPLOY_USER` | `root` |
 | `DEPLOY_SSH_KEY` | private key whose public key is in `/root/.ssh/authorized_keys` |
 
-- [ ] Workflows merged to `main`.
-- [ ] Deploy secrets set.
+- [x] Workflows merged to `main` (PR #3).
+- [x] Deploy secrets set (`DEPLOY_HOST`/`DEPLOY_USER`/`DEPLOY_SSH_KEY`).
 
 Run it:
 
@@ -97,9 +108,9 @@ Result: `/etc/letsencrypt/live/turaes.rayakala.ink/{fullchain.pem,privkey.pem}`
 # /etc/letsencrypt/renewal-hooks/post/10-start-turaes.sh -> systemctl start turaes
 ```
 
-- [ ] Cert issued (or a temporary self-signed cert placed at the same path if
+- [x] Cert issued (or a temporary self-signed cert placed at the same path if
       Phase 0 is not done yet, so the proxy can start for local testing).
-- [ ] Renewal hooks installed.
+- [x] Renewal hooks installed.
 
 > Future enhancement: serve `/.well-known/acme-challenge/` from a webroot in
 > Pingora's `request_filter` so renewals need no downtime.
@@ -152,7 +163,7 @@ Behavior already implemented:
   - wildcard `{app}.{base_domain}` resolution
 - Unknown host → `404`.
 
-- [ ] `turaes` active with proxy; `ss -tlnp` shows `:80` and `:443`.
+- [x] `turaes` active with proxy; `ss -tlnp` shows `:80` and `:443`.
 
 ---
 
@@ -170,10 +181,10 @@ curl -sI https://turaes.rayakala.ink/health     # 200, valid cert
 
 Checklist:
 
-- [ ] HTTP `:80` answers; HTTPS `:443` answers with a valid Let's Encrypt cert.
-- [ ] Dashboard loads at `https://turaes.rayakala.ink` and OAuth login works.
-- [ ] `curl -H 'Host: turaes.rayakala.ink' http://127.0.0.1/health` → ok.
-- [ ] Unknown host returns 404.
+- [x] HTTP `:80` answers; HTTPS `:443` answers with a valid Let's Encrypt cert.
+- [~] Dashboard loads at `https://turaes.rayakala.ink`; OAuth login pending creds.
+- [x] `curl -H 'Host: turaes.rayakala.ink' http://127.0.0.1/health` → ok.
+- [x] Unknown host returns 404.
 - [ ] beruang (or another app) reachable via its domain once set.
 
 > **Do not** point `kalkulator.rayakala.ink` at this box: that DNS already

@@ -61,7 +61,7 @@ committing to the full feature set.
 
 ---
 
-## M2 — Proxy 🔄 (2026-10-18 → 10-31)
+## M2 — Proxy ✅ (2026-10-18 → 10-31)
 
 **Goal**: route hostnames through the embedded Pingora proxy with TLS.
 
@@ -74,15 +74,15 @@ Execution plan: [PLAN-M2-PROXY.md](./PLAN-M2-PROXY.md).
 - [x] Wildcard `*.{base_domain}` routing for multitenant apps.
 - [x] TLS settings loaded from certbot `fullchain.pem`/`privkey.pem` (single cert).
 - [x] Unknown host → 404.
-- [ ] `turaes-proxy` builds with `--features proxy` on Linux in CI (job currently non-blocking).
+- [x] `turaes-proxy` builds with `--features proxy` in CI (`release.yml`); proxy check is a required gate.
 - [ ] Multi-cert SNI selection (per-app domains).
 - [ ] HTTP→HTTPS redirect + ACME webroot route in the proxy.
-- [ ] Forward `X-Forwarded-For/Proto`, `X-Real-IP`, and CDN country headers explicitly.
+- [~] Forward `X-Forwarded-For/Proto`, `X-Real-IP`, and CDN country headers explicitly.
 - [ ] Graceful cert reload on renewal (currently restart via certbot hooks).
 
 ### Exit criteria
 
-- [ ] `https://turaes.rayakala.ink` serves the dashboard with a valid cert.
+- [x] `https://turaes.rayakala.ink` serves the dashboard with a valid cert (HTTP/2).
 - [ ] Adding a domain takes effect without a process restart.
 - [ ] beruang reachable through the proxy on its own hostname.
 - [ ] A proxy integration test (curl through the proxy) passes in CI.
