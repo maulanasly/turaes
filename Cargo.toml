@@ -1,0 +1,123 @@
+[package]
+name = "turaes"
+description = "A lightweight, self-hosted, Docker-less deployment platform"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+default-run = "turaes"
+
+[[bin]]
+name = "turaes"
+path = "src/main.rs"
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/turaes-core",
+    "crates/turaes-runtime",
+    "crates/turaes-proxy",
+    "crates/turaes-monitor",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/maulanasly/turaes"
+authors = ["maulanasly"]
+
+[workspace.dependencies]
+turaes-core = { path = "crates/turaes-core" }
+turaes-runtime = { path = "crates/turaes-runtime" }
+turaes-proxy = { path = "crates/turaes-proxy" }
+turaes-monitor = { path = "crates/turaes-monitor" }
+
+# web
+axum = { version = "0.8", features = ["macros"] }
+axum-extra = { version = "0.10", features = ["cookie"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["trace", "cors", "set-header"] }
+http = "1"
+
+# async + runtime
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# serialization / config
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# db
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "migrate", "chrono", "uuid"] }
+
+# errors / logging
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# time / ids
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# cli
+clap = { version = "4", features = ["derive", "env"] }
+
+# auth / crypto
+jsonwebtoken = "9"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+rand = "0.8"
+sha2 = "0.10"
+aes-gcm = "0.10"
+base64 = "0.22"
+urlencoding = "2"
+
+# static assets
+rust-embed = "8"
+
+# proxy (optional, enabled in turaes-proxy with the `pingora` feature)
+pingora = "0"
+arc-swap = "1"
+
+[dependencies]
+turaes-core.workspace = true
+turaes-runtime.workspace = true
+turaes-proxy.workspace = true
+turaes-monitor.workspace = true
+
+axum.workspace = true
+axum-extra.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+http.workspace = true
+
+tokio.workspace = true
+futures.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
+
+sqlx.workspace = true
+
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+chrono.workspace = true
+uuid.workspace = true
+
+clap.workspace = true
+
+jsonwebtoken.workspace = true
+reqwest.workspace = true
+urlencoding.workspace = true
+
+rust-embed.workspace = true
+
+[dev-dependencies]
+tower.workspace = true
+http-body-util = "0.1"
+tempfile = "3"

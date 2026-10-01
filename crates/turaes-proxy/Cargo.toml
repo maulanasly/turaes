@@ -1,0 +1,26 @@
+[package]
+name = "turaes-proxy"
+description = "In-process reverse proxy (Pingora) for turaes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# Enables the actual Pingora data plane. Off by default so `make verify` on
+# macOS/CI stays fast; M2 turns it on for Linux builds (see docs/ROADMAP.md).
+pingora = ["dep:pingora"]
+
+[dependencies]
+turaes-core.workspace = true
+tracing.workspace = true
+serde.workspace = true
+arc-swap.workspace = true
+async-trait.workspace = true
+http.workspace = true
+pingora = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = "3"

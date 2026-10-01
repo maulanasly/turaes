@@ -1,0 +1,22 @@
+[Unit]
+Description=turaes deployment platform (docker-less self-hosted PaaS)
+Documentation=https://github.com/maulanasly/turaes
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# turaes generates systemd units for the apps it manages and owns :80/:443 via
+# Pingora, so it runs as root. Switch to the `proc` runtime + DynamicUser to
+# drop privileges (see docs/DEPLOY.md).
+User=root
+WorkingDirectory=/var/lib/turaes
+EnvironmentFile=-/etc/turaes/turaes.env
+ExecStart=/usr/local/bin/turaes serve
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

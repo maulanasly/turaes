@@ -1,0 +1,308 @@
+//! Application CRUD, deploy, and per-app metric/visitor reads.
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use axum::Json;
+use serde::Deserialize;
+
+use turaes_core::config::Config;
+use turaes_core::db::Pool;
+use turaes_core::models::Application;
+use turaes_core::{Error, Result};
+use turaes_runtime::proc::ProcRuntime;
+use turaes_runtime::systemd::SystemdRuntime;
+use turaes_runtime::{AppSpec, Deployer, Runtime};
+
+use crate::state::AppState;
+
+/// Body for creating an application.
+#[derive(Debug, Deserialize)]
+pub struct CreateApp {
+    /// Slug (lowercase letters, digits, dashes).
+    pub name: String,
+    /// Optional description.
+    pub description: Option<String>,
+    /// Absolute path to the prebuilt binary.
+    pub binary_path: String,
+    /// Optional arguments.
+    pub args: Option<String>,
+    /// Loopback port.
+    pub port: u16,
+    /// Health path (defaults to `/health`).
+    pub health_path: Option<String>,
+    /// Metrics path (defaults to `/metrics`).
+    pub metrics_path: Option<String>,
+    /// Primary hostname.
+    pub domain: Option<String>,
+    /// `systemd` (default) or `proc`.
+    pub runtime: Option<String>,
+    /// Restart on unhealthy (defaults to true).
+    pub auto_restart: Option<bool>,
+}
+
+/// Query for historical stats.
+#[derive(Debug, Deserialize)]
+pub struct StatsQuery {
+    /// Look-back window in hours (default 1, max 720).
+    pub hours: Option<i64>,
+}
+
+fn validate_name(name: &str) -> Result<()> {
+    let valid = !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && !name.starts_with('-')
+        && !name.ends_with('-');
+    if valid {
+        Ok(())
+    } else {
+        Err(Error::BadRequest(
+            "name must be a lowercase slug of a-z, 0-9 and '-'".into(),
+        ))
+    }
+}
+
+async fn fetch_app(pool: &Pool, id: &str) -> Result<Application> {
+    sqlx::query_as::<_, Application>("SELECT * FROM applications WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| Error::NotFound(format!("application {id}")))
+}
+
+/// Assemble the runtime spec for an app from configuration.
+pub fn spec_for(cfg: &Config, app: &Application) -> AppSpec {
+    AppSpec {
+        name: app.name.clone(),
+        binary_path: app.binary_path.clone(),
+        installed_path: format!("{}/{}", cfg.runtime.bin_dir, app.name),
+        args: app.args.clone(),
+        port: app.port as u16,
+        state_dir: format!("{}/{}", cfg.runtime.state_dir, app.name),
+        env_file: Some(format!("{}/{}.env", cfg.runtime.env_dir, app.name)),
+        user: None,
+    }
+}
+
+/// Select a supervisor backend by name.
+pub fn runtime_for(cfg: &Config, driver: &str) -> Arc<dyn Runtime> {
+    match driver {
+        "proc" => Arc::new(ProcRuntime::new(&cfg.runtime.state_dir)),
+        _ => Arc::new(SystemdRuntime::new(
+            &cfg.runtime.unit_dir,
+            &cfg.runtime.bin_dir,
+        )),
+    }
+}
+
+async fn load_env(state: &AppState, app_id: &str) -> Result<BTreeMap<String, String>> {
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT key, value_enc FROM env_vars WHERE application_id = ?")
+            .bind(app_id)
+            .fetch_all(&state.pool)
+            .await?;
+    let mut env = BTreeMap::new();
+    for (key, sealed) in rows {
+        env.insert(key, state.secrets.open(&sealed)?);
+    }
+    Ok(env)
+}
+
+/// `GET /api/v1/apps`
+pub async fn list(State(state): State<AppState>) -> Result<Json<serde_json::Value>> {
+    let apps =
+        sqlx::query_as::<_, Application>("SELECT * FROM applications ORDER BY created_at DESC")
+            .fetch_all(&state.pool)
+            .await?;
+    Ok(Json(serde_json::json!({ "applications": apps })))
+}
+
+/// `POST /api/v1/apps`
+pub async fn create(
+    State(state): State<AppState>,
+    Json(input): Json<CreateApp>,
+) -> Result<(StatusCode, Json<serde_json::Value>)> {
+    validate_name(&input.name)?;
+    if input.binary_path.trim().is_empty() {
+        return Err(Error::BadRequest("binary_path is required".into()));
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let runtime = input
+        .runtime
+        .clone()
+        .unwrap_or_else(|| state.cfg.runtime.driver.clone());
+    if !matches!(runtime.as_str(), "systemd" | "proc") {
+        return Err(Error::BadRequest(
+            "runtime must be 'systemd' or 'proc'".into(),
+        ));
+    }
+    let inserted = sqlx::query_as::<_, Application>(
+        "INSERT INTO applications \
+         (id, name, description, binary_path, args, port, health_path, metrics_path, domain, \
+          runtime, auto_restart, status, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', datetime('now'), datetime('now')) \
+         RETURNING *",
+    )
+    .bind(&id)
+    .bind(&input.name)
+    .bind(&input.description)
+    .bind(&input.binary_path)
+    .bind(&input.args)
+    .bind(input.port as i64)
+    .bind(input.health_path.unwrap_or_else(|| "/health".into()))
+    .bind(input.metrics_path.or_else(|| Some("/metrics".into())))
+    .bind(&input.domain)
+    .bind(&runtime)
+    .bind(input.auto_restart.unwrap_or(true) as i64)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(map_unique_name)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "application": inserted })),
+    ))
+}
+
+fn map_unique_name(e: sqlx::Error) -> Error {
+    if let sqlx::Error::Database(db) = &e {
+        if db.message().contains("UNIQUE") {
+            return Error::Conflict("an application with that name already exists".into());
+        }
+    }
+    Error::Db(e)
+}
+
+/// `GET /api/v1/apps/{id}`
+pub async fn get(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>> {
+    let app = fetch_app(&state.pool, &id).await?;
+    Ok(Json(serde_json::json!({ "application": app })))
+}
+
+/// `DELETE /api/v1/apps/{id}`
+pub async fn delete(State(state): State<AppState>, Path(id): Path<String>) -> Result<StatusCode> {
+    let app = fetch_app(&state.pool, &id).await?;
+    let spec = spec_for(&state.cfg, &app);
+    let _ = runtime_for(&state.cfg, &app.runtime).remove(&spec).await;
+    sqlx::query("DELETE FROM applications WHERE id = ?")
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/v1/apps/{id}/deploy`
+pub async fn deploy(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>> {
+    let app = fetch_app(&state.pool, &id).await?;
+    let env = load_env(&state, &id).await?;
+    let spec = spec_for(&state.cfg, &app);
+    let dep_id = uuid::Uuid::new_v4().to_string();
+
+    sqlx::query(
+        "INSERT INTO deployments (id, application_id, status, started_at) \
+         VALUES (?, ?, 'installing', datetime('now'))",
+    )
+    .bind(&dep_id)
+    .bind(&id)
+    .execute(&state.pool)
+    .await?;
+
+    let outcome = Deployer::new(runtime_for(&state.cfg, &app.runtime))
+        .deploy(&spec, &env)
+        .await;
+
+    match outcome {
+        Ok(out) => {
+            let status = out.state.as_status();
+            sqlx::query(
+                "UPDATE applications SET status = ?, updated_at = datetime('now') WHERE id = ?",
+            )
+            .bind(status)
+            .bind(&id)
+            .execute(&state.pool)
+            .await?;
+            sqlx::query(
+                "UPDATE deployments SET status = ?, artifact_hash = ?, log = ?, \
+                 finished_at = datetime('now') WHERE id = ?",
+            )
+            .bind(status)
+            .bind(&out.artifact_hash)
+            .bind(&out.log)
+            .bind(&dep_id)
+            .execute(&state.pool)
+            .await?;
+            Ok(Json(serde_json::json!({
+                "deployment_id": dep_id,
+                "state": out.state,
+                "artifact_hash": out.artifact_hash,
+                "log": out.log,
+            })))
+        }
+        Err(e) => {
+            sqlx::query(
+                "UPDATE deployments SET status = 'failed', log = ?, finished_at = datetime('now') WHERE id = ?",
+            )
+            .bind(e.to_string())
+            .bind(&dep_id)
+            .execute(&state.pool)
+            .await?;
+            sqlx::query(
+                "UPDATE applications SET status = 'failed', updated_at = datetime('now') WHERE id = ?",
+            )
+            .bind(&id)
+            .execute(&state.pool)
+            .await?;
+            Err(e)
+        }
+    }
+}
+
+/// `GET /api/v1/apps/{id}/stats`
+pub async fn stats(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<StatsQuery>,
+) -> Result<Json<serde_json::Value>> {
+    fetch_app(&state.pool, &id).await?;
+    let hours = q.hours.unwrap_or(1).clamp(1, 720);
+    let rows: Vec<turaes_core::models::AppMetric> = sqlx::query_as(
+        "SELECT * FROM app_metrics \
+         WHERE application_id = ? AND recorded_at >= datetime('now', ?) \
+         ORDER BY recorded_at ASC",
+    )
+    .bind(&id)
+    .bind(format!("-{hours} hours"))
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(serde_json::json!({ "metrics": rows })))
+}
+
+/// `GET /api/v1/apps/{id}/visitors`
+pub async fn visitors(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<StatsQuery>,
+) -> Result<Json<serde_json::Value>> {
+    fetch_app(&state.pool, &id).await?;
+    let hours = q.hours.unwrap_or(24).clamp(1, 720);
+    let rows: Vec<turaes_core::models::VisitMetric> = sqlx::query_as(
+        "SELECT * FROM visit_metrics \
+         WHERE application_id = ? AND recorded_at >= datetime('now', ?) \
+         ORDER BY recorded_at ASC",
+    )
+    .bind(&id)
+    .bind(format!("-{hours} hours"))
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(serde_json::json!({ "visitors": rows })))
+}

@@ -1,0 +1,157 @@
+# turaes milestones
+
+Detailed scope, deliverables and **exit criteria** for each milestone. A
+milestone is complete only when every exit-criterion box is checked and
+`make verify` is green. Status mirrors [ROADMAP.md](./ROADMAP.md).
+
+---
+
+## M0 — Scaffold ✅ (2026-10-01 → 10-03)
+
+**Goal**: every architectural contract exists, compiles and is tested, without
+committing to the full feature set.
+
+### Deliverables
+
+- [x] Cargo workspace: `turaes-core`, `turaes-runtime`, `turaes-proxy`, `turaes-monitor`, bin `turaes`.
+- [x] `Config` (embedded `config/default.toml` + file + `TURAES_*` env) with validation.
+- [x] SQLite schema + embedded migrations (`applications`, `deployments`, `env_vars`,
+      `domains`, `health_checks`, `health_results`, `app_metrics`, `visit_metrics`, `events`).
+- [x] `Error` → JSON `{"detail"}` mapping (422/401/403/404/409/500).
+- [x] `crypto`: session JWT (HS256) + AES-256-GCM secret sealing.
+- [x] `Runtime` trait + `SystemdRuntime` (hardened unit rendering) + `ProcRuntime`
+      + `Deployer` with artifact hashing.
+- [x] `Router`/`RouteTable` (ArcSwap, wildcard base domain) + `CertStore` (certbot layout).
+- [x] Monitor primitives: Prometheus parser, visitor folding, health `Threshold`,
+      cgroup/`/proc` parsers, rollup bucketing.
+- [x] Axum app: GitHub OAuth allowlist auth, apps CRUD + deploy + stats/visitors,
+      public `/health`, `/auth/*`, embedded UI.
+- [x] CLI: `serve`, `migrate`, `doctor`.
+- [x] CI workflow + `make verify` gate.
+- [~] `pingora` data plane: interfaces + feature gate present; real proxy body is M2.
+
+### Exit criteria
+
+- [x] `make verify` green (clippy `-D warnings`, fmt check, all tests).
+- [x] `turaes serve` boots, `/health` returns ok, apps can be created and listed.
+- [x] No container/Docker dependency anywhere in the tree.
+
+---
+
+## M1 — Deploy ⏳ (2026-10-04 → 10-17)
+
+**Goal**: take a prebuilt binary and run it reliably on the server.
+
+### Deliverables
+
+- [ ] Deploy starts/stops/restarts via `SystemdRuntime`; `proc` fallback for non-root/dev.
+- [ ] Deployments persisted with status transitions (`queued → installing → starting → running|failed`).
+- [ ] Health checks run on an interval with thresholds and auto-restart.
+- [ ] `GET /apps/{id}/logs` streams journald / supervisor log tail.
+- [ ] Per-app state dir + env file written with correct ownership/permissions.
+- [ ] Rollback to the previous artifact on failed start (best-effort).
+
+### Exit criteria
+
+- [ ] `beruang` deploys on the VPS and answers `GET /health` on its port.
+- [ ] `systemctl status beruang` is healthy; restart survives a crash (`Restart=always`).
+- [ ] Integration test covers deploy failure → app marked `failed`.
+- [ ] Logs endpoint returns recent lines for both runtimes.
+
+---
+
+## M2 — Proxy ⏳ (2026-10-18 → 10-31)
+
+**Goal**: route hostnames through the embedded Pingora proxy with TLS.
+
+### Deliverables
+
+- [ ] `turaes-proxy` builds with `--features pingora` on Linux (CI job).
+- [ ] `ProxyHttp` impl resolves `Host` → upstream and proxies HTTP/1.1 (+ h2 if easy).
+- [ ] Route table rebuilt from DB and published on deploy/domain change.
+- [ ] Wildcard `*.{base_domain}` routing for multitenant apps.
+- [ ] TLS: load certbot `fullchain.pem`/`privkey.pem` per SNI; graceful reload on renewal.
+- [ ] Forward `X-Forwarded-For/Proto`, `X-Real-IP`, and CDN country headers.
+- [ ] Unknown host → 404; upstream down → 502.
+
+### Exit criteria
+
+- [ ] `https://kalkulator.rayakala.ink` reaches beruang through Pingora.
+- [ ] Adding a domain takes effect without a process restart.
+- [ ] `CF-IPCountry` reaches beruang so visitor regions stop being `unknown`.
+- [ ] A proxy integration test (curl through the proxy) passes in CI.
+
+---
+
+## M3 — Monitoring ⏳ (2026-11-01 → 11-14)
+
+**Goal**: the headline feature — CPU, memory, visitors — from live data.
+
+### Deliverables
+
+- [ ] Background monitor loop: health + `/metrics` scrape + resource sampling.
+- [ ] CPU% from `cpu.stat` deltas; memory from `memory.current`; `/proc` fallback.
+- [ ] Visitors folded from `visitors_total` + `unique_visitors_estimate` per region.
+- [ ] 1-minute rollups written to `app_metrics` / `visit_metrics`; retention compaction.
+- [ ] Dashboard (zero-build Preact/HTM): per-app cards + time-series charts.
+- [ ] `GET /apps/{id}/stats` and `/visitors` serve rolled-up history.
+- [ ] App's own `/metrics` re-export (dogfood via tonggeret).
+
+### Exit criteria
+
+- [ ] beruang's dashboard shows CPU%, memory, RPS and visitor totals from live scrapes.
+- [ ] Unique visitors are latest-per-region, never summed (verified by test).
+- [ ] A 24h window renders without gaps when the app is up.
+- [ ] Retention deletes samples older than `retention_days`.
+
+---
+
+## M4 — Ops ⏳ (2026-11-15 → 11-28)
+
+**Goal**: make day-to-day operation safe and pleasant.
+
+### Deliverables
+
+- [ ] Deployment history UI + one-click rollback to any artifact.
+- [ ] Environment variable editor (sealed at rest; write-only values).
+- [ ] WebSocket realtime: deploy progress, health transitions, log streaming.
+- [ ] Domain management (add/remove/verify/primary) end to end.
+- [ ] Audit `events` timeline per app.
+
+### Exit criteria
+
+- [ ] Rollback restores the prior binary and status.
+- [ ] Uploaded secrets are never returned in plaintext by the API.
+- [ ] Live logs stream over WebSocket without polling.
+- [ ] Events timeline reflects deploys, restarts and health flips.
+
+---
+
+## M5 — Auto-deploy ⏳ (2026-11-29 → 12-12)
+
+**Goal**: push-to-deploy and (optionally) multi-server.
+
+### Deliverables
+
+- [ ] GitHub + GitLab webhooks with signature/token validation.
+- [ ] Branch filter + auto-deploy on matching push; delivery log.
+- [ ] Git-based build strategy (clone + configurable command, e.g. `cargo build --release`).
+- [ ] Deploy keys for private repos.
+- [ ] (Optional) multiple servers with SSH transport.
+
+### Exit criteria
+
+- [ ] A push to `main` triggers a deploy and records a delivery.
+- [ ] A `cargo` project builds from Git and deploys without a manual artifact.
+- [ ] Webhook signature failures are rejected with 401 and never deploy.
+
+---
+
+## Cross-milestone definition of done
+
+1. `make verify` green.
+2. New public APIs documented in [API.md](./API.md); architecture changes in
+   [ARCHITECTURE.md](./ARCHITECTURE.md).
+3. Tests cover the new behavior (unit + integration where applicable).
+4. No Docker/container runtime introduced.
+5. Graph refreshed (`graphify update .`).

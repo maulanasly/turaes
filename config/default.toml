@@ -1,0 +1,62 @@
+# turaes default configuration.
+#
+# Values here are safe defaults for local development. In production, copy this
+# file to /etc/turaes/turaes.toml (or set TURAES_CONFIG) and override secrets via
+# environment variables (see docs/DEPLOY.md). Every key below can be overridden
+# with a TURAES_-prefixed env var, e.g. TURAES_PORT=9000, TURAES_JWT_SECRET=...
+
+[server]
+host = "0.0.0.0"
+port = 8787
+# Base domain used to auto-derive app subdomains ({app}.base_domain).
+base_domain = "localhost"
+# Full public URL of the turaes dashboard.
+public_url = "http://localhost:8787"
+
+[database]
+# SQLite path. Use a file URL with mode=rwc so the DB is created on first run.
+url = "sqlite://turaes.db?mode=rwc"
+
+[auth]
+# MUST be replaced in production (>= 32 chars). Boot fails on the default in release.
+jwt_secret = "change-me-change-me-change-me-change-me"
+# GitHub OAuth app credentials. Prefer TURAES_GITHUB_CLIENT_ID / _SECRET in prod.
+github_client_id = ""
+github_client_secret = ""
+# Numeric GitHub user ids allowed to sign in (stable; not usernames).
+allowed_github_ids = []
+# Canonical origin of the dashboard. The OAuth callback must match
+# {app_origin}/auth/callback.
+app_origin = "http://localhost:8787"
+# Sliding session lifetime.
+session_ttl_days = 30
+# Require Secure cookies. Non-https non-localhost origins force this on.
+allow_insecure_cookies = false
+
+[proxy]
+# Enable the in-process Pingora reverse proxy (requires the `pingora` feature).
+enabled = false
+http_port = 80
+https_port = 443
+# Directory holding certbot per-domain certs: {cert_dir}/{domain}/{fullchain,privkey}.pem
+cert_dir = "/etc/letsencrypt/live"
+
+[monitor]
+# Seconds between health checks and /metrics scrapes.
+interval_secs = 15
+# How long raw + rolled-up samples are kept.
+retention_days = 30
+# Skip counting /metrics, /health and /__dev_version as visits (mirrors tonggeret).
+visitor_skip_paths = ["/metrics", "/health", "/__dev_version"]
+
+[runtime]
+# "systemd" (default on Linux) or "proc" (embedded supervisor; no root needed).
+driver = "systemd"
+# systemd unit directory.
+unit_dir = "/etc/systemd/system"
+# Where installed app binaries live.
+bin_dir = "/usr/local/bin"
+# Per-app state root.
+state_dir = "/var/lib"
+# Per-app environment files.
+env_dir = "/etc"
