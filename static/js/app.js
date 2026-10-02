@@ -1,10 +1,11 @@
-// turaes M0 dashboard shell.
-//
-// Zero-build vanilla JS for the scaffold; the zero-build Preact/HTM UI lands
-// with the monitoring milestone (see docs/ROADMAP.md). Reads the authenticated
-// JSON API with same-origin cookies.
+// turaes dashboard — zero-build Preact + HTM (vendored), no bundler, no CDN.
+// Charts are hand-rolled SVG (no chart library).
 
-const $ = (sel) => document.querySelector(sel);
+import { h, render } from "preact";
+import { useState, useEffect, useCallback } from "preact/hooks";
+import htm from "htm";
+
+const html = htm.bind(h);
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -14,103 +15,253 @@ async function api(path, options = {}) {
   });
   if (res.status === 204) return null;
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`);
+  if (!res.ok) {
+    const err = new Error(body.detail || `HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
   return body;
 }
 
-function badge(status) {
-  return `<span class="badge ${status}">${status}</span>`;
-}
-
-function stat(label, value) {
-  return `<div class="stat"><span>${label}</span><span>${value}</span></div>`;
-}
-
-function fmtBytes(n) {
+const fmtBytes = (n) => {
   if (!n) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  let i = 0;
-  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
-  return `${n.toFixed(1)} ${units[i]}`;
-}
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let v = n, i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(i > 0 && v < 10 ? 1 : 0)} ${units[i]}`;
+};
+const parseTs = (s) => Date.parse(s.replace(" ", "T") + "Z");
+const fmtClock = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-async function loadUser() {
-  try {
-    const user = await api("/auth/me");
-    $("#user").innerHTML = `${user.login}${user.name ? ` <span class="muted">(${user.name})</span>` : ""}`;
-  } catch {
-    $("#user").innerHTML = `<a class="btn small" href="/auth/login">Sign in</a>`;
+function Chart({ title, points, color, formatY, height = 150 }) {
+  const w = 600, pad = { l: 58, r: 8, t: 8, b: 24 };
+  if (!points || points.length === 0) {
+    return html`<div class="chart"><div class="chart-title">${title}</div><div class="empty">no data yet</div></div>`;
   }
+  const xs = points.map((p) => p.x), ys = points.map((p) => p.y);
+  let x0 = Math.min(...xs), x1 = Math.max(...xs);
+  let y0 = Math.min(...ys, 0), y1 = Math.max(...ys);
+  if (x1 === x0) x1 = x0 + 1;
+  if (y1 === y0) y1 = y0 + 1;
+  const X = (x) => pad.l + ((x - x0) / (x1 - x0)) * (w - pad.l - pad.r);
+  const Y = (y) => height - pad.b - ((y - y0) / (y1 - y0)) * (height - pad.t - pad.b);
+  const path = points.map((p, i) => `${i ? "L" : "M"}${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(" ");
+  const area = `${path} L${X(x1).toFixed(1)},${height - pad.b} L${X(x0).toFixed(1)},${height - pad.b} Z`;
+  const t0 = new Date(x0), t1 = new Date(x1);
+  return html`
+    <div class="chart">
+      <div class="chart-title">
+        <span>${title}</span>
+        <span class="muted">${formatY(y1)} peak</span>
+      </div>
+      <svg viewBox="0 0 ${w} ${height}" preserveAspectRatio="none" class="spark">
+        <line class="grid-line" x1=${pad.l} y1=${Y(y0)} x2=${w - pad.r} y2=${Y(y0)} />
+        <line class="grid-line" x1=${pad.l} y1=${Y(y1)} x2=${w - pad.r} y2=${Y(y1)} />
+        <path d=${area} fill=${color} opacity="0.12" stroke="none" />
+        <path d=${path} fill="none" stroke=${color} stroke-width="2" vector-effect="non-scaling-stroke" />
+      </svg>
+      <div class="axis"><span>${formatY(y0)}</span><span>${fmtClock(t0)}</span><span>${fmtClock(t1)}</span></div>
+    </div>`;
 }
 
-async function loadStats(app) {
-  const [metrics, visitors] = await Promise.all([
-    api(`/api/v1/apps/${app.id}/stats?hours=1`).catch(() => ({ metrics: [] })),
-    api(`/api/v1/apps/${app.id}/visitors?hours=24`).catch(() => ({ visitors: [] })),
-  ]);
-  const last = metrics.metrics?.at(-1);
-  const visits = (visitors.visitors || []).reduce((acc, v) => acc + (v.visits || 0), 0);
-  const uniques = (visitors.visitors || []).reduce((acc, v) => Math.max(acc, v.uniques || 0), 0);
-  return { cpu: last ? `${last.cpu_pct.toFixed(1)}%` : "—", mem: last ? fmtBytes(last.mem_bytes) : "—", visits, uniques };
+function AppCard({ app, selected, onSelect, onDeploy }) {
+  const [busy, setBusy] = useState(false);
+  const deploy = async (e) => {
+    e.stopPropagation();
+    setBusy(true);
+    try { await onDeploy(app.id); } finally { setBusy(false); }
+  };
+  return html`
+    <div class=${"card" + (selected ? " selected" : "")} onClick=${() => onSelect(app.id)}>
+      <h3>
+        <span class="mono">${app.name}</span>
+        <span class=${"badge " + app.status}>${app.status}</span>
+      </h3>
+      <div class="stat"><span>domain</span><span class="mono">${app.domain || "—"}</span></div>
+      <div class="stat"><span>port</span><span class="mono">${app.port}</span></div>
+      <div class="stat"><span>runtime</span><span>${app.runtime}</span></div>
+      <div style="margin-top:8px">
+        <button class="btn small" disabled=${busy} onClick=${deploy}>
+          ${busy ? "Deploying…" : "Deploy"}
+        </button>
+      </div>
+    </div>`;
 }
 
-async function renderApps() {
-  const container = $("#apps");
-  try {
-    const { applications } = await api("/api/v1/apps");
-    if (!applications.length) {
-      container.innerHTML = `<p class="muted">No applications yet. Add one below.</p>`;
-      return;
+function Detail({ app, hours, data }) {
+  const metrics = data?.metrics || [];
+  const visitors = data?.visitors || [];
+  const cpu = metrics.map((m) => ({ x: parseTs(m.recorded_at), y: m.cpu_pct }));
+  const mem = metrics.map((m) => ({ x: parseTs(m.recorded_at), y: m.mem_bytes }));
+  const visitSeries = (() => {
+    const map = new Map();
+    for (const v of visitors) {
+      const t = parseTs(v.recorded_at);
+      map.set(t, (map.get(t) || 0) + v.visits);
     }
-    const cards = await Promise.all(applications.map(async (app) => {
-      const s = await loadStats(app);
-      return `
-        <div class="card">
-          <h3>${app.name} ${badge(app.status)}</h3>
-          ${stat("domain", app.domain || "—")}
-          ${stat("port", app.port)}
-          ${stat("runtime", app.runtime)}
-          ${stat("cpu", s.cpu)}
-          ${stat("memory", s.mem)}
-          ${stat("visits 24h", s.visits)}
-          ${stat("unique 24h", s.uniques)}
-          <button class="btn small" data-deploy="${app.id}">Deploy</button>
-        </div>`;
-    }));
-    container.innerHTML = cards.join("");
-    container.querySelectorAll("[data-deploy]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        btn.disabled = true;
-        btn.textContent = "Deploying…";
-        try {
-          await api(`/api/v1/apps/${btn.dataset.deploy}/deploy`, { method: "POST" });
-        } catch (e) {
-          alert(e.message);
-        }
-        renderApps();
-      });
-    });
-  } catch (e) {
-    container.innerHTML = `<p class="muted">${e.message}</p>`;
-  }
+    return [...map.entries()].sort((a, b) => a[0] - b[0]).map(([x, y]) => ({ x, y }));
+  })();
+  const regions = (() => {
+    const m = new Map();
+    for (const v of visitors) {
+      const e = m.get(v.region) || { visits: 0, uniques: 0 };
+      e.visits += v.visits;
+      e.uniques = Math.max(e.uniques, v.uniques);
+      m.set(v.region, e);
+    }
+    return [...m.entries()].sort((a, b) => b[1].visits - a[1].visits);
+  })();
+
+  return html`
+    <div class="detail">
+      <div class="charts">
+        <${Chart} title="CPU %" points=${cpu} color="var(--cpu)" formatY=${(v) => v.toFixed(1)} />
+        <${Chart} title="Memory" points=${mem} color="var(--mem)" formatY=${fmtBytes} />
+      </div>
+      <${Chart} title="Visits (per scrape)" points=${visitSeries} color="var(--visits)" formatY=${(v) => Math.round(v)} />
+      <div>
+        <h2 style="margin-bottom:8px">Visitors by region <span class="muted">· last ${hours}h</span></h2>
+        ${regions.length === 0
+          ? html`<p class="muted">No visits recorded yet.</p>`
+          : html`<table>
+              <thead><tr><th>Region</th><th>Visits</th><th>Unique (latest)</th></tr></thead>
+              <tbody>
+                ${regions.map(([region, r]) => html`
+                  <tr><td class="mono">${region}</td><td>${r.visits}</td><td>${r.uniques}</td></tr>`)}
+              </tbody>
+            </table>`}
+      </div>
+    </div>`;
 }
 
-$("#refresh").addEventListener("click", renderApps);
+function AddForm({ onCreated }) {
+  const [msg, setMsg] = useState("");
+  const submit = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const payload = Object.fromEntries([...fd.entries()].filter(([, v]) => v !== ""));
+    if (payload.port) payload.port = Number(payload.port);
+    try {
+      await api("/api/v1/apps", { method: "POST", body: JSON.stringify(payload) });
+      e.target.reset();
+      setMsg(`created ${payload.name}`);
+      onCreated();
+    } catch (err) {
+      setMsg(err.message);
+    }
+  };
+  return html`
+    <form class="form" onSubmit=${submit}>
+      <div class="row">
+        <label>Name <input name="name" placeholder="beruang" required /></label>
+        <label>Port <input name="port" type="number" placeholder="8000" required /></label>
+      </div>
+      <label>Binary path <input name="binary_path" placeholder="/srv/beruang/target/release/beruang-gateway" required /></label>
+      <div class="row">
+        <label>Domain <input name="domain" placeholder="beruang.example.com" /></label>
+        <label>Runtime <input name="runtime" placeholder="systemd" /></label>
+      </div>
+      <div><button class="btn" type="submit">Create</button> <span class="muted">${msg}</span></div>
+    </form>`;
+}
 
-$("#create-form").addEventListener("submit", async (ev) => {
-  ev.preventDefault();
-  const fd = new FormData(ev.target);
-  const payload = Object.fromEntries([...fd.entries()].filter(([, v]) => v !== ""));
-  payload.port = Number(payload.port);
-  try {
-    await api("/api/v1/apps", { method: "POST", body: JSON.stringify(payload) });
-    $("#create-msg").textContent = `Created ${payload.name}`;
-    ev.target.reset();
-    renderApps();
-  } catch (e) {
-    $("#create-msg").textContent = e.message;
-  }
-});
+function Dashboard() {
+  const [user, setUser] = useState(undefined);
+  const [apps, setApps] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [hours, setHours] = useState(1);
+  const [data, setData] = useState({});
+  const [error, setError] = useState("");
+  const [showAdd, setShowAdd] = useState(false);
 
-loadUser();
-renderApps();
+  const loadApps = useCallback(async () => {
+    try {
+      const r = await api("/api/v1/apps");
+      setApps(r.applications || []);
+      setError("");
+      return r.applications || [];
+    } catch (e) {
+      setError(e.message);
+      return [];
+    }
+  }, []);
+
+  const loadUser = useCallback(async () => {
+    try { setUser(await api("/auth/me")); } catch { setUser(null); }
+  }, []);
+
+  const loadDetail = useCallback(async (id, hsel) => {
+    if (!id) return;
+    try {
+      const [m, v] = await Promise.all([
+        api(`/api/v1/apps/${id}/stats?hours=${hsel}`),
+        api(`/api/v1/apps/${id}/visitors?hours=${hsel}`),
+      ]);
+      setData({ metrics: m.metrics, visitors: v.visitors });
+    } catch (e) {
+      setError(e.message);
+    }
+  }, []);
+
+  useEffect(() => { loadUser(); loadApps(); }, [loadUser, loadApps]);
+  useEffect(() => { loadDetail(selected, hours); }, [selected, hours, loadDetail]);
+  useEffect(() => {
+    const t = setInterval(() => { loadApps(); if (selected) loadDetail(selected, hours); }, 15000);
+    return () => clearInterval(t);
+  }, [loadApps, loadDetail, selected, hours]);
+
+  const deploy = async (id) => {
+    try { await api(`/api/v1/apps/${id}/deploy`, { method: "POST" }); } catch (e) { setError(e.message); }
+    await loadApps();
+  };
+
+  const selectedApp = apps.find((a) => a.id === selected);
+
+  return html`
+    <header class="topbar">
+      <div class="brand">turaes <span class="muted">· docker-less paas</span></div>
+      <div class="controls">
+        <select value=${hours} onChange=${(e) => setHours(Number(e.target.value))}
+          style="background:#0d0f13;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px">
+          <option value="1">1h</option>
+          <option value="6">6h</option>
+          <option value="24">24h</option>
+        </select>
+        <button class="btn ghost" onClick=${() => { loadApps(); if (selected) loadDetail(selected, hours); }}>Refresh</button>
+        ${user
+          ? html`<span class="muted">${user.login}</span> <button class="btn ghost" onClick=${async () => { await api("/auth/logout", { method: "POST" }); setUser(null); }}>Sign out</button>`
+          : html`<a class="btn" href="/auth/login">Sign in with GitHub</a>`}
+      </div>
+    </header>
+
+    <main>
+      ${error && html`<div class="panel" style="border-color:var(--bad)"><span class="muted">${error}</span></div>`}
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Applications</h2>
+          <button class="btn ghost" onClick=${() => setShowAdd((v) => !v)}>
+            ${showAdd ? "Close" : "+ Add"}
+          </button>
+        </div>
+        ${showAdd && html`<div style="margin-bottom:14px"><${AddForm} onCreated=${loadApps} /></div>`}
+        ${apps.length === 0
+          ? html`<p class="muted">No applications yet.${user ? "" : " Sign in to manage apps."}</p>`
+          : html`<div class="grid">
+              ${apps.map((a) => html`
+                <${AppCard} app=${a} selected=${a.id === selected} onSelect=${setSelected} onDeploy=${deploy} />`)}
+            </div>`}
+      </section>
+
+      ${selectedApp && html`
+        <section class="panel">
+          <div class="panel-head">
+            <h2 class="mono">${selectedApp.name}</h2>
+            <span class="pill">${selectedApp.runtime} · :${selectedApp.port}</span>
+          </div>
+          <${Detail} app=${selectedApp} hours=${hours} data=${data} />
+        </section>`}
+    </main>`;
+}
+
+render(html`<${Dashboard} />`, document.getElementById("app"));

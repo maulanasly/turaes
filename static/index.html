@@ -5,39 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>turaes</title>
   <link rel="stylesheet" href="/css/styles.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "preact": "/js/vendor/preact.module.js",
+        "preact/hooks": "/js/vendor/hooks.module.js",
+        "htm": "/js/vendor/htm.module.js"
+      }
+    }
+  </script>
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">turaes<span class="muted"> · docker-less paas</span></div>
-    <div class="user" id="user">…</div>
-  </header>
-
-  <main>
-    <section class="panel">
-      <div class="panel-head">
-        <h2>Applications</h2>
-        <button id="refresh" class="btn ghost">Refresh</button>
-      </div>
-      <div id="apps" class="grid">
-        <p class="muted">Loading…</p>
-      </div>
-    </section>
-
-    <section class="panel">
-      <h2>Add application</h2>
-      <form id="create-form" class="form">
-        <label>Name <input name="name" placeholder="beruang" required /></label>
-        <label>Binary path <input name="binary_path" placeholder="/srv/beruang/target/release/beruang-gateway" required /></label>
-        <label>Port <input name="port" type="number" placeholder="8000" required /></label>
-        <label>Domain <input name="domain" placeholder="kalkulator.rayakala.ink" /></label>
-        <label>Health path <input name="health_path" placeholder="/health" /></label>
-        <label>Metrics path <input name="metrics_path" placeholder="/metrics" /></label>
-        <button class="btn" type="submit">Create</button>
-      </form>
-      <p id="create-msg" class="muted"></p>
-    </section>
-  </main>
-
-  <script src="/js/app.js"></script>
+  <div id="app"></div>
+  <script type="module" src="/js/app.js"></script>
 </body>
 </html>
