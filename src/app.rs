@@ -20,6 +20,15 @@ pub fn build_router(state: AppState) -> Router {
         .route("/apps/{id}/deploy", post(routes::apps::deploy))
         .route("/apps/{id}/stats", get(routes::apps::stats))
         .route("/apps/{id}/visitors", get(routes::apps::visitors))
+        .route(
+            "/servers",
+            get(routes::servers::list).post(routes::servers::create),
+        )
+        .route(
+            "/servers/{id}",
+            get(routes::servers::get).delete(routes::servers::delete),
+        )
+        .route("/servers/{id}/validate", post(routes::servers::validate))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,

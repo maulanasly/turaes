@@ -158,6 +158,23 @@ must **not** be pointed here (it resolves to another server).
 
 ---
 
+## N0–N4 — Multi-node fleet 🔄 (after M5)
+
+Full design: [PLAN-MULTINODE.md](./PLAN-MULTINODE.md). Decisions: fleet-first,
+same Tencent VPC, hybrid SSH bootstrap + gRPC agent, separate Pingora edge.
+
+| Phase | Scope | Status |
+|---|---|---|
+| **N0** | `servers` table + `applications.server_id`, `/api/v1/servers`, `turaes server …`, UI panel | ✅ |
+| **N1** | ArtifactStore + SSH bootstrap + `turaes agent` over gRPC + `AgentRuntime` | ⏳ |
+| **N2** | agent-pushed cgroup CPU/mem; VPC scrape of health/metrics; per-node dashboard | ⏳ |
+| **N3** | `turaes edge` role (gRPC route/cert stream); Pingora off the control plane | ⏳ |
+| **N4** | DNS-01 multi-cert/wildcard SNI + replicas/LB + control-plane HA | ⏳ |
+
+**Backlog:** ACME webroot route (zero-downtime cert renewals).
+
+---
+
 ## Cross-milestone definition of done
 
 1. `make verify` green.

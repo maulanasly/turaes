@@ -4,10 +4,10 @@
 //! without configuring GitHub OAuth first. Conventions match the HTTP API.
 
 use turaes_core::db::Pool;
-use turaes_core::models::Application;
+use turaes_core::models::{Application, Server};
 use turaes_core::{Error, Result};
 
-use crate::cli::AppCommand;
+use crate::cli::{AppCommand, ServerCommand};
 use crate::routes::apps;
 use crate::state::AppState;
 
@@ -41,6 +41,132 @@ pub async fn run(state: &AppState, cmd: AppCommand) -> Result<()> {
         AppCommand::List => list(&state.pool).await,
         AppCommand::Show { name } => show(state, &name).await,
     }
+}
+
+/// Dispatch a `turaes server ...` subcommand.
+pub async fn run_server(state: &AppState, cmd: ServerCommand) -> Result<()> {
+    match cmd {
+        ServerCommand::Add {
+            name,
+            address,
+            ssh_host,
+            ssh_port,
+            ssh_user,
+            ssh_key_file,
+        } => {
+            server_add(
+                state,
+                &name,
+                &address,
+                ssh_host,
+                ssh_port,
+                ssh_user,
+                ssh_key_file,
+            )
+            .await
+        }
+        ServerCommand::List => server_list(&state.pool).await,
+        ServerCommand::Remove { id } => server_remove(state, &id).await,
+    }
+}
+
+async fn server_add(
+    state: &AppState,
+    name: &str,
+    address: &str,
+    ssh_host: Option<String>,
+    ssh_port: Option<i64>,
+    ssh_user: Option<String>,
+    ssh_key_file: Option<String>,
+) -> Result<()> {
+    if name.trim().is_empty() || address.trim().is_empty() {
+        return Err(Error::BadRequest("name and address are required".into()));
+    }
+    let ssh_key_enc = match ssh_key_file {
+        Some(path) => {
+            let key = tokio::fs::read_to_string(&path)
+                .await
+                .map_err(|e| Error::BadRequest(format!("cannot read ssh key '{path}': {e}")))?;
+            Some(state.secrets.seal(&key)?)
+        }
+        None => None,
+    };
+    let id = uuid::Uuid::new_v4().to_string();
+    let server = sqlx::query_as::<_, Server>(
+        "INSERT INTO servers \
+         (id, name, address, ssh_host, ssh_port, ssh_user, ssh_key_enc, is_local, status) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'unknown') RETURNING *",
+    )
+    .bind(&id)
+    .bind(name)
+    .bind(address)
+    .bind(&ssh_host)
+    .bind(ssh_port)
+    .bind(&ssh_user)
+    .bind(&ssh_key_enc)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| {
+        if let sqlx::Error::Database(db) = &e {
+            if db.message().contains("UNIQUE") {
+                return Error::Conflict(format!("server '{name}' already exists"));
+            }
+        }
+        Error::Db(e)
+    })?;
+    println!(
+        "created server {} ({}) at {}",
+        server.name, server.id, server.address
+    );
+    Ok(())
+}
+
+async fn server_list(pool: &Pool) -> Result<()> {
+    let servers =
+        sqlx::query_as::<_, Server>("SELECT * FROM servers ORDER BY is_local DESC, name ASC")
+            .fetch_all(pool)
+            .await?;
+    println!("NAME             STATUS     ADDRESS                  LOCAL  ID");
+    for s in servers {
+        println!(
+            "{:<16} {:<10} {:<24} {:<6} {}",
+            s.name,
+            s.status,
+            s.address,
+            if s.is_local { "yes" } else { "no" },
+            s.id
+        );
+    }
+    Ok(())
+}
+
+async fn server_remove(state: &AppState, id: &str) -> Result<()> {
+    let server = sqlx::query_as::<_, Server>("SELECT * FROM servers WHERE id = ? OR name = ?")
+        .bind(id)
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or_else(|| Error::NotFound(format!("server '{id}'")))?;
+    if server.is_local {
+        return Err(Error::BadRequest(
+            "the local server cannot be removed".into(),
+        ));
+    }
+    let in_use: i64 = sqlx::query_scalar("SELECT count(*) FROM applications WHERE server_id = ?")
+        .bind(&server.id)
+        .fetch_one(&state.pool)
+        .await?;
+    if in_use > 0 {
+        return Err(Error::Conflict(format!(
+            "{in_use} application(s) are still placed on this server"
+        )));
+    }
+    sqlx::query("DELETE FROM servers WHERE id = ?")
+        .bind(&server.id)
+        .execute(&state.pool)
+        .await?;
+    println!("removed server {}", server.name);
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

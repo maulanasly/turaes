@@ -33,6 +33,45 @@ pub enum Command {
         #[command(subcommand)]
         cmd: AppCommand,
     },
+    /// Fleet node registry operations (local database).
+    Server {
+        /// Which server operation to run.
+        #[command(subcommand)]
+        cmd: ServerCommand,
+    },
+}
+
+/// Local (non-HTTP) server registry management.
+#[derive(Debug, Subcommand)]
+pub enum ServerCommand {
+    /// Register a server.
+    Add {
+        /// Unique name.
+        #[arg(long)]
+        name: String,
+        /// Reachable address (private IP in the VPC).
+        #[arg(long)]
+        address: String,
+        /// SSH host for bootstrap.
+        #[arg(long)]
+        ssh_host: Option<String>,
+        /// SSH port.
+        #[arg(long)]
+        ssh_port: Option<i64>,
+        /// SSH user.
+        #[arg(long)]
+        ssh_user: Option<String>,
+        /// Path to an SSH private key file (sealed at rest).
+        #[arg(long)]
+        ssh_key_file: Option<String>,
+    },
+    /// List servers.
+    List,
+    /// Remove a server by id or name.
+    Remove {
+        /// Server id or name.
+        id: String,
+    },
 }
 
 /// Local (non-HTTP) application management.

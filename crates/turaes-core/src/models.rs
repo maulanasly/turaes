@@ -27,6 +27,8 @@ pub struct Application {
     pub metrics_path: Option<String>,
     /// Primary hostname routed by the proxy.
     pub domain: Option<String>,
+    /// Node this app is placed on (`local` by default).
+    pub server_id: String,
     /// `systemd` or `proc`.
     pub runtime: String,
     /// Restart on unhealthy.
@@ -37,6 +39,36 @@ pub struct Application {
     pub created_at: String,
     /// Update timestamp (RFC3339).
     pub updated_at: String,
+}
+
+/// A node in the fleet. The local host is the row with id `local`.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct Server {
+    /// UUID, or `local` for this host.
+    pub id: String,
+    /// Human name (unique).
+    pub name: String,
+    /// Reachable address (private IP in the VPC; `127.0.0.1` for local).
+    pub address: String,
+    /// SSH host for bootstrap, when remote.
+    pub ssh_host: Option<String>,
+    /// SSH port.
+    pub ssh_port: Option<i64>,
+    /// SSH user.
+    pub ssh_user: Option<String>,
+    /// Sealed private key (never serialized).
+    #[serde(skip_serializing)]
+    pub ssh_key_enc: Option<String>,
+    /// Whether this is the control-plane host.
+    pub is_local: bool,
+    /// `online`, `offline`, `unknown`.
+    pub status: String,
+    /// Last heartbeat (RFC3339).
+    pub last_seen_at: Option<String>,
+    /// Reported agent version, when present.
+    pub agent_version: Option<String>,
+    /// Creation timestamp.
+    pub created_at: String,
 }
 
 /// One historical deploy of an application.

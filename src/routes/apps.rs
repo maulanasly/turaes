@@ -38,6 +38,8 @@ pub struct CreateApp {
     pub metrics_path: Option<String>,
     /// Primary hostname.
     pub domain: Option<String>,
+    /// Node to place the app on (defaults to `local`).
+    pub server_id: Option<String>,
     /// `systemd` (default) or `proc`.
     pub runtime: Option<String>,
     /// Restart on unhealthy (defaults to true).
@@ -98,8 +100,10 @@ pub async fn refresh_proxy_routes(state: &AppState) -> Result<()> {
     let Some(router) = &state.proxy_router else {
         return Ok(());
     };
+    // N0: only local apps are routed (remote upstreams land in N1).
     let apps = sqlx::query_as::<_, Application>(
-        "SELECT * FROM applications WHERE domain IS NOT NULL AND domain != ''",
+        "SELECT * FROM applications \
+         WHERE domain IS NOT NULL AND domain != '' AND server_id = 'local'",
     )
     .fetch_all(&state.pool)
     .await?;
@@ -186,11 +190,19 @@ pub async fn create(
             "runtime must be 'systemd' or 'proc'".into(),
         ));
     }
+    let server_id = input.server_id.clone().unwrap_or_else(|| "local".into());
+    let server_exists: i64 = sqlx::query_scalar("SELECT count(*) FROM servers WHERE id = ?")
+        .bind(&server_id)
+        .fetch_one(&state.pool)
+        .await?;
+    if server_exists == 0 {
+        return Err(Error::BadRequest(format!("unknown server '{server_id}'")));
+    }
     let inserted = sqlx::query_as::<_, Application>(
         "INSERT INTO applications \
          (id, name, description, binary_path, args, port, health_path, metrics_path, domain, \
-          runtime, auto_restart, status, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', datetime('now'), datetime('now')) \
+          server_id, runtime, auto_restart, status, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', datetime('now'), datetime('now')) \
          RETURNING *",
     )
     .bind(&id)
@@ -202,6 +214,7 @@ pub async fn create(
     .bind(input.health_path.unwrap_or_else(|| "/health".into()))
     .bind(input.metrics_path.or_else(|| Some("/metrics".into())))
     .bind(&input.domain)
+    .bind(&server_id)
     .bind(&runtime)
     .bind(input.auto_restart.unwrap_or(true) as i64)
     .fetch_one(&state.pool)
@@ -263,6 +276,12 @@ pub async fn deploy(
 ///
 /// Shared by the HTTP handler and the `turaes app deploy` CLI command.
 pub async fn deploy_app(state: &AppState, app: &Application) -> Result<(String, DeployOutcome)> {
+    if app.server_id != "local" {
+        return Err(Error::BadRequest(format!(
+            "remote deploy to server '{}' is not implemented yet (N1: agent transport)",
+            app.server_id
+        )));
+    }
     let env = load_env(state, &app.id).await?;
     let spec = spec_for(&state.cfg, app);
     let dep_id = uuid::Uuid::new_v4().to_string();

@@ -13,9 +13,10 @@ Status legend: ✅ done · 🔄 in progress · ⏳ planned
 | **M0** | Scaffold | ✅ | 2026-10-01 → 10-03 | Workspace, data model, runtime/proxy/monitor primitives, authenticated API, CI |
 | **M1** | Deploy | 🔄 | 2026-10-04 → 10-17 | Prebuilt-binary deploy via systemd + `proc`, health checks, logs |
 | **M2** | Proxy | ✅ | 2026-10-18 → 10-31 | Pingora data plane, host routing, domains, certbot TLS + reload |
-| **M3** | Monitoring | 🔄 | 2026-11-01 → 11-14 | `/metrics` scrape + CPU/mem + visitors, rollups, dashboard |
+| **M3** | Monitoring | ✅ | 2026-11-01 → 11-14 | metrics scrape + CPU/mem + visitors, 1-min rollups, Preact/HTM dashboard |
 | **M4** | Ops | ⏳ | 2026-11-15 → 11-28 | Deploy history + rollback, env editor, WebSocket realtime |
-| **M5** | Auto-deploy | ⏳ | 2026-11-29 → 12-12 | GitHub/GitLab webhooks, git-based build, multi-server (optional) |
+| **M5** | Auto-deploy | ⏳ | 2026-11-29 → 12-12 | GitHub/GitLab webhooks, git-based build |
+| **N0–N4** | Multi-node fleet | 🔄 | after M5 | Control plane + agents + edge — [PLAN-MULTINODE.md](./PLAN-MULTINODE.md) |
 
 > **Live instance (2026-10-01):** turaes is deployed on `43.173.9.225`
 > (Debian 13, systemd) and beruang is running under it with live health, CPU,
@@ -25,8 +26,11 @@ Status legend: ✅ done · 🔄 in progress · ⏳ planned
 > dashboard over HTTP/2 with a Let's Encrypt cert, built in GitHub Actions and
 > deployed to the VPS. Rollout/fixes: [PLAN-M2-PROXY.md](./PLAN-M2-PROXY.md).
 >
-> **Next:** M3 dashboard UI (zero-build Preact/HTM charts) + GitHub OAuth login;
-> then per-app hostnames and multi-cert SNI.
+> **Next:** M4 ops (deploy history + rollback, env editor, live logs) and the
+> multi-node fleet — [PLAN-MULTINODE.md](./PLAN-MULTINODE.md) (N0 node registry
+> shipped; N1+ pending a second node).
+>
+> **Backlog:** ACME webroot route so cert renewals need no turaes restart.
 
 ## Timeline
 

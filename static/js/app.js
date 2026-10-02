@@ -78,6 +78,7 @@ function AppCard({ app, selected, onSelect, onDeploy }) {
         <span class=${"badge " + app.status}>${app.status}</span>
       </h3>
       <div class="stat"><span>domain</span><span class="mono">${app.domain || "—"}</span></div>
+      <div class="stat"><span>server</span><span class="mono">${app.server_id || "local"}</span></div>
       <div class="stat"><span>port</span><span class="mono">${app.port}</span></div>
       <div class="stat"><span>runtime</span><span>${app.runtime}</span></div>
       <div style="margin-top:8px">
@@ -134,6 +135,48 @@ function Detail({ app, hours, data }) {
     </div>`;
 }
 
+function ServersPanel({ servers, onChanged }) {
+  const [msg, setMsg] = useState("");
+  const submit = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const payload = Object.fromEntries([...fd.entries()].filter(([, v]) => v !== ""));
+    if (payload.ssh_port) payload.ssh_port = Number(payload.ssh_port);
+    try {
+      await api("/api/v1/servers", { method: "POST", body: JSON.stringify(payload) });
+      e.target.reset();
+      setMsg(`added ${payload.name}`);
+      onChanged();
+    } catch (err) {
+      setMsg(err.message);
+    }
+  };
+  return html`
+    <section class="panel">
+      <div class="panel-head"><h2>Servers</h2><span class="pill">${servers.length}</span></div>
+      <table>
+        <thead><tr><th>Name</th><th>Address</th><th>Status</th><th>Local</th></tr></thead>
+        <tbody>
+          ${servers.map((s) => html`
+            <tr>
+              <td class="mono">${s.name}</td>
+              <td class="mono">${s.address}</td>
+              <td>${s.status}</td>
+              <td>${s.is_local ? "yes" : "no"}</td>
+            </tr>`)}
+        </tbody>
+      </table>
+      <form class="form" onSubmit=${submit} style="margin-top:12px">
+        <div class="row">
+          <label>Name <input name="name" placeholder="worker-1" required /></label>
+          <label>Address <input name="address" placeholder="10.0.0.12" required /></label>
+        </div>
+        <label>SSH host <input name="ssh_host" placeholder="10.0.0.12" /></label>
+        <div><button class="btn" type="submit">Add server</button> <span class="muted">${msg}</span></div>
+      </form>
+    </section>`;
+}
+
 function AddForm({ onCreated }) {
   const [msg, setMsg] = useState("");
   const submit = async (e) => {
@@ -168,6 +211,7 @@ function AddForm({ onCreated }) {
 function Dashboard() {
   const [user, setUser] = useState(undefined);
   const [apps, setApps] = useState([]);
+  const [servers, setServers] = useState([]);
   const [selected, setSelected] = useState(null);
   const [hours, setHours] = useState(1);
   const [data, setData] = useState({});
@@ -190,6 +234,13 @@ function Dashboard() {
     try { setUser(await api("/auth/me")); } catch { setUser(null); }
   }, []);
 
+  const loadServers = useCallback(async () => {
+    try {
+      const r = await api("/api/v1/servers");
+      setServers(r.servers || []);
+    } catch { /* unauthenticated */ }
+  }, []);
+
   const loadDetail = useCallback(async (id, hsel) => {
     if (!id) return;
     try {
@@ -203,12 +254,12 @@ function Dashboard() {
     }
   }, []);
 
-  useEffect(() => { loadUser(); loadApps(); }, [loadUser, loadApps]);
+  useEffect(() => { loadUser(); loadApps(); loadServers(); }, [loadUser, loadApps, loadServers]);
   useEffect(() => { loadDetail(selected, hours); }, [selected, hours, loadDetail]);
   useEffect(() => {
-    const t = setInterval(() => { loadApps(); if (selected) loadDetail(selected, hours); }, 15000);
+    const t = setInterval(() => { loadApps(); loadServers(); if (selected) loadDetail(selected, hours); }, 15000);
     return () => clearInterval(t);
-  }, [loadApps, loadDetail, selected, hours]);
+  }, [loadApps, loadServers, loadDetail, selected, hours]);
 
   const deploy = async (id) => {
     try { await api(`/api/v1/apps/${id}/deploy`, { method: "POST" }); } catch (e) { setError(e.message); }
@@ -252,6 +303,8 @@ function Dashboard() {
                 <${AppCard} app=${a} selected=${a.id === selected} onSelect=${setSelected} onDeploy=${deploy} />`)}
             </div>`}
       </section>
+
+      <${ServersPanel} servers=${servers} onChanged=${loadServers} />
 
       ${selectedApp && html`
         <section class="panel">
