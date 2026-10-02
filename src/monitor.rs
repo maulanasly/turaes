@@ -2,8 +2,11 @@
 //!
 //! Every `monitor.interval_secs`: probe each app's health endpoint, scrape its
 //! tonggeret `/metrics`, sample CPU/memory (cgroup v2, or `/proc` for the
-//! `proc` runtime), and roll the results into SQLite. Threshold crossings can
-//! trigger a supervised restart.
+//! `proc` runtime), and roll the results into **1-minute buckets** in SQLite.
+//! Threshold crossings can trigger a supervised restart.
+//!
+//! Buckets are upserted each tick, so the current minute's row stays fresh
+//! while storage is one row per app (and per region) per minute.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -14,6 +17,18 @@ use turaes_monitor::{health, scrape, stats};
 use crate::routes::apps::{runtime_for, spec_for};
 use crate::state::AppState;
 
+/// Running aggregate for one app's current minute.
+#[derive(Default)]
+struct Bucket {
+    /// Bucket start, `YYYY-MM-DD HH:MM:00` (UTC).
+    minute: String,
+    cpu_sum: f64,
+    cpu_count: u64,
+    mem_max: u64,
+    /// region -> (visits in bucket, latest unique-visitor estimate).
+    visits: HashMap<String, (i64, i64)>,
+}
+
 /// Per-app state kept in memory between ticks (never persisted).
 #[derive(Default)]
 struct AppMemo {
@@ -21,6 +36,11 @@ struct AppMemo {
     last_cpu_usec: Option<u64>,
     last_tick: Option<Instant>,
     visit_counters: HashMap<String, i64>,
+    bucket: Bucket,
+}
+
+fn current_minute() -> String {
+    chrono::Utc::now().format("%Y-%m-%d %H:%M:00").to_string()
 }
 
 /// Run the monitor forever. Intended to be spawned on process start.
@@ -49,7 +69,6 @@ async fn tick(state: &AppState, memo: &mut HashMap<String, AppMemo>) -> turaes_c
         }
     }
 
-    // Drop memo for apps that no longer exist.
     let alive: std::collections::HashSet<&str> = apps.iter().map(|a| a.id.as_str()).collect();
     memo.retain(|id, _| alive.contains(id.as_str()));
 
@@ -69,9 +88,18 @@ async fn watch_app(
         .unwrap_or(0.0);
     memo.last_tick = Some(Instant::now());
 
+    let minute = current_minute();
+    if memo.bucket.minute != minute {
+        memo.bucket = Bucket {
+            minute,
+            ..Default::default()
+        };
+    }
+
     probe_health(state, app, memo).await?;
     scrape_metrics(state, app, &base, memo).await;
     sample_resources(state, app, memo, elapsed).await;
+    flush_bucket(state, app, memo).await;
 
     Ok(())
 }
@@ -120,7 +148,7 @@ async fn probe_health(
                 } else {
                     record_event(
                         state,
-                        Some(&app.id),
+                        Some(app.id.as_str()),
                         "restart",
                         "auto-restarted after unhealthy",
                     )
@@ -139,8 +167,6 @@ async fn probe_health(
             .await?;
         }
         None => {
-            // Keep the app's status in sync with the current belief without
-            // emitting events every tick.
             let desired = if memo.threshold.is_healthy() {
                 "running"
             } else {
@@ -178,25 +204,13 @@ async fn scrape_metrics(state: &AppState, app: &Application, base: &str, memo: &
         let delta = if visit.visits >= prev {
             visit.visits - prev
         } else {
-            // Counter reset (app restart): count what we see now.
             visit.visits
         };
         memo.visit_counters
             .insert(visit.region.clone(), visit.visits);
-        if delta == 0 && visit.uniques == 0 {
-            continue;
-        }
-        let _ = sqlx::query(
-            "INSERT INTO visit_metrics (id, application_id, region, visits, uniques, recorded_at) \
-             VALUES (?, ?, ?, ?, ?, datetime('now'))",
-        )
-        .bind(uuid::Uuid::new_v4().to_string())
-        .bind(&app.id)
-        .bind(&visit.region)
-        .bind(delta)
-        .bind(visit.uniques)
-        .execute(&state.pool)
-        .await;
+        let entry = memo.bucket.visits.entry(visit.region).or_insert((0, 0));
+        entry.0 += delta;
+        entry.1 = entry.1.max(visit.uniques);
     }
 }
 
@@ -220,16 +234,50 @@ async fn sample_resources(
         Some(prev) => stats::cpu_percent(prev, reading.cpu_usage_usec, elapsed_secs),
         None => 0.0,
     };
-    let _ = sqlx::query(
-        "INSERT INTO app_metrics (id, application_id, cpu_pct, mem_bytes, recorded_at) \
-         VALUES (?, ?, ?, ?, datetime('now'))",
-    )
-    .bind(uuid::Uuid::new_v4().to_string())
-    .bind(&app.id)
-    .bind(cpu_pct)
-    .bind(reading.mem_bytes as i64)
-    .execute(&state.pool)
-    .await;
+    memo.bucket.cpu_sum += cpu_pct;
+    memo.bucket.cpu_count += 1;
+    memo.bucket.mem_max = memo.bucket.mem_max.max(reading.mem_bytes);
+}
+
+async fn flush_bucket(state: &AppState, app: &Application, memo: &AppMemo) {
+    let bucket = &memo.bucket;
+
+    if bucket.cpu_count > 0 {
+        let cpu_avg = bucket.cpu_sum / bucket.cpu_count as f64;
+        let _ = sqlx::query(
+            "INSERT INTO app_metrics (id, application_id, cpu_pct, mem_bytes, recorded_at) \
+             VALUES (?, ?, ?, ?, ?) \
+             ON CONFLICT(application_id, recorded_at) DO UPDATE SET \
+               cpu_pct = excluded.cpu_pct, mem_bytes = excluded.mem_bytes",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(&app.id)
+        .bind(cpu_avg)
+        .bind(bucket.mem_max as i64)
+        .bind(&bucket.minute)
+        .execute(&state.pool)
+        .await;
+    }
+
+    for (region, (visits, uniques)) in &bucket.visits {
+        if *visits == 0 && *uniques == 0 {
+            continue;
+        }
+        let _ = sqlx::query(
+            "INSERT INTO visit_metrics (id, application_id, region, visits, uniques, recorded_at) \
+             VALUES (?, ?, ?, ?, ?, ?) \
+             ON CONFLICT(application_id, region, recorded_at) DO UPDATE SET \
+               visits = excluded.visits, uniques = excluded.uniques",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(&app.id)
+        .bind(region)
+        .bind(*visits)
+        .bind(*uniques)
+        .bind(&bucket.minute)
+        .execute(&state.pool)
+        .await;
+    }
 }
 
 async fn read_proc_reading(state: &AppState, app: &Application) -> Option<stats::ResourceStats> {

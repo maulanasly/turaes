@@ -104,7 +104,7 @@ must **not** be pointed here (it resolves to another server).
 - [x] Visitors folded from `visitors_total` + `unique_visitors_estimate` per region.
 - [x] Interval rollups written to `app_metrics` / `visit_metrics`; retention compaction.
 - [x] `GET /apps/{id}/stats` and `/visitors` serve rolled-up history.
-- [ ] 1-minute downsampling (currently one row per monitor interval).
+- [x] 1-minute downsampling (minute-bucket upserts; one row per app/region per minute).
 - [x] Dashboard (zero-build Preact/HTM): per-app cards + time-series charts (SVG, no chart lib).
 - [ ] App's own `/metrics` re-export (dogfood via tonggeret).
 
