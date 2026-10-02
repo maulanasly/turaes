@@ -4,6 +4,7 @@
 //! turaes is a lightweight, self-hosted PaaS that runs applications as native
 //! processes (systemd or an embedded supervisor) instead of containers.
 
+pub mod artifact;
 pub mod config;
 pub mod crypto;
 pub mod db;

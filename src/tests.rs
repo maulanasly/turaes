@@ -16,7 +16,7 @@ use crate::app;
 use crate::state::AppState;
 use turaes_core::{db, Config};
 
-fn test_config(db_url: &str) -> Config {
+fn test_config(base: &std::path::Path, db_url: &str) -> Config {
     let toml = format!(
         r#"
 [server]
@@ -41,7 +41,7 @@ allow_insecure_cookies = false
 enabled = false
 http_port = 80
 https_port = 443
-cert_dir = "/tmp"
+cert_dir = "{base}"
 
 [monitor]
 interval_secs = 15
@@ -50,18 +50,20 @@ visitor_skip_paths = ["/metrics"]
 
 [runtime]
 driver = "proc"
-unit_dir = "/tmp"
-bin_dir = "/tmp"
-state_dir = "/tmp"
-env_dir = "/tmp"
-"#
+unit_dir = "{base}/units"
+bin_dir = "{base}/bin"
+state_dir = "{base}/state"
+env_dir = "{base}/etc"
+artifact_dir = "{base}/artifacts"
+"#,
+        base = base.display()
     );
     Config::from_toml(&toml).expect("test config")
 }
 
 async fn test_router(dir: &std::path::Path) -> axum::Router {
     let url = format!("sqlite://{}/test.db?mode=rwc", dir.display());
-    let cfg = Arc::new(test_config(&url));
+    let cfg = Arc::new(test_config(dir, &url));
     let pool = db::connect(&cfg.database.url).await.expect("db");
     db::migrate(&pool).await.expect("migrate");
     app::build_router(AppState::for_test(cfg, pool))
@@ -202,6 +204,81 @@ async fn create_and_delete_server() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+}
+
+async fn create_app(router: &axum::Router, name: &str, binary: &str, port: u16) -> String {
+    let payload = json!({"name": name, "binary_path": binary, "port": port});
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/apps")
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    body_json(resp).await["application"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+#[tokio::test]
+async fn rollback_without_previous_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let id = create_app(&router, "rapp", "/bin/true", 9200).await;
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/apps/{id}/rollback"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn deploy_stores_and_serves_artifact() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let id = create_app(&router, "dapp", "/usr/bin/true", 9201).await;
+
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/apps/{id}/deploy"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let hash = body["artifact_hash"].as_str().unwrap().to_string();
+    assert!(hash.starts_with("sha256:"));
+
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/artifacts/{hash}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    assert!(!bytes.is_empty());
 }
 
 #[tokio::test]

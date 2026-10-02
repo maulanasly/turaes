@@ -38,6 +38,7 @@ pub async fn run(state: &AppState, cmd: AppCommand) -> Result<()> {
             .await
         }
         AppCommand::Deploy { name } => deploy(state, &name).await,
+        AppCommand::Rollback { name } => rollback(state, &name).await,
         AppCommand::List => list(&state.pool).await,
         AppCommand::Show { name } => show(state, &name).await,
     }
@@ -232,6 +233,41 @@ async fn deploy(state: &AppState, name: &str) -> Result<()> {
         app.name,
         out.state.as_status(),
         out.artifact_hash
+    );
+    Ok(())
+}
+
+async fn rollback(state: &AppState, name: &str) -> Result<()> {
+    let app = sqlx::query_as::<_, Application>("SELECT * FROM applications WHERE name = ?")
+        .bind(name)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or_else(|| Error::NotFound(format!("application '{name}'")))?;
+    let hashes: Vec<String> = sqlx::query_scalar(
+        "SELECT artifact_hash FROM deployments \
+         WHERE application_id = ? AND artifact_hash IS NOT NULL ORDER BY rowid DESC",
+    )
+    .bind(&app.id)
+    .fetch_all(&state.pool)
+    .await?;
+    let previous = apps::select_previous_artifact(&hashes)
+        .ok_or_else(|| Error::BadRequest("no previous artifact to roll back to".into()))?;
+    if !state.artifacts.has(&previous) {
+        return Err(Error::NotFound(format!(
+            "artifact {previous} is no longer in the store"
+        )));
+    }
+    let source = state
+        .artifacts
+        .path_for(&previous)?
+        .to_string_lossy()
+        .to_string();
+    let (_dep_id, out) = apps::deploy_app_source(state, &app, source).await?;
+    println!(
+        "rolled back {} -> {} ({})",
+        app.name,
+        previous,
+        out.state.as_status()
     );
     Ok(())
 }

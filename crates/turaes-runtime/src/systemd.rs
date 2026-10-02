@@ -187,6 +187,9 @@ impl Runtime for SystemdRuntime {
         self.ensure_user(spec).await?;
         tokio::fs::create_dir_all(&spec.state_dir).await?;
         if let Some(env_file) = &spec.env_file {
+            if let Some(parent) = Path::new(env_file).parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
             tokio::fs::write(env_file, render_env_file(env)).await?;
         }
         self.chown_state(spec).await;

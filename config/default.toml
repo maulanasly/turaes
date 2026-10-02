@@ -62,3 +62,5 @@ bin_dir = "/usr/local/bin"
 state_dir = "/var/lib"
 # Per-app environment files.
 env_dir = "/etc"
+# Content-addressed artifact store ({artifact_dir}/sha256/{hex}).
+artifact_dir = "/var/lib/turaes/artifacts"

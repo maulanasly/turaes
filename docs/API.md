@@ -48,8 +48,18 @@ The session is an HttpOnly, SameSite=Lax JWT cookie.
 | `GET` | `/api/v1/apps/{id}` | Fetch one |
 | `DELETE` | `/api/v1/apps/{id}` | Remove app + stop it (`204`) |
 | `POST` | `/api/v1/apps/{id}/deploy` | Install + restart the prebuilt binary |
+| `POST` | `/api/v1/apps/{id}/rollback` | Redeploy the previous artifact |
 | `GET` | `/api/v1/apps/{id}/stats?hours=1` | CPU/memory samples (max 720h) |
 | `GET` | `/api/v1/apps/{id}/visitors?hours=24` | Visitor rows per region (max 720h) |
+| `GET` | `/api/v1/artifacts/{hash}` | Download a stored artifact by `sha256:<hex>` |
+
+Deploys first store the binary in the content-addressed artifact store
+(`{artifact_dir}/sha256/{hex}`, mode preserved) and install from that copy, so
+rollback and (later) remote agents can reuse it. `POST .../rollback` redeploys
+the most recent **different** artifact; `422` if there is no previous one.
+
+`server_id` (see [Servers](#servers)) places the app on a node; it defaults to
+`local`. Deploy to a non-local server is rejected until N1.
 
 ### Create
 
@@ -136,6 +146,19 @@ The deploy is idempotent. On failure the app is marked `failed` and the error is
 
 > Stats/visitors are populated by the monitoring loop (M3); in M0 the arrays are
 > empty until that loop lands.
+
+## Servers
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/v1/servers` | List nodes (local first) |
+| `POST` | `/api/v1/servers` | Register a node (`name`, `address`, optional `ssh_*`) |
+| `GET` | `/api/v1/servers/{id}` | Fetch one |
+| `DELETE` | `/api/v1/servers/{id}` | Remove a node (not `local`; refuses if apps are placed) |
+| `POST` | `/api/v1/servers/{id}/validate` | Reachability (TCP to SSH for remote) |
+
+SSH keys are sealed at rest and never returned. See
+[PLAN-MULTINODE.md](./PLAN-MULTINODE.md).
 
 ## Conventions
 

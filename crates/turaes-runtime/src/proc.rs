@@ -75,6 +75,9 @@ pub fn tail(body: &str, n: usize) -> String {
 impl Runtime for ProcRuntime {
     async fn apply(&self, spec: &AppSpec, env: &BTreeMap<String, String>) -> Result<()> {
         tokio::fs::create_dir_all(&spec.state_dir).await?;
+        if let Some(parent) = Path::new(&spec.installed_path).parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
         tokio::fs::copy(&spec.binary_path, &spec.installed_path)
             .await
             .map_err(|e| {
@@ -84,6 +87,9 @@ impl Runtime for ProcRuntime {
                 ))
             })?;
         if let Some(env_file) = &spec.env_file {
+            if let Some(parent) = Path::new(env_file).parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
             let body = env
                 .iter()
                 .map(|(k, v)| format!("{k}={v}\n"))

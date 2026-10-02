@@ -18,8 +18,10 @@ pub fn build_router(state: AppState) -> Router {
             get(routes::apps::get).delete(routes::apps::delete),
         )
         .route("/apps/{id}/deploy", post(routes::apps::deploy))
+        .route("/apps/{id}/rollback", post(routes::apps::rollback))
         .route("/apps/{id}/stats", get(routes::apps::stats))
         .route("/apps/{id}/visitors", get(routes::apps::visitors))
+        .route("/artifacts/{hash}", get(routes::artifacts::download))
         .route(
             "/servers",
             get(routes::servers::list).post(routes::servers::create),

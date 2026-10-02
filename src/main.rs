@@ -106,6 +106,7 @@ fn doctor(cfg: &Config) {
     println!("  runtime.driver    {}", cfg.runtime.driver);
     println!("  runtime.unit_dir  {}", cfg.runtime.unit_dir);
     println!("  runtime.bin_dir   {}", cfg.runtime.bin_dir);
+    println!("  runtime.artifact  {}", cfg.runtime.artifact_dir);
     println!("  monitor.interval  {}s", cfg.monitor.interval_secs);
     println!("  proxy.enabled     {}", cfg.proxy.enabled);
     println!("  proxy.pingora     {}", turaes_proxy::pingora_enabled());
