@@ -50,6 +50,16 @@ async fn main() {
                 .await
                 .unwrap_or_else(|e| fatal(e));
         }
+        Command::Server { cmd } => {
+            let pool = db::connect(&cfg.database.url)
+                .await
+                .unwrap_or_else(|e| fatal(e));
+            db::migrate(&pool).await.unwrap_or_else(|e| fatal(e));
+            let state = AppState::new(cfg.clone(), pool);
+            commands::run_server(&state, cmd)
+                .await
+                .unwrap_or_else(|e| fatal(e));
+        }
         Command::Serve => serve(cfg).await,
     }
 }

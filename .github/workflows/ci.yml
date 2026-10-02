@@ -19,6 +19,10 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # sqlx::migrate! isn't tracked as a source dependency; a restored cache can
+      # embed stale migrations, breaking tests that exercise the schema.
+      - name: Force fresh embedded migrations
+        run: cargo clean -p turaes-core
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
