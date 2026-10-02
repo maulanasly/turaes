@@ -34,12 +34,20 @@ curl -sI https://turaes.rayakala.ink/health
 gh workflow run release.yml -f deploy=true     # CI builds --features proxy + deploys
 ```
 
+**GitHub OAuth:** configured. Credentials live as repo secrets
+(`TURAES_GITHUB_CLIENT_ID`, `SECRET`, `ALLOWED_GITHUB_IDS`) and are applied to
+`/etc/turaes/turaes.env` by the `Configure` workflow (`.github/workflows/configure.yml`):
+
+```bash
+gh workflow run configure.yml      # writes env from secrets + restarts turaes
+```
+
+The OAuth App's **Authorization callback URL must be exactly**
+`https://turaes.rayakala.ink/auth/callback`. Allowed ids are numeric GitHub
+user ids (`gh api user -q .id`).
+
 **Outstanding on this host**
 
-- GitHub OAuth is unset, so web login is unavailable (the shell loads, `/auth/me`
-  → 401). Add `TURAES_GITHUB_CLIENT_ID/SECRET/ALLOWED_GITHUB_IDS`, set the OAuth
-  callback to `https://turaes.rayakala.ink/auth/callback`, then restart. Until
-  then, manage apps with the `turaes app` CLI (local DB, no auth).
 - HTTP (`:80`) serves the dashboard directly; an HTTP→HTTPS redirect is a planned
   proxy enhancement.
 - beruang is localhost-only until given its own hostname (do **not** use

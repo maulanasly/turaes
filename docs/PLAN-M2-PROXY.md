@@ -17,8 +17,9 @@ and deployed to the VPS.
      on a dedicated OS thread.
   2. HTTP/2 has no `Host` header → host now resolves from the URI authority
      (`req.uri.host()`).
-- Still open: dashboard login (GitHub OAuth creds), HTTP→HTTPS redirect,
-  multi-cert SNI, per-app hostnames.
+- GitHub OAuth login configured (repo secrets applied via the `Configure`
+  workflow).
+- Still open: HTTP→HTTPS redirect, multi-cert SNI, per-app hostnames.
 
 ---
 

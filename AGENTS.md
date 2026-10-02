@@ -64,7 +64,7 @@ crates/turaes-core/     config, db + migrations, models, error, crypto
 crates/turaes-runtime/  Runtime trait; systemd.rs, proc.rs, deploy.rs
 crates/turaes-proxy/    router (ArcSwap), tls (certbot), pingora data plane
 crates/turaes-monitor/  health, scrape (Prometheus), stats (cgroup/proc), rollup
-.github/workflows/     ci.yml (gate) + release.yml (build artifact + VPS deploy)
+.github/workflows/     ci.yml (gate), release.yml (build + deploy), configure.yml (OAuth secrets)
 src/                    CLI, Axum app, GitHub OAuth auth, routes, embedded UI
 migrations/             SQLite schema (embedded via sqlx::migrate!)
 static/                 zero-build UI compiled into the binary (rust-embed)
