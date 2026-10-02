@@ -4,6 +4,10 @@
 //! agent token, then heartbeat. Desired-state delivery (`Poll`/bidi) and the
 //! separate edge role land in N1c/N3.
 
+// tonic::Status is a large error type and the `Control` trait fixes the
+// signature, so `result_large_err` cannot be avoided here.
+#![allow(clippy::result_large_err)]
+
 use tonic::{Request, Response, Status};
 
 use turaes_core::crypto::{random_token, token_hash};
@@ -13,6 +17,7 @@ use crate::state::AppState;
 
 /// Generated protobuf/tonic types (`turaes.v1`).
 pub mod pb {
+    #![allow(clippy::result_large_err)] // generated tonic stubs return large Status
     tonic::include_proto!("turaes.v1");
 }
 
