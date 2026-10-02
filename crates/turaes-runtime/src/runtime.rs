@@ -73,6 +73,36 @@ impl RunState {
     }
 }
 
+/// Install a binary to `dest` atomically.
+///
+/// Writes `dest.turaes-new-<pid>` then renames it into place. Renaming replaces
+/// the path without touching the running process's inode, avoiding
+/// `ETXTBSY` ("Text file busy") when redeploying an app that is executing.
+pub async fn install_binary(src: &str, dest: &str) -> Result<()> {
+    let dest_path = std::path::Path::new(dest);
+    if let Some(parent) = dest_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let tmp = format!("{dest}.turaes-new-{}", std::process::id());
+    tokio::fs::copy(src, &tmp).await.map_err(|e| {
+        turaes_core::Error::Internal(format!("failed to stage {src} -> {tmp}: {e}"))
+    })?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(mut perms) = tokio::fs::metadata(&tmp).await.map(|m| m.permissions()) {
+            perms.set_mode(0o755);
+            let _ = tokio::fs::set_permissions(&tmp, perms).await;
+        }
+    }
+
+    tokio::fs::rename(&tmp, dest)
+        .await
+        .map_err(|e| turaes_core::Error::Internal(format!("failed to install {dest}: {e}")))?;
+    Ok(())
+}
+
 /// A supervisor backend that can install, run and observe a native app.
 #[async_trait]
 pub trait Runtime: Send + Sync {
@@ -96,4 +126,40 @@ pub trait Runtime: Send + Sync {
 
     /// Recent log lines.
     async fn logs(&self, spec: &AppSpec, lines: usize) -> Result<String>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::install_binary;
+
+    #[tokio::test]
+    async fn install_binary_replaces_and_sets_exec() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        tokio::fs::write(&src, b"#!/bin/sh\necho hi\n")
+            .await
+            .unwrap();
+        let dest = dir.path().join("dest");
+        // Simulate an existing (possibly running) installed binary.
+        tokio::fs::write(&dest, b"old").await.unwrap();
+
+        install_binary(src.to_str().unwrap(), dest.to_str().unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            tokio::fs::read(&dest).await.unwrap(),
+            b"#!/bin/sh\necho hi\n"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = tokio::fs::metadata(&dest)
+                .await
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o755);
+        }
+    }
 }
