@@ -24,6 +24,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install build deps (OpenSSL + cmake/zlib-ng)
         run: sudo apt-get update && sudo apt-get install -y clang perl pkg-config libssl-dev cmake
+      # sqlx::migrate! reads migrations/ at compile time but is not tracked as a
+      # source dependency, so a restored build cache can embed stale migrations.
+      # Force turaes-core to recompile so the embedded migrations are current.
+      - name: Force fresh embedded migrations
+        run: cargo clean -p turaes-core
       - name: Build release with the Pingora proxy
         run: cargo build --release --features proxy
       - name: Strip

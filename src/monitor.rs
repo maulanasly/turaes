@@ -244,7 +244,7 @@ async fn flush_bucket(state: &AppState, app: &Application, memo: &AppMemo) {
 
     if bucket.cpu_count > 0 {
         let cpu_avg = bucket.cpu_sum / bucket.cpu_count as f64;
-        let _ = sqlx::query(
+        if let Err(e) = sqlx::query(
             "INSERT INTO app_metrics (id, application_id, cpu_pct, mem_bytes, recorded_at) \
              VALUES (?, ?, ?, ?, ?) \
              ON CONFLICT(application_id, recorded_at) DO UPDATE SET \
@@ -256,14 +256,17 @@ async fn flush_bucket(state: &AppState, app: &Application, memo: &AppMemo) {
         .bind(bucket.mem_max as i64)
         .bind(&bucket.minute)
         .execute(&state.pool)
-        .await;
+        .await
+        {
+            tracing::warn!(app = %app.name, error = %e, "failed to upsert app_metrics");
+        }
     }
 
     for (region, (visits, uniques)) in &bucket.visits {
         if *visits == 0 && *uniques == 0 {
             continue;
         }
-        let _ = sqlx::query(
+        if let Err(e) = sqlx::query(
             "INSERT INTO visit_metrics (id, application_id, region, visits, uniques, recorded_at) \
              VALUES (?, ?, ?, ?, ?, ?) \
              ON CONFLICT(application_id, region, recorded_at) DO UPDATE SET \
@@ -276,7 +279,10 @@ async fn flush_bucket(state: &AppState, app: &Application, memo: &AppMemo) {
         .bind(*uniques)
         .bind(&bucket.minute)
         .execute(&state.pool)
-        .await;
+        .await
+        {
+            tracing::warn!(app = %app.name, region = %region, error = %e, "failed to upsert visit_metrics");
+        }
     }
 }
 
