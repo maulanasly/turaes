@@ -55,18 +55,30 @@ bin_dir = "{base}/bin"
 state_dir = "{base}/state"
 env_dir = "{base}/etc"
 artifact_dir = "{base}/artifacts"
+
+[grpc]
+enabled = false
+host = "127.0.0.1"
+port = 0
+
+[agent]
+join_token = "test-join"
 "#,
         base = base.display()
     );
     Config::from_toml(&toml).expect("test config")
 }
 
-async fn test_router(dir: &std::path::Path) -> axum::Router {
+async fn test_state(dir: &std::path::Path) -> AppState {
     let url = format!("sqlite://{}/test.db?mode=rwc", dir.display());
     let cfg = Arc::new(test_config(dir, &url));
     let pool = db::connect(&cfg.database.url).await.expect("db");
     db::migrate(&pool).await.expect("migrate");
-    app::build_router(AppState::for_test(cfg, pool))
+    AppState::for_test(cfg, pool)
+}
+
+async fn test_router(dir: &std::path::Path) -> axum::Router {
+    app::build_router(test_state(dir).await)
 }
 
 async fn body_json(resp: axum::response::Response) -> serde_json::Value {
@@ -279,6 +291,49 @@ async fn deploy_stores_and_serves_artifact() {
     assert_eq!(resp.status(), StatusCode::OK);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     assert!(!bytes.is_empty());
+}
+
+#[tokio::test]
+async fn agent_register_and_heartbeat() {
+    use crate::grpc::pb::{HeartbeatRequest, RegisterRequest};
+
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+
+    let req = |token: &str| RegisterRequest {
+        join_token: token.to_string(),
+        name: "w1".into(),
+        address: "10.0.0.9".into(),
+        version: "0".into(),
+    };
+
+    assert!(crate::grpc::register(&state, req("wrong")).await.is_err());
+
+    let reg = crate::grpc::register(&state, req("test-join"))
+        .await
+        .unwrap();
+    assert!(!reg.server_id.is_empty());
+    assert!(!reg.agent_token.is_empty());
+
+    let hb = crate::grpc::heartbeat(
+        &state,
+        HeartbeatRequest {
+            agent_token: reg.agent_token.clone(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(hb.ok);
+    assert_eq!(hb.server_id, reg.server_id);
+
+    let bad = crate::grpc::heartbeat(
+        &state,
+        HeartbeatRequest {
+            agent_token: "bad".into(),
+        },
+    )
+    .await;
+    assert!(bad.is_err());
 }
 
 #[tokio::test]

@@ -27,6 +27,41 @@ pub struct Config {
     pub monitor: MonitorConfig,
     /// Process runtime settings.
     pub runtime: RuntimeConfig,
+    /// gRPC control-plane (agent/edge channel) settings.
+    #[serde(default)]
+    pub grpc: GrpcConfig,
+    /// Agent join settings.
+    #[serde(default)]
+    pub agent: AgentConfig,
+}
+
+/// gRPC listener for agents and the edge.
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+pub struct GrpcConfig {
+    /// Whether the gRPC server starts with turaes.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Bind host.
+    #[serde(default = "default_grpc_host")]
+    pub host: String,
+    /// Bind port.
+    #[serde(default = "default_grpc_port")]
+    pub port: u16,
+}
+
+fn default_grpc_host() -> String {
+    "0.0.0.0".to_string()
+}
+fn default_grpc_port() -> u16 {
+    9443
+}
+
+/// Agent registration settings.
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+pub struct AgentConfig {
+    /// Shared secret an agent presents to `Register`.
+    #[serde(default)]
+    pub join_token: String,
 }
 
 /// HTTP listener for the dashboard and API.
@@ -313,6 +348,11 @@ fn apply_env(cfg: &mut Config) -> Result<()> {
     env_str("TURAES_STATE_DIR", &mut cfg.runtime.state_dir);
     env_str("TURAES_ENV_DIR", &mut cfg.runtime.env_dir);
     env_str("TURAES_ARTIFACT_DIR", &mut cfg.runtime.artifact_dir);
+
+    env_bool("TURAES_GRPC_ENABLED", &mut cfg.grpc.enabled);
+    env_str("TURAES_GRPC_HOST", &mut cfg.grpc.host);
+    env_parse("TURAES_GRPC_PORT", &mut cfg.grpc.port);
+    env_str("TURAES_AGENT_JOIN_TOKEN", &mut cfg.agent.join_token);
 
     Ok(())
 }

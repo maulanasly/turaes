@@ -51,6 +51,16 @@ retention_days = 30
 # Skip counting /metrics, /health and /__dev_version as visits (mirrors tonggeret).
 visitor_skip_paths = ["/metrics", "/health", "/__dev_version"]
 
+[grpc]
+# Control-plane gRPC for agents/edge. Keep disabled until workers exist.
+enabled = false
+host = "0.0.0.0"
+port = 9443
+
+[agent]
+# Shared join token an agent presents to Register. Set via env in production.
+join_token = ""
+
 [runtime]
 # "systemd" (default on Linux) or "proc" (embedded supervisor; no root needed).
 driver = "systemd"
