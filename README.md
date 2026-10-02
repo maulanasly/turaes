@@ -19,11 +19,10 @@ container layer.
 
 ## Status
 
-**M0–M2 shipped · M3 in progress.** Deploy (systemd + `proc`), the live
-monitoring loop (CPU/memory/visitors from tonggeret `/metrics`), and the Pingora
-proxy + Let's Encrypt TLS are running in production at
-**https://turaes.rayakala.ink**. The dashboard UI and GitHub OAuth login land in
-M3. See [docs/ROADMAP.md](./docs/ROADMAP.md), [docs/MILESTONES.md](./docs/MILESTONES.md)
+**M0–M3 shipped.** Deploy (systemd + `proc`), the live monitoring loop
+(CPU/memory/visitors from tonggeret `/metrics`), the Pingora proxy + Let's
+Encrypt TLS, GitHub OAuth login, and the zero-build Preact/HTM dashboard are
+running in production at **https://turaes.rayakala.ink**. See [docs/ROADMAP.md](./docs/ROADMAP.md), [docs/MILESTONES.md](./docs/MILESTONES.md)
 and [docs/PLAN-M2-PROXY.md](./docs/PLAN-M2-PROXY.md).
 
 ## Quickstart

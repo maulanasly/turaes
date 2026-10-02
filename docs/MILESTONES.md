@@ -105,7 +105,7 @@ must **not** be pointed here (it resolves to another server).
 - [x] Interval rollups written to `app_metrics` / `visit_metrics`; retention compaction.
 - [x] `GET /apps/{id}/stats` and `/visitors` serve rolled-up history.
 - [ ] 1-minute downsampling (currently one row per monitor interval).
-- [ ] Dashboard (zero-build Preact/HTM): per-app cards + time-series charts.
+- [x] Dashboard (zero-build Preact/HTM): per-app cards + time-series charts (SVG, no chart lib).
 - [ ] App's own `/metrics` re-export (dogfood via tonggeret).
 
 ### Exit criteria
