@@ -130,6 +130,17 @@ pub fn random_token(bytes: usize) -> String {
     URL_SAFE_NO_PAD.encode(buf)
 }
 
+/// Lowercase hex SHA-256 of a token (used to look up an agent by its token
+/// without storing the token in plaintext).
+pub fn token_hash(token: &str) -> String {
+    let digest = Sha256::digest(token.as_bytes());
+    let mut out = String::with_capacity(digest.len() * 2);
+    for b in digest {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,5 +180,14 @@ mod tests {
     #[test]
     fn random_tokens_are_unique() {
         assert_ne!(random_token(16), random_token(16));
+    }
+
+    #[test]
+    fn token_hash_is_stable_hex() {
+        let h = token_hash("abc");
+        assert_eq!(h.len(), 64);
+        assert_eq!(h, token_hash("abc"));
+        assert_ne!(h, token_hash("abd"));
+        assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
     }
 }

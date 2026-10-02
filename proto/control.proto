@@ -1,0 +1,36 @@
+// Control-plane <-> agent channel (N1b).
+//
+// The agent dials the control plane outbound (NAT-friendly), registers with a
+// join token, and heartbeats. Desired-state delivery (Poll / bidi AgentSession)
+// and the separate edge role land in N1c/N3.
+syntax = "proto3";
+
+package turaes.v1;
+
+service Control {
+  // Exchange a join token for a server-bound agent token.
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  // Liveness / last-seen.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+}
+
+message RegisterRequest {
+  string join_token = 1;
+  string name = 2;
+  string address = 3;
+  string version = 4;
+}
+
+message RegisterResponse {
+  string server_id = 1;
+  string agent_token = 2;
+}
+
+message HeartbeatRequest {
+  string agent_token = 1;
+}
+
+message HeartbeatResponse {
+  bool ok = 1;
+  string server_id = 2;
+}

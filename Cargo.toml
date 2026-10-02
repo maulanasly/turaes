@@ -119,7 +119,15 @@ jsonwebtoken.workspace = true
 reqwest.workspace = true
 urlencoding.workspace = true
 
+# gRPC (agent/edge control channel)
+tonic = { version = "0.12", features = ["transport"] }
+prost = "0.13"
+
 rust-embed.workspace = true
+
+[build-dependencies]
+tonic-build = "0.12"
+protoc-bin-vendored = "3"
 
 [dev-dependencies]
 tower.workspace = true

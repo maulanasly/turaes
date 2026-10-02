@@ -39,6 +39,24 @@ pub enum Command {
         #[command(subcommand)]
         cmd: ServerCommand,
     },
+    /// Run as a node agent: register with the control plane and heartbeat.
+    Agent {
+        /// Control-plane gRPC endpoint, e.g. http://10.0.0.2:9443.
+        #[arg(long, env = "TURAES_CONTROL_URL")]
+        control: String,
+        /// Shared join token.
+        #[arg(long, env = "TURAES_AGENT_TOKEN")]
+        token: String,
+        /// Node name (unique in the fleet).
+        #[arg(long)]
+        name: String,
+        /// Reachable address advertised to the control plane.
+        #[arg(long, default_value = "")]
+        address: String,
+        /// Heartbeat interval in seconds.
+        #[arg(long, default_value_t = 15)]
+        interval: u64,
+    },
 }
 
 /// Local (non-HTTP) server registry management.

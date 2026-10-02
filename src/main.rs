@@ -1,9 +1,11 @@
 //! turaes entry point: CLI parsing, tracing, and process bootstrap.
 
+mod agent;
 mod app;
 mod auth;
 mod cli;
 mod commands;
+mod grpc;
 mod monitor;
 mod routes;
 mod state;
@@ -60,6 +62,23 @@ async fn main() {
                 .await
                 .unwrap_or_else(|e| fatal(e));
         }
+        Command::Agent {
+            control,
+            token,
+            name,
+            address,
+            interval,
+        } => {
+            agent::run(agent::AgentArgs {
+                control,
+                token,
+                name,
+                address,
+                interval,
+            })
+            .await
+            .unwrap_or_else(|e| fatal(e));
+        }
         Command::Serve => serve(cfg).await,
     }
 }
@@ -109,6 +128,18 @@ fn doctor(cfg: &Config) {
     println!("  runtime.artifact  {}", cfg.runtime.artifact_dir);
     println!("  monitor.interval  {}s", cfg.monitor.interval_secs);
     println!("  proxy.enabled     {}", cfg.proxy.enabled);
+    println!(
+        "  grpc.enabled      {} ({}:{})",
+        cfg.grpc.enabled, cfg.grpc.host, cfg.grpc.port
+    );
+    println!(
+        "  agent.join_token  {}",
+        if cfg.agent.join_token.is_empty() {
+            "(unset)"
+        } else {
+            "set"
+        }
+    );
     println!("  proxy.pingora     {}", turaes_proxy::pingora_enabled());
     println!("  secure_cookies    {}", cfg.secure_cookies());
 }
@@ -142,6 +173,16 @@ async fn serve(cfg: Arc<Config>) {
         turaes_proxy::service::spawn(cfg.proxy.clone(), proxy_state);
     }
     tokio::spawn(monitor::run(state.clone()));
+
+    if cfg.grpc.enabled {
+        let grpc_state = state.clone();
+        tokio::spawn(async move {
+            if let Err(e) = grpc::serve(grpc_state).await {
+                tracing::error!(error = %e, "gRPC server stopped");
+            }
+        });
+    }
+
     let router = app::build_router(state);
 
     let addr = format!("{}:{}", cfg.server.host, cfg.server.port);
