@@ -90,6 +90,50 @@ mod pingora_impl {
         type CTX = ();
         fn new_ctx(&self) -> Self::CTX {}
 
+        /// Redirect plain HTTP to HTTPS for any host we route. Unknown hosts
+        /// (and IP access) fall through so they 404 as before.
+        async fn request_filter(
+            &self,
+            session: &mut Session,
+            _ctx: &mut Self::CTX,
+        ) -> Result<bool> {
+            let is_tls = session
+                .digest()
+                .map(|d| d.ssl_digest.is_some())
+                .unwrap_or(false);
+            if is_tls {
+                return Ok(false);
+            }
+
+            let (host, path) = {
+                let req = session.req_header();
+                let host = req
+                    .headers
+                    .get(http::header::HOST)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default()
+                    .to_string();
+                let path = req
+                    .uri
+                    .path_and_query()
+                    .map(|p| p.as_str().to_string())
+                    .unwrap_or_else(|| "/".to_string());
+                (host, path)
+            };
+
+            let hostname = host.split(':').next().unwrap_or("").to_ascii_lowercase();
+            if hostname.is_empty() || self.router.resolve(&hostname).is_none() {
+                return Ok(false);
+            }
+
+            let location = format!("https://{hostname}{path}");
+            let mut resp = ResponseHeader::build(http::StatusCode::MOVED_PERMANENTLY, None)?;
+            resp.insert_header(http::header::LOCATION, location)?;
+            // Empty body; `end_of_stream = true` completes the response.
+            session.write_response_header(Box::new(resp), true).await?;
+            Ok(true)
+        }
+
         async fn upstream_peer(
             &self,
             session: &mut Session,
