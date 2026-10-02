@@ -169,19 +169,8 @@ pub fn render_env_file(env: &BTreeMap<String, String>) -> String {
 #[async_trait]
 impl Runtime for SystemdRuntime {
     async fn apply(&self, spec: &AppSpec, env: &BTreeMap<String, String>) -> Result<()> {
-        // 1. Install the binary.
-        if let Some(parent) = Path::new(&spec.installed_path).parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-        tokio::fs::copy(&spec.binary_path, &spec.installed_path)
-            .await
-            .map_err(|e| {
-                Error::Internal(format!(
-                    "failed to install {} -> {}: {e}",
-                    spec.binary_path, spec.installed_path
-                ))
-            })?;
-        set_executable(&spec.installed_path).await?;
+        // 1. Install the binary atomically (safe while the old copy runs).
+        crate::runtime::install_binary(&spec.binary_path, &spec.installed_path).await?;
 
         // 2. Service user, state dir + env file.
         self.ensure_user(spec).await?;
@@ -255,20 +244,6 @@ impl Runtime for SystemdRuntime {
             .map_err(|e| Error::Internal(format!("failed to run journalctl: {e}")))?;
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
-}
-
-#[cfg(unix)]
-async fn set_executable(path: &str) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let mut perms = tokio::fs::metadata(path).await?.permissions();
-    perms.set_mode(0o755);
-    tokio::fs::set_permissions(path, perms).await?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-async fn set_executable(_path: &str) -> Result<()> {
-    Ok(())
 }
 
 #[cfg(test)]
