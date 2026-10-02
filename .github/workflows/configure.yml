@@ -1,0 +1,51 @@
+name: Configure
+
+# Applies GitHub OAuth credentials (repo secrets) to the VPS env file and
+# restarts turaes. Values are injected as masked env vars into the remote
+# script — they are never printed.
+#
+# Required repo secrets:
+#   TURAES_GITHUB_CLIENT_ID          OAuth app client id
+#   TURAES_GITHUB_CLIENT_SECRET  (or SECRET)   OAuth app client secret
+#   TURAES_ALLOWED_GITHUB_IDS    (or ALLOWED_GITHUB_IDS)   numeric GitHub user ids
+#   DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY
+
+on:
+  workflow_dispatch:
+
+jobs:
+  github-oauth:
+    name: github oauth
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Copy helper to the server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          source: deploy/set-github-oauth.sh
+          target: /tmp
+          strip_components: 1
+      - name: Apply OAuth config and restart
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: GH_ID,GH_SECRET,GH_IDS
+          script: |
+            set -e
+            bash /tmp/set-github-oauth.sh \
+              --client-id "$GH_ID" \
+              --client-secret "$GH_SECRET" \
+              --allowed-ids "$GH_IDS"
+            rm -f /tmp/set-github-oauth.sh
+            echo "login redirect check:"
+            curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8787/auth/login || true
+        env:
+          GH_ID: ${{ secrets.TURAES_GITHUB_CLIENT_ID }}
+          GH_SECRET: ${{ secrets.SECRET || secrets.TURAES_GITHUB_CLIENT_SECRET }}
+          GH_IDS: ${{ secrets.ALLOWED_GITHUB_IDS || secrets.TURAES_ALLOWED_GITHUB_IDS }}
