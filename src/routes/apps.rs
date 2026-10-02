@@ -274,16 +274,32 @@ pub async fn deploy(
 
 /// Install + restart an app, persisting the deployment record.
 ///
+/// Stores the current binary in the artifact store first, then deploys from the
+/// stored (content-addressed) copy — so rollback and remote agents can reuse it.
 /// Shared by the HTTP handler and the `turaes app deploy` CLI command.
 pub async fn deploy_app(state: &AppState, app: &Application) -> Result<(String, DeployOutcome)> {
-    if app.server_id != "local" {
-        return Err(Error::BadRequest(format!(
-            "remote deploy to server '{}' is not implemented yet (N1: agent transport)",
-            app.server_id
-        )));
-    }
+    ensure_local(app)?;
+    let hash = state
+        .artifacts
+        .put_file(std::path::Path::new(&app.binary_path))
+        .await?;
+    let source = state
+        .artifacts
+        .path_for(&hash)?
+        .to_string_lossy()
+        .to_string();
+    deploy_app_source(state, app, source).await
+}
+
+/// Deploy an app from an explicit on-disk artifact `source`.
+pub async fn deploy_app_source(
+    state: &AppState,
+    app: &Application,
+    source: String,
+) -> Result<(String, DeployOutcome)> {
     let env = load_env(state, &app.id).await?;
-    let spec = spec_for(&state.cfg, app);
+    let mut spec = spec_for(&state.cfg, app);
+    spec.binary_path = source;
     let dep_id = uuid::Uuid::new_v4().to_string();
 
     sqlx::query(
@@ -341,6 +357,58 @@ pub async fn deploy_app(state: &AppState, app: &Application) -> Result<(String, 
     }
 }
 
+fn ensure_local(app: &Application) -> Result<()> {
+    if app.server_id != "local" {
+        return Err(Error::BadRequest(format!(
+            "remote deploy to server '{}' is not implemented yet (N1: agent transport)",
+            app.server_id
+        )));
+    }
+    Ok(())
+}
+
+/// Pick the most recent deployment hash that differs from the current one.
+pub(crate) fn select_previous_artifact(hashes: &[String]) -> Option<String> {
+    let current = hashes.first()?;
+    hashes.iter().find(|h| *h != current).cloned()
+}
+
+/// `POST /api/v1/apps/{id}/rollback` — redeploy the previous artifact.
+pub async fn rollback(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>> {
+    let app = fetch_app(&state.pool, &id).await?;
+    ensure_local(&app)?;
+    let hashes: Vec<String> = sqlx::query_scalar(
+        "SELECT artifact_hash FROM deployments \
+         WHERE application_id = ? AND artifact_hash IS NOT NULL ORDER BY rowid DESC",
+    )
+    .bind(&app.id)
+    .fetch_all(&state.pool)
+    .await?;
+    let previous = select_previous_artifact(&hashes)
+        .ok_or_else(|| Error::BadRequest("no previous artifact to roll back to".into()))?;
+    if !state.artifacts.has(&previous) {
+        return Err(Error::NotFound(format!(
+            "artifact {previous} is no longer in the store"
+        )));
+    }
+    let source = state
+        .artifacts
+        .path_for(&previous)?
+        .to_string_lossy()
+        .to_string();
+    let (dep_id, out) = deploy_app_source(&state, &app, source).await?;
+    Ok(Json(serde_json::json!({
+        "deployment_id": dep_id,
+        "rolled_back_to": previous,
+        "state": out.state,
+        "artifact_hash": out.artifact_hash,
+        "log": out.log,
+    })))
+}
+
 /// `GET /api/v1/apps/{id}/stats`
 pub async fn stats(
     State(state): State<AppState>,
@@ -379,4 +447,17 @@ pub async fn visitors(
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(serde_json::json!({ "visitors": rows })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::select_previous_artifact;
+
+    #[test]
+    fn picks_previous_distinct_artifact() {
+        let hs = vec!["sha256:aa".into(), "sha256:aa".into(), "sha256:bb".into()];
+        assert_eq!(select_previous_artifact(&hs).as_deref(), Some("sha256:bb"));
+        assert_eq!(select_previous_artifact(&["sha256:aa".into()]), None);
+        assert_eq!(select_previous_artifact(&[]), None);
+    }
 }

@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use sqlx::SqlitePool;
 
+use turaes_core::artifact::ArtifactStore;
 use turaes_core::config::Config;
 use turaes_core::crypto::{SecretBox, TokenIssuer};
 
@@ -14,6 +15,8 @@ pub struct AppState {
     pub cfg: Arc<Config>,
     /// SQLite pool.
     pub pool: SqlitePool,
+    /// Content-addressed artifact store.
+    pub artifacts: ArtifactStore,
     /// Session token issuer.
     pub issuer: TokenIssuer,
     /// Secret sealer for app environment variables.
@@ -40,6 +43,7 @@ impl AppState {
             );
         }
         Self {
+            artifacts: ArtifactStore::new(&cfg.runtime.artifact_dir),
             issuer: TokenIssuer::new(&cfg.auth.jwt_secret, cfg.auth.session_ttl_days),
             secrets: SecretBox::new(&cfg.auth.jwt_secret),
             http: reqwest::Client::new(),

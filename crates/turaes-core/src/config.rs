@@ -109,6 +109,13 @@ pub struct RuntimeConfig {
     pub state_dir: String,
     /// Directory for per-app environment files (`{env_dir}/{app}.env`).
     pub env_dir: String,
+    /// Content-addressed artifact store root (`{artifact_dir}/sha256/{hex}`).
+    #[serde(default = "default_artifact_dir")]
+    pub artifact_dir: String,
+}
+
+fn default_artifact_dir() -> String {
+    "/var/lib/turaes/artifacts".to_string()
 }
 
 impl Config {
@@ -305,6 +312,7 @@ fn apply_env(cfg: &mut Config) -> Result<()> {
     env_str("TURAES_BIN_DIR", &mut cfg.runtime.bin_dir);
     env_str("TURAES_STATE_DIR", &mut cfg.runtime.state_dir);
     env_str("TURAES_ENV_DIR", &mut cfg.runtime.env_dir);
+    env_str("TURAES_ARTIFACT_DIR", &mut cfg.runtime.artifact_dir);
 
     Ok(())
 }

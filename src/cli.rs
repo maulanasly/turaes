@@ -109,6 +109,11 @@ pub enum AppCommand {
         /// Application name.
         name: String,
     },
+    /// Roll back an application to its previous artifact.
+    Rollback {
+        /// Application name.
+        name: String,
+    },
     /// List applications.
     List,
     /// Show an application's status and latest metrics/visitors.
