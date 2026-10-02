@@ -215,13 +215,13 @@ Rebuild the previous binary from the last good commit and reinstall if needed.
 | TLS backend | **OpenSSL** (system `libssl-dev`) | avoids BoringSSL `clang`/`perl`; rustls backend is experimental |
 | Cert strategy | **certbot standalone + hooks** (MVP) | move to webroot-in-Pingora later for zero-downtime renewals |
 | Multi-domain TLS | **single cert** (dashboard) for now | multi-cert SNI callback is the next step when apps get their own domains |
-| HTTP→HTTPS | planned redirect | not yet wired in the proxy; add `request_filter` |
+| HTTP→HTTPS | **301 redirect** for routed hosts (implemented) | ACME webroot route still to do |
 | Proxy process | **in-process, dedicated OS thread** | one binary; Pingora's `run_forever()` blocks and owns its runtime, so it must not run inside the Tokio runtime ("cannot start a runtime from within a runtime") |
 | Proxy startup | route table from DB at boot + on deploy | `ArcSwap` publish, no locks on hot path |
 
 ### Next code steps (if not this pass)
 
-1. HTTP→HTTPS redirect + ACME webroot route in `ProxyHttp::request_filter`.
+1. ~~HTTP→HTTPS redirect~~ done (301 for routed hosts over plain HTTP); ACME webroot route still pending.
 2. Multi-cert SNI via `TlsSettings::with_callbacks` implementing `TlsAccept`,
    selecting `{cert_dir}/{sni}/{fullchain,privkey}.pem` (BoringSSL/OpenSSL only).
 3. ~~CI proxy job + release binary~~ — done: `release.yml` builds with

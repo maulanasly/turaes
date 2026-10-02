@@ -76,7 +76,7 @@ Execution plan: [PLAN-M2-PROXY.md](./PLAN-M2-PROXY.md).
 - [x] Unknown host → 404.
 - [x] `turaes-proxy` builds with `--features proxy` in CI (`release.yml`); proxy check is a required gate.
 - [ ] Multi-cert SNI selection (per-app domains).
-- [ ] HTTP→HTTPS redirect + ACME webroot route in the proxy.
+- [~] HTTP→HTTPS redirect done; ACME webroot route for renewals still pending.
 - [~] Forward `X-Forwarded-For/Proto`, `X-Real-IP`, and CDN country headers explicitly.
 - [ ] Graceful cert reload on renewal (currently restart via certbot hooks).
 
