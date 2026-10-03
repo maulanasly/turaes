@@ -10,4 +10,4 @@ pub mod runtime;
 pub mod systemd;
 
 pub use deploy::{artifact_hash, DeployOutcome, Deployer};
-pub use runtime::{AppSpec, RunState, Runtime};
+pub use runtime::{AppSpec, RunState, Runtime, Slot};

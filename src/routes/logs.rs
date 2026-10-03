@@ -123,6 +123,7 @@ mod tests {
             binary_path: "/bin/true".into(),
             args: None,
             port: 1,
+            active_port: None,
             health_path: "/health".into(),
             metrics_path: None,
             domain: None,

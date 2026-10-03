@@ -163,10 +163,24 @@ pub struct RuntimeConfig {
     /// Content-addressed artifact store root (`{artifact_dir}/sha256/{hex}`).
     #[serde(default = "default_artifact_dir")]
     pub artifact_dir: String,
+    /// Blue/green: slot B port = slot A port + this offset.
+    #[serde(default = "default_slot_offset")]
+    pub slot_offset: u16,
+    /// Seconds to keep the previous slot running after a successful cutover.
+    #[serde(default = "default_drain_secs")]
+    pub drain_secs: u64,
 }
 
 fn default_artifact_dir() -> String {
     "/var/lib/turaes/artifacts".to_string()
+}
+
+fn default_slot_offset() -> u16 {
+    10000
+}
+
+fn default_drain_secs() -> u64 {
+    10
 }
 
 impl Config {
@@ -370,6 +384,8 @@ fn apply_env(cfg: &mut Config) -> Result<()> {
     env_str("TURAES_STATE_DIR", &mut cfg.runtime.state_dir);
     env_str("TURAES_ENV_DIR", &mut cfg.runtime.env_dir);
     env_str("TURAES_ARTIFACT_DIR", &mut cfg.runtime.artifact_dir);
+    env_parse("TURAES_SLOT_OFFSET", &mut cfg.runtime.slot_offset);
+    env_parse("TURAES_DRAIN_SECS", &mut cfg.runtime.drain_secs);
 
     env_bool("TURAES_GRPC_ENABLED", &mut cfg.grpc.enabled);
     env_str("TURAES_GRPC_HOST", &mut cfg.grpc.host);

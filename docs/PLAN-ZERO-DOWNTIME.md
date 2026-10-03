@@ -2,6 +2,10 @@
 
 Make control, edge, and app releases happen without dropping traffic.
 
+Status: **P3 + P4 implemented.** Control drains on SIGTERM; edge upgrades roll
+across `turaes-edge@a/@b` via SO_REUSEPORT; app deploys are blue/green
+(`active_port`) with a health gate and automatic fallback to the previous slot.
+
 ## Root causes
 
 - One process binds :80/:443 **and** serves the API; `systemctl restart` drops

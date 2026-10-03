@@ -14,11 +14,34 @@ use serde::{Deserialize, Serialize};
 
 use turaes_core::Result;
 
+/// Blue/green slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Slot {
+    /// Slot A (base port).
+    A,
+    /// Slot B (base port + offset).
+    B,
+}
+
+impl Slot {
+    /// Lowercase label used in unit/state names.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Slot::A => "a",
+            Slot::B => "b",
+        }
+    }
+}
+
 /// Everything the runtime needs to manage one application.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSpec {
     /// Application slug (also the unit/install name).
     pub name: String,
+    /// Blue/green slot, when running slot-scoped instances.
+    #[serde(default)]
+    pub slot: Option<Slot>,
     /// Source path of the prebuilt binary.
     pub binary_path: String,
     /// Where the binary is installed on the server.
@@ -36,9 +59,17 @@ pub struct AppSpec {
 }
 
 impl AppSpec {
-    /// systemd unit name, e.g. `beruang.service`.
+    /// Instance label (`name` or `name-a`/`name-b` when slotted).
+    pub fn instance(&self) -> String {
+        match self.slot {
+            Some(slot) => format!("{}-{}", self.name, slot.as_str()),
+            None => self.name.clone(),
+        }
+    }
+
+    /// systemd unit name, e.g. `beruang.service` or `beruang-a.service`.
     pub fn unit_name(&self) -> String {
-        format!("{}.service", self.name)
+        format!("{}.service", self.instance())
     }
 
     /// Effective service user (falls back to the app name).
