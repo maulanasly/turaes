@@ -25,9 +25,9 @@ pub mod pb {
 
 use pb::control_server::{Control, ControlServer};
 use pb::{
-    DesiredApp, EdgeRoute, EdgeRoutesRequest, EdgeRoutesResponse, HeartbeatRequest,
-    HeartbeatResponse, MetricsRequest, MetricsResponse, PollRequest, PollResponse, RegisterRequest,
-    RegisterResponse, ReportRequest, ReportResponse,
+    DesiredApp, EdgeCert, EdgeCertsRequest, EdgeCertsResponse, EdgeRoute, EdgeRoutesRequest,
+    EdgeRoutesResponse, HeartbeatRequest, HeartbeatResponse, MetricsRequest, MetricsResponse,
+    PollRequest, PollResponse, RegisterRequest, RegisterResponse, ReportRequest, ReportResponse,
 };
 
 fn internal(e: impl std::fmt::Display) -> Status {
@@ -95,6 +95,58 @@ impl Control for ControlService {
             edge_routes(&self.state, req.into_inner()).await?,
         ))
     }
+
+    async fn edge_certs(
+        &self,
+        req: Request<EdgeCertsRequest>,
+    ) -> Result<Response<EdgeCertsResponse>, Status> {
+        Ok(Response::new(
+            edge_certs(&self.state, req.into_inner()).await?,
+        ))
+    }
+}
+
+/// Return certificate material (PEM) for app + dashboard hosts the control
+/// plane has on disk (certbot layout), for an edge to install locally.
+pub async fn edge_certs(
+    state: &AppState,
+    req: EdgeCertsRequest,
+) -> Result<EdgeCertsResponse, Status> {
+    let expected = &state.cfg.agent.join_token;
+    if expected.is_empty() || &req.token != expected {
+        return Err(Status::unauthenticated("invalid edge token"));
+    }
+
+    let mut hosts: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT domain FROM applications WHERE domain IS NOT NULL AND domain != ''",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(internal)?;
+    if let Some(dashboard) = state.cfg.dashboard_host() {
+        hosts.push(dashboard);
+    }
+
+    let root = std::path::Path::new(&state.cfg.proxy.cert_dir);
+    let mut certs = Vec::new();
+    for host in hosts {
+        let host = host.to_lowercase();
+        let dir = root.join(&host);
+        let fullchain = dir.join("fullchain.pem");
+        let privkey = dir.join("privkey.pem");
+        match (
+            tokio::fs::read(&fullchain).await,
+            tokio::fs::read(&privkey).await,
+        ) {
+            (Ok(fc), Ok(pk)) => certs.push(EdgeCert {
+                host,
+                fullchain_pem: fc,
+                privkey_pem: pk,
+            }),
+            _ => tracing::debug!(host = %host, "no cert material on control plane"),
+        }
+    }
+    Ok(EdgeCertsResponse { certs })
 }
 
 /// Return the current route table for the edge role (host → backend address).

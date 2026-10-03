@@ -21,6 +21,22 @@ service Control {
   rpc PushMetrics(MetricsRequest) returns (MetricsResponse);
   // Edge role: fetch the current route table (host -> backend).
   rpc EdgeRoutes(EdgeRoutesRequest) returns (EdgeRoutesResponse);
+  // Edge role: fetch certificate material per host.
+  rpc EdgeCerts(EdgeCertsRequest) returns (EdgeCertsResponse);
+}
+
+message EdgeCertsRequest {
+  string token = 1;
+}
+
+message EdgeCert {
+  string host = 1;
+  bytes fullchain_pem = 2;
+  bytes privkey_pem = 3;
+}
+
+message EdgeCertsResponse {
+  repeated EdgeCert certs = 1;
 }
 
 message EdgeRoutesRequest {

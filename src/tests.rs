@@ -41,7 +41,7 @@ allow_insecure_cookies = false
 enabled = false
 http_port = 80
 https_port = 443
-cert_dir = "{base}"
+cert_dir = "{base}/certs"
 
 [monitor]
 interval_secs = 15
@@ -669,6 +669,57 @@ async fn edge_routes_lists_apps_and_rejects_bad_token() {
         .routes
         .iter()
         .any(|r| r.host == "app.test" && r.address == "127.0.0.1" && r.port == 9900));
+}
+
+#[tokio::test]
+async fn edge_certs_serves_cert_material() {
+    use crate::grpc::pb::EdgeCertsRequest;
+
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+
+    let payload = json!({
+        "name": "capp", "binary_path": "/usr/bin/true", "port": 9910, "domain": "x.test"
+    });
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/apps")
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let cert_dir = dir.path().join("certs/x.test");
+    std::fs::create_dir_all(&cert_dir).unwrap();
+    std::fs::write(cert_dir.join("fullchain.pem"), b"FULLCHAIN").unwrap();
+    std::fs::write(cert_dir.join("privkey.pem"), b"PRIVKEY").unwrap();
+
+    assert!(crate::grpc::edge_certs(
+        &state,
+        EdgeCertsRequest {
+            token: "bad".into()
+        }
+    )
+    .await
+    .is_err());
+
+    let resp = crate::grpc::edge_certs(
+        &state,
+        EdgeCertsRequest {
+            token: "test-join".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let cert = resp.certs.iter().find(|c| c.host == "x.test").unwrap();
+    assert_eq!(cert.fullchain_pem, b"FULLCHAIN");
+    assert_eq!(cert.privkey_pem, b"PRIVKEY");
 }
 
 #[tokio::test]
