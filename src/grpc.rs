@@ -8,6 +8,8 @@
 // signature, so `result_large_err` cannot be avoided here.
 #![allow(clippy::result_large_err)]
 
+use std::collections::BTreeMap;
+
 use tonic::{Request, Response, Status};
 
 use turaes_core::crypto::{random_token, token_hash};
@@ -22,7 +24,10 @@ pub mod pb {
 }
 
 use pb::control_server::{Control, ControlServer};
-use pb::{HeartbeatRequest, HeartbeatResponse, RegisterRequest, RegisterResponse};
+use pb::{
+    DesiredApp, HeartbeatRequest, HeartbeatResponse, PollRequest, PollResponse, RegisterRequest,
+    RegisterResponse, ReportRequest, ReportResponse,
+};
 
 fn internal(e: impl std::fmt::Display) -> Status {
     Status::internal(e.to_string())
@@ -60,6 +65,127 @@ impl Control for ControlService {
             heartbeat(&self.state, req.into_inner()).await?,
         ))
     }
+
+    async fn poll(&self, req: Request<PollRequest>) -> Result<Response<PollResponse>, Status> {
+        Ok(Response::new(poll(&self.state, req.into_inner()).await?))
+    }
+
+    async fn report(
+        &self,
+        req: Request<ReportRequest>,
+    ) -> Result<Response<ReportResponse>, Status> {
+        Ok(Response::new(report(&self.state, req.into_inner()).await?))
+    }
+}
+
+/// Resolve the server for an agent token, or fail unauthenticated.
+async fn authenticate(state: &AppState, token: &str) -> Result<Server, Status> {
+    if token.is_empty() {
+        return Err(Status::unauthenticated("missing agent token"));
+    }
+    let hash = token_hash(token);
+    sqlx::query_as::<_, Server>("SELECT * FROM servers WHERE agent_token_hash = ?")
+        .bind(&hash)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| Status::unauthenticated("unknown agent token"))
+}
+
+/// Desired apps for the calling agent's node.
+pub async fn poll(state: &AppState, req: PollRequest) -> Result<PollResponse, Status> {
+    use sqlx::Row;
+
+    let server = authenticate(state, &req.agent_token).await?;
+    let rows = sqlx::query(
+        "SELECT a.id, a.name, a.args, a.port, a.runtime, a.health_path, a.metrics_path, \
+         (SELECT artifact_hash FROM deployments d \
+          WHERE d.application_id = a.id AND artifact_hash IS NOT NULL \
+          ORDER BY rowid DESC LIMIT 1) AS artifact_hash \
+         FROM applications a WHERE a.server_id = ?",
+    )
+    .bind(&server.id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(internal)?;
+
+    let mut apps = Vec::with_capacity(rows.len());
+    for row in rows {
+        let id: String = row.try_get("id").map_err(internal)?;
+        let env = load_env(state, &id).await.map_err(internal)?;
+        apps.push(DesiredApp {
+            name: row.try_get("name").map_err(internal)?,
+            artifact_hash: row
+                .try_get::<Option<String>, _>("artifact_hash")
+                .map_err(internal)?
+                .unwrap_or_default(),
+            args: row
+                .try_get::<Option<String>, _>("args")
+                .map_err(internal)?
+                .unwrap_or_default(),
+            port: row.try_get::<i64, _>("port").map_err(internal)? as u32,
+            runtime: row.try_get("runtime").map_err(internal)?,
+            health_path: row.try_get("health_path").map_err(internal)?,
+            metrics_path: row
+                .try_get::<Option<String>, _>("metrics_path")
+                .map_err(internal)?
+                .unwrap_or_default(),
+            env: env.into_iter().collect(),
+        });
+    }
+    Ok(PollResponse { apps })
+}
+
+async fn load_env(state: &AppState, app_id: &str) -> turaes_core::Result<BTreeMap<String, String>> {
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT key, value_enc FROM env_vars WHERE application_id = ?")
+            .bind(app_id)
+            .fetch_all(&state.pool)
+            .await?;
+    let mut env = BTreeMap::new();
+    for (key, sealed) in rows {
+        env.insert(key, state.secrets.open(&sealed)?);
+    }
+    Ok(env)
+}
+
+/// Record an apply result from an agent.
+pub async fn report(state: &AppState, req: ReportRequest) -> Result<ReportResponse, Status> {
+    let server = authenticate(state, &req.agent_token).await?;
+    if req.app_name.is_empty() {
+        return Err(Status::invalid_argument("app_name is required"));
+    }
+    let app: Option<String> =
+        sqlx::query_scalar("SELECT id FROM applications WHERE name = ? AND server_id = ?")
+            .bind(&req.app_name)
+            .bind(&server.id)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(internal)?;
+    let Some(app_id) = app else {
+        return Err(Status::not_found("no such app on this server"));
+    };
+
+    sqlx::query("UPDATE applications SET status = ?, updated_at = datetime('now') WHERE id = ?")
+        .bind(&req.status)
+        .bind(&app_id)
+        .execute(&state.pool)
+        .await
+        .map_err(internal)?;
+
+    sqlx::query(
+        "UPDATE deployments SET status = ?, log = ?, finished_at = datetime('now') \
+         WHERE id = (SELECT id FROM deployments WHERE application_id = ? ORDER BY rowid DESC LIMIT 1)",
+    )
+    .bind(&req.status)
+    .bind(&req.message)
+    .bind(&app_id)
+    .execute(&state.pool)
+    .await
+    .map_err(internal)?;
+
+    tracing::info!(server = %server.name, app = %req.app_name, status = %req.status, "agent reported");
+    Ok(ReportResponse { ok: true })
 }
 
 /// Validate the join token and issue (or rebind) an agent token.

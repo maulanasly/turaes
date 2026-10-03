@@ -166,7 +166,7 @@ same Tencent VPC, hybrid SSH bootstrap + gRPC agent, separate Pingora edge.
 | Phase | Scope | Status |
 |---|---|---|
 | **N0** | `servers` table + `applications.server_id`, `/api/v1/servers`, `turaes server …`, UI panel | ✅ |
-| **N1** | ArtifactStore + SSH bootstrap + `turaes agent` over gRPC + `AgentRuntime` | 🔄 (artifact store + gRPC register/heartbeat done) |
+| **N1** | ArtifactStore + SSH bootstrap + `turaes agent` over gRPC + `AgentRuntime` | 🔄 (artifact store, register/heartbeat, poll/report reconcile done; SSH bootstrap pending) |
 | **N2** | agent-pushed cgroup CPU/mem; VPC scrape of health/metrics; per-node dashboard | ⏳ |
 | **N3** | `turaes edge` role (gRPC route/cert stream); Pingora off the control plane | ⏳ |
 | **N4** | DNS-01 multi-cert/wildcard SNI + replicas/LB + control-plane HA | ⏳ |

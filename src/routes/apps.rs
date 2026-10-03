@@ -15,7 +15,7 @@ use turaes_core::{Error, Result};
 use turaes_proxy::{RouteTable, Upstream};
 use turaes_runtime::proc::ProcRuntime;
 use turaes_runtime::systemd::SystemdRuntime;
-use turaes_runtime::{AppSpec, DeployOutcome, Deployer, Runtime};
+use turaes_runtime::{AppSpec, DeployOutcome, Deployer, RunState, Runtime};
 
 use crate::state::AppState;
 
@@ -278,17 +278,46 @@ pub async fn deploy(
 /// stored (content-addressed) copy — so rollback and remote agents can reuse it.
 /// Shared by the HTTP handler and the `turaes app deploy` CLI command.
 pub async fn deploy_app(state: &AppState, app: &Application) -> Result<(String, DeployOutcome)> {
-    ensure_local(app)?;
     let hash = state
         .artifacts
         .put_file(std::path::Path::new(&app.binary_path))
         .await?;
-    let source = state
-        .artifacts
-        .path_for(&hash)?
-        .to_string_lossy()
-        .to_string();
-    deploy_app_source(state, app, source).await
+
+    if app.server_id == "local" {
+        let source = state
+            .artifacts
+            .path_for(&hash)?
+            .to_string_lossy()
+            .to_string();
+        return deploy_app_source(state, app, source).await;
+    }
+
+    // Remote: queue the artifact for the node's agent to reconcile.
+    let dep_id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO deployments (id, application_id, status, artifact_hash, started_at) \
+         VALUES (?, ?, 'queued', ?, datetime('now'))",
+    )
+    .bind(&dep_id)
+    .bind(&app.id)
+    .bind(&hash)
+    .execute(&state.pool)
+    .await?;
+    sqlx::query(
+        "UPDATE applications SET status = 'deploying', updated_at = datetime('now') WHERE id = ?",
+    )
+    .bind(&app.id)
+    .execute(&state.pool)
+    .await?;
+    tracing::info!(app = %app.name, server = %app.server_id, hash = %hash, "deploy queued for agent");
+    Ok((
+        dep_id,
+        DeployOutcome {
+            artifact_hash: hash,
+            state: RunState::Unknown,
+            log: "queued for agent".into(),
+        },
+    ))
 }
 
 /// Deploy an app from an explicit on-disk artifact `source`.

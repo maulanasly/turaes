@@ -64,18 +64,23 @@ async fn main() {
         }
         Command::Agent {
             control,
+            http,
             token,
             name,
             address,
             interval,
         } => {
-            agent::run(agent::AgentArgs {
-                control,
-                token,
-                name,
-                address,
-                interval,
-            })
+            agent::run(
+                cfg,
+                agent::AgentArgs {
+                    control,
+                    http,
+                    token,
+                    name,
+                    address,
+                    interval,
+                },
+            )
             .await
             .unwrap_or_else(|e| fatal(e));
         }

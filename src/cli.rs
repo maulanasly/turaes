@@ -44,6 +44,9 @@ pub enum Command {
         /// Control-plane gRPC endpoint, e.g. http://10.0.0.2:9443.
         #[arg(long, env = "TURAES_CONTROL_URL")]
         control: String,
+        /// Control-plane HTTP base for artifacts, e.g. http://10.0.0.2:8787.
+        #[arg(long, env = "TURAES_CONTROL_HTTP")]
+        http: String,
         /// Shared join token.
         #[arg(long, env = "TURAES_AGENT_TOKEN")]
         token: String,

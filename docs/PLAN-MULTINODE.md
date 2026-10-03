@@ -1,9 +1,10 @@
 # Plan — Multi-node fleet (control plane + agents + edge)
 
-Status: **in progress.** N0 (node registry) and N1b (artifact store + gRPC
-agent register/heartbeat) are implemented and tested. N1c (desired-state
-reconcile), N2–N4 are not. No second node exists yet, so this is the design of
-record.
+Status: **in progress.** Implemented and tested: N0 (node registry), N1a
+(artifact store + rollback), N1b (gRPC register/heartbeat), and N1c
+(poll/report desired-state reconcile via `turaes agent`). Pending: SSH
+bootstrap, N2 (agent metrics), N3 (separate edge), N4. No second node exists
+yet, so this is the design of record.
 
 ## Decisions (locked)
 
@@ -84,7 +85,7 @@ during bootstrap). Rollback = redeploy a previous hash. `AppSpec` splits
 | Phase | Scope | Exit |
 |---|---|---|
 | **N0** ✅ | `servers` + `applications.server_id`, `/api/v1/servers`, `turaes server …`, UI panel | local node auto-registered; no regression |
-| **N1** | ArtifactStore ✅ + gRPC `Register`/`Heartbeat` ✅ + SSH bootstrap + `AgentRuntime` + desired-state | deploy an app to a worker |
+| **N1** | ArtifactStore ✅ + gRPC `Register`/`Heartbeat`/`Poll`/`Report` ✅ + agent reconcile ✅ + SSH bootstrap | deploy an app to a worker |
 | **N2** | agent pushes cgroup CPU/mem; control plane scrapes health/`/metrics` over VPC; per-node dashboard | worker shows CPU/mem/health/visitors |
 | **N3** | `turaes edge` role + `EdgeSession` route/cert stream; move Pingora off control | edge serves all apps; control has no :80/:443 |
 | **N4** | DNS-01 multi-cert/wildcard SNI + replicas + Pingora LB + control-plane HA | TLS per app; N replicas behind edge |

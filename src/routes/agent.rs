@@ -1,0 +1,58 @@
+//! Agent-facing HTTP endpoints, authenticated by the agent token (bearer),
+//! not by a user session.
+
+use axum::body::Body;
+use axum::extract::{Path, State};
+use axum::http::{header, HeaderMap};
+use axum::response::{IntoResponse, Response};
+
+use turaes_core::crypto::token_hash;
+use turaes_core::models::Server;
+use turaes_core::{Error, Result};
+
+use crate::state::AppState;
+
+/// `GET /agent/artifacts/{hash}` — agent downloads an artifact with its token.
+pub async fn download(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(hash): Path<String>,
+) -> Result<Response> {
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .unwrap_or("")
+        .trim();
+    if token.is_empty() {
+        return Err(Error::Unauthorized("missing agent token".into()));
+    }
+
+    let server: Option<Server> =
+        sqlx::query_as::<_, Server>("SELECT * FROM servers WHERE agent_token_hash = ?")
+            .bind(token_hash(token))
+            .fetch_optional(&state.pool)
+            .await?;
+    let Some(server) = server else {
+        return Err(Error::Unauthorized("unknown agent token".into()));
+    };
+    let _ = sqlx::query(
+        "UPDATE servers SET status = 'online', last_seen_at = datetime('now') WHERE id = ?",
+    )
+    .bind(&server.id)
+    .execute(&state.pool)
+    .await;
+
+    if !state.artifacts.has(&hash) {
+        return Err(Error::NotFound(format!("artifact {hash}")));
+    }
+    let path = state.artifacts.path_for(&hash)?;
+    let bytes = tokio::fs::read(&path)
+        .await
+        .map_err(|e| Error::Internal(format!("failed to read artifact: {e}")))?;
+    Ok((
+        [(header::CONTENT_TYPE, "application/octet-stream")],
+        Body::from(bytes),
+    )
+        .into_response())
+}
