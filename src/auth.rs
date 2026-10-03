@@ -61,6 +61,17 @@ fn session_cookie(state: &AppState, value: String) -> Cookie<'static> {
     cookie
 }
 
+/// A cookie that clears `name`. Must mirror the identity attributes used when
+/// setting it (notably `Path`), or the browser won't match/evict the original.
+fn removal_cookie(state: &AppState, name: &str) -> Cookie<'static> {
+    let mut cookie = Cookie::new(name.to_string(), "");
+    cookie.set_path("/");
+    cookie.set_same_site(SameSite::Lax);
+    cookie.set_secure(state.cfg.secure_cookies());
+    cookie.make_removal();
+    cookie
+}
+
 fn state_cookie(value: String) -> Cookie<'static> {
     let mut cookie = Cookie::new(STATE_COOKIE, value);
     cookie.set_http_only(true);
@@ -191,7 +202,7 @@ pub async fn callback(
         .mint(user.id, &user.login, user.name.as_deref())?;
     let jar = jar
         .add(session_cookie(&state, token))
-        .remove(Cookie::from(STATE_COOKIE));
+        .add(removal_cookie(&state, STATE_COOKIE));
     Ok((jar, Redirect::temporary("/")).into_response())
 }
 
@@ -201,8 +212,8 @@ pub async fn me(State(state): State<AppState>, jar: CookieJar) -> Result<Json<Au
 }
 
 /// `POST /auth/logout` — clear the session cookie.
-pub async fn logout(jar: CookieJar) -> Response {
-    let jar = jar.remove(Cookie::from(SESSION_COOKIE));
+pub async fn logout(State(state): State<AppState>, jar: CookieJar) -> Response {
+    let jar = jar.add(removal_cookie(&state, SESSION_COOKIE));
     (jar, StatusCode::NO_CONTENT).into_response()
 }
 
