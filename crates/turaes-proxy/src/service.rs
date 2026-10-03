@@ -70,7 +70,9 @@ pub fn spawn(_proxy_cfg: ProxyConfig, _state: ProxyState) {
 #[cfg(feature = "pingora")]
 mod pingora_impl {
     use std::collections::HashMap;
+    use std::path::Path;
     use std::sync::{Arc, Mutex};
+    use std::time::SystemTime;
 
     use async_trait::async_trait;
     use pingora::listeners::tls::TlsSettings;
@@ -88,62 +90,100 @@ mod pingora_impl {
 
     use super::ProxyState;
 
-    /// Selects a certificate per SNI from the certbot layout, falling back to
-    /// the dashboard certificate. Loaded certs are cached.
-    struct SniCertStore {
-        certs: CertStore,
-        default: (X509, PKey<Private>),
-        cache: Mutex<HashMap<String, (X509, PKey<Private>)>>,
+    /// A loaded certificate + key tagged with the source file's mtime so it is
+    /// reloaded when the file changes (cert distributed/renewed on disk).
+    struct Entry {
+        cert: X509,
+        key: PKey<Private>,
+        mtime: Option<SystemTime>,
     }
 
-    fn load_pair(
-        fullchain: &std::path::Path,
-        key: &std::path::Path,
-    ) -> Option<(X509, PKey<Private>)> {
+    fn load_entry(fullchain: &Path, key: &Path) -> Option<Entry> {
         let cert = X509::from_pem(&std::fs::read(fullchain).ok()?).ok()?;
         let pkey = PKey::private_key_from_pem(&std::fs::read(key).ok()?).ok()?;
-        Some((cert, pkey))
+        let mtime = std::fs::metadata(fullchain).and_then(|m| m.modified()).ok();
+        Some(Entry {
+            cert,
+            key: pkey,
+            mtime,
+        })
+    }
+
+    fn use_entry(ssl: &mut TlsRef, entry: &Entry) -> bool {
+        use pingora::tls::ext;
+        ext::ssl_use_certificate(ssl, &entry.cert).is_ok()
+            && ext::ssl_use_private_key(ssl, &entry.key).is_ok()
+    }
+
+    /// Selects a certificate per SNI from the certbot layout, falling back to
+    /// the dashboard certificate. Certs reload automatically when their files
+    /// change on disk.
+    struct SniCertStore {
+        certs: CertStore,
+        default_host: String,
+        default: Mutex<Entry>,
+        cache: Mutex<HashMap<String, Entry>>,
     }
 
     impl SniCertStore {
         fn new(certs: CertStore, default_host: &str) -> Result<Self, String> {
             let paths = certs.paths(default_host);
-            let default = load_pair(&paths.fullchain, &paths.private_key)
+            let default = load_entry(&paths.fullchain, &paths.private_key)
                 .ok_or_else(|| format!("missing certificate for {default_host}"))?;
             Ok(Self {
                 certs,
-                default,
+                default_host: default_host.to_string(),
+                default: Mutex::new(default),
                 cache: Mutex::new(HashMap::new()),
             })
+        }
+    }
+
+    /// Reload a cached cert if its file mtime changed.
+    fn refresh(certs: &CertStore, cache: &mut HashMap<String, Entry>, name: &str) {
+        let paths = certs.paths(name);
+        let mtime = std::fs::metadata(&paths.fullchain)
+            .and_then(|m| m.modified())
+            .ok();
+        let stale = cache.get(name).map(|e| e.mtime != mtime).unwrap_or(true);
+        if stale {
+            match load_entry(&paths.fullchain, &paths.private_key) {
+                Some(entry) => {
+                    cache.insert(name.to_string(), entry);
+                }
+                None => {
+                    cache.remove(name);
+                }
+            }
         }
     }
 
     #[async_trait]
     impl TlsAccept for SniCertStore {
         async fn certificate_callback(&self, ssl: &mut TlsRef) {
-            use pingora::tls::ext;
-
             if let Some(name) = ssl.servername(NameType::HOST_NAME) {
                 let name = name.to_ascii_lowercase();
                 let mut cache = self.cache.lock().unwrap();
-                if !cache.contains_key(&name) {
-                    let p = self.certs.paths(&name);
-                    if let Some(pair) = load_pair(&p.fullchain, &p.private_key) {
-                        cache.insert(name.clone(), pair);
-                    }
-                }
-                if let Some((cert, key)) = cache.get(&name) {
-                    if ext::ssl_use_certificate(ssl, cert).is_ok()
-                        && ext::ssl_use_private_key(ssl, key).is_ok()
-                    {
+                refresh(&self.certs, &mut cache, &name);
+                if let Some(entry) = cache.get(&name) {
+                    if use_entry(ssl, entry) {
                         return;
                     }
                 }
             }
 
-            // Fall back to the default (dashboard) certificate.
-            let _ = ext::ssl_use_certificate(ssl, &self.default.0);
-            let _ = ext::ssl_use_private_key(ssl, &self.default.1);
+            // Fall back to the default (dashboard) certificate, reloading on change.
+            let mut default = self.default.lock().unwrap();
+            let paths = self.certs.paths(&self.default_host);
+            let mtime = std::fs::metadata(&paths.fullchain)
+                .and_then(|m| m.modified())
+                .ok();
+            if default.mtime != mtime {
+                if let Some(entry) = load_entry(&paths.fullchain, &paths.private_key) {
+                    *default = entry;
+                }
+            }
+            let _ = use_entry(ssl, &default);
         }
     }
 
