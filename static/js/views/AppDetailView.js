@@ -75,7 +75,7 @@ function Overview({ data }) {
     </div>`;
 }
 
-function Deployments({ deployments, onRollback }) {
+function Deployments({ deployments, onRollbackTo }) {
   if (!deployments) return html`<${Skeleton} lines={3} />`;
   if (deployments.length === 0) return html`<p class="muted">No builds yet.</p>`;
   return html`
@@ -92,11 +92,15 @@ function Deployments({ deployments, onRollback }) {
             </td>
             <td class="muted">${fmtTime(d.started_at)}</td>
             <td class="muted">${fmtTime(d.finished_at)}</td>
-            <td>${d.log && html`<details><summary class="muted">log</summary><pre class="log">${d.log}</pre></details>`}</td>
+            <td class="controls">
+              ${d.artifact_hash && html`<button class="btn small" onClick=${() => onRollbackTo(d.artifact_hash)}>
+                Roll back to this
+              </button>`}
+              ${d.log && html`<details><summary class="muted">log</summary><pre class="log">${d.log}</pre></details>`}
+            </td>
           </tr>`)}
       </tbody>
-    </table>
-    <p class="muted">Rollback restores the previous build. <button class="btn small ghost" onClick=${onRollback}>Rollback</button></p>`;
+    </table>`;
 }
 
 function Environment({ env, appId, reload }) {
@@ -154,7 +158,105 @@ function Environment({ env, appId, reload }) {
     </div>`;
 }
 
-function Settings({ app, servers, user }) {
+function Domains({ appId }) {
+  const [domains, setDomains] = useState(null);
+  const load = useCallback(async () => {
+    try {
+      const r = await api(`/api/v1/apps/${appId}/domains`);
+      setDomains(r.domains || []);
+    } catch { setDomains([]); }
+  }, [appId]);
+  useEffect(() => { load(); }, [load]);
+
+  const add = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    try {
+      await api(`/api/v1/apps/${appId}/domains`, {
+        method: "POST",
+        body: JSON.stringify({ domain: fd.get("domain") }),
+      });
+      toast.success("Domain added");
+      e.target.reset();
+      load();
+    } catch (err) { toast.error(err.message); }
+  };
+  const remove = async (d) => {
+    if (!(await confirmAction({ title: `Remove ${d}?`, danger: true, confirmLabel: "Remove" }))) return;
+    try {
+      await api(`/api/v1/apps/${appId}/domains/${encodeURIComponent(d)}`, { method: "DELETE" });
+      toast.success("Removed");
+      load();
+    } catch (err) { toast.error(err.message); }
+  };
+
+  return html`
+    <div>
+      <h2>Domain aliases</h2>
+      ${!domains || domains.length === 0
+        ? html`<p class="muted">No aliases.</p>`
+        : html`<table><tbody>${domains.map((d) => html`
+            <tr><td class="mono">${d.domain}</td>
+            <td><button class="btn small ghost" onClick=${() => remove(d.domain)}>Remove</button></td></tr>`)}
+          </tbody></table>`}
+      <form class="form" style="margin-top:10px" onSubmit=${add}>
+        <div class="row">
+          <label>Alias domain <input name="domain" placeholder="www.example.com" required /></label>
+        </div>
+        <div><button class="btn" type="submit">Add alias</button></div>
+      </form>
+    </div>`;
+}
+
+function EditForm({ app, servers, onSaved }) {
+  const submit = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const payload = {
+      port: Number(fd.get("port")),
+      domain: fd.get("domain"),
+      runtime: fd.get("runtime"),
+      server_id: fd.get("server_id"),
+      health_path: fd.get("health_path"),
+      metrics_path: fd.get("metrics_path"),
+      auto_restart: fd.get("auto_restart") === "on",
+    };
+    try {
+      await api(`/api/v1/apps/${app.id}`, { method: "PATCH", body: JSON.stringify(payload) });
+      toast.success("Saved");
+      onSaved();
+    } catch (err) { toast.error(err.message); }
+  };
+  return html`
+    <form class="form" onSubmit=${submit}>
+      <h2>Settings</h2>
+      <div class="row">
+        <label>Port <input name="port" type="number" value=${app.port} required /></label>
+        <label>Server
+          <select name="server_id">
+            ${servers.map((s) => html`<option value=${s.id} selected=${s.id === app.server_id}>${s.name}</option>`)}
+          </select>
+        </label>
+      </div>
+      <label>Primary domain <input name="domain" value=${app.domain || ""} /></label>
+      <div class="row">
+        <label>Managed by
+          <select name="runtime">
+            <option value="systemd" selected=${app.runtime === "systemd"}>systemd</option>
+            <option value="proc" selected=${app.runtime === "proc"}>turaes (proc)</option>
+          </select>
+        </label>
+        <label>Health path <input name="health_path" value=${app.health_path || "/health"} /></label>
+      </div>
+      <div class="row">
+        <label>Metrics path <input name="metrics_path" value=${app.metrics_path || ""} /></label>
+        <label class="inline"><input type="checkbox" name="auto_restart" checked=${app.auto_restart} /> Restart when unhealthy</label>
+      </div>
+      <div><button class="btn" type="submit">Save settings</button></div>
+    </form>`;
+}
+
+function Settings({ app, servers, user, onSaved }) {
   const del = async () => {
     if (!(await confirmAction({
       title: `Delete ${app.name}?`,
@@ -171,16 +273,14 @@ function Settings({ app, servers, user }) {
     }
   };
   return html`
+    ${user ? html`<${EditForm} app=${app} servers=${servers} onSaved=${onSaved} />` : null}
     <table>
       <tbody>
         <tr><th>Name</th><td class="mono">${app.name}</td></tr>
-        <tr><th>Domain</th><td class="mono">${app.domain || "—"}</td></tr>
-        <tr><th>Server</th><td>${serverName(servers, app.server_id)}</td></tr>
-        <tr><th>Port</th><td class="mono">${app.port}</td></tr>
-        <tr><th>Managed by</th><td>${runtimeLabel(app.runtime)}</td></tr>
         <tr><th>Binary</th><td class="mono">${app.binary_path}</td></tr>
       </tbody>
     </table>
+    ${user ? html`<${Domains} appId=${app.id} />` : null}
     ${user && html`<div class="danger-zone">
       <h3>Danger zone</h3>
       <button class="btn danger" onClick=${del}>Delete application</button>
@@ -271,6 +371,35 @@ export function AppDetailView({ id, tab, user, servers }) {
     }
   };
 
+  const rollbackTo = async (hash) => {
+    if (!(await confirmAction({
+      title: `Roll back ${app.name}?`,
+      body: `Redeploy build ${shortHash(hash)}.`,
+      confirmLabel: "Roll back",
+    }))) return;
+    try {
+      await api(`/api/v1/apps/${id}/rollback`, {
+        method: "POST",
+        body: JSON.stringify({ artifact_hash: hash }),
+      });
+      toast.success("Rolled back");
+      loadApp();
+      loadDeployments();
+    } catch (e) {
+      toast.error(e.message);
+    }
+  };
+
+  const action = async (a) => {
+    try {
+      await api(`/api/v1/apps/${id}/${a}`, { method: "POST" });
+      toast.success(`${a[0].toUpperCase()}${a.slice(1)} requested`);
+      loadApp();
+    } catch (e) {
+      toast.error(e.message);
+    }
+  };
+
   if (notFound) {
     return html`<section class="panel"><p class="muted">Application not found.</p>
       <a href="#/apps">← Back to applications</a></section>`;
@@ -291,7 +420,15 @@ export function AppDetailView({ id, tab, user, servers }) {
         <div class="controls">
           ${user && html`
             <button class="btn" disabled=${busy} onClick=${deploy}>${busy ? "Deploying…" : "Deploy"}</button>
-            <button class="btn ghost" onClick=${rollback}>Rollback</button>`}
+            <button class="btn ghost" onClick=${rollback}>Rollback</button>
+            <details class="menu">
+              <summary class="btn small ghost" aria-label="More actions">More</summary>
+              <div class="menu-list">
+                <button class="btn small ghost" onClick=${() => action("stop")}>Stop</button>
+                <button class="btn small ghost" onClick=${() => action("start")}>Start</button>
+                <button class="btn small ghost" onClick=${() => action("restart")}>Restart</button>
+              </div>
+            </details>`}
         </div>
       </div>
       <nav class="tabs" role="tablist">
@@ -301,10 +438,10 @@ export function AppDetailView({ id, tab, user, servers }) {
       </nav>
       <div class="tab-body" role="tabpanel">
         ${tab === "overview" && html`<${Overview} data=${data} />`}
-        ${tab === "deployments" && html`<${Deployments} deployments=${deployments} onRollback=${rollback} />`}
+        ${tab === "deployments" && html`<${Deployments} deployments=${deployments} onRollbackTo=${rollbackTo} />`}
         ${tab === "environment" && html`<${Environment} env=${env} appId=${id} reload=${loadEnv} />`}
         ${tab === "logs" && html`<${LogViewer} appId=${id} />`}
-        ${tab === "settings" && html`<${Settings} app=${app} servers=${servers} user=${user} />`}
+        ${tab === "settings" && html`<${Settings} app=${app} servers=${servers} user=${user} onSaved=${loadApp} />`}
       </div>
     </section>`;
 }

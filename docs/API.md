@@ -46,9 +46,13 @@ The session is an HttpOnly, SameSite=Lax JWT cookie.
 | `GET` | `/api/v1/apps` | List applications |
 | `POST` | `/api/v1/apps` | Create an application (`201`) |
 | `GET` | `/api/v1/apps/{id}` | Fetch one |
+| `PATCH` | `/api/v1/apps/{id}` | Edit fields + placement |
 | `DELETE` | `/api/v1/apps/{id}` | Remove app + stop it (`204`) |
 | `POST` | `/api/v1/apps/{id}/deploy` | Install + restart the prebuilt binary |
-| `POST` | `/api/v1/apps/{id}/rollback` | Redeploy the previous artifact |
+| `POST` | `/api/v1/apps/{id}/rollback` | Redeploy the previous build, or `{artifact_hash}` target |
+| `POST` | `/api/v1/apps/{id}/{stop,start,restart}` | Lifecycle (local apps) |
+| `GET/POST` | `/api/v1/apps/{id}/domains` | List / add domain aliases |
+| `DELETE` | `/api/v1/apps/{id}/domains/{domain}` | Remove an alias |
 | `GET` | `/api/v1/apps/{id}/stats?hours=1` | CPU/memory samples (max 720h) |
 | `GET` | `/api/v1/apps/{id}/visitors?hours=24` | Visitor rows per region (max 720h) |
 | `GET` | `/api/v1/apps/{id}/deployments?limit=20` | Recent deployments (log truncated to 2000 chars) |
