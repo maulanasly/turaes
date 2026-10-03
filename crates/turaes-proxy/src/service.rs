@@ -209,9 +209,13 @@ mod pingora_impl {
     }
 
     impl Gateway {
-        /// Serve a certbot HTTP-01 challenge file from the webroot.
+        /// Serve a certbot HTTP-01 challenge file from the webroot
+        /// (`{webroot}/.well-known/acme-challenge/{token}`).
         async fn serve_acme(&self, session: &mut Session, token: &str) -> Result<bool> {
-            let file = Path::new(&self.acme_webroot).join(token);
+            let file = Path::new(&self.acme_webroot)
+                .join(".well-known")
+                .join("acme-challenge")
+                .join(token);
             match std::fs::read(&file) {
                 Ok(body) => {
                     let mut resp = ResponseHeader::build(200, None)?;
