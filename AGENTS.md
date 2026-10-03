@@ -84,6 +84,9 @@ docs/                   ARCHITECTURE, ROADMAP, MILESTONES, API, DEPLOY
   (gauge). Never `sum()` the uniques gauge — take the latest per region.
 - **CPU/memory** come from cgroup v2 (`system.slice/{app}.service`) and fall
   back to `/proc`; the proxy never samples resources itself.
+- **Monitoring is local-only**: the control-plane monitor supervises apps with
+  `server_id = 'local'`; remote apps are reconciled/reported by their node agent
+  (cross-node metrics land in N2).
 - **TLS**: certbot issues; turaes loads certs. Do not implement ACME in-process.
 - **Secrets**: app env vars are AES-256-GCM sealed at rest; never log them.
 - **Frontend**: zero-build, embedded; no npm/CDN.

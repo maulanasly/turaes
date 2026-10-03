@@ -44,6 +44,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/auth/callback", get(auth::callback))
         .route("/auth/logout", post(auth::logout))
         .route("/auth/me", get(auth::me))
+        .route("/agent/artifacts/{hash}", get(routes::agent::download))
         .with_state(state.clone());
 
     Router::new()

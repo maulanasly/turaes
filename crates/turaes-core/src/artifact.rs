@@ -53,6 +53,28 @@ impl ArtifactStore {
             .unwrap_or(false)
     }
 
+    /// Store in-memory bytes under a known `hash` (used by agent downloads).
+    pub async fn store_bytes(&self, hash: &str, bytes: &[u8]) -> Result<PathBuf> {
+        let dest = self.path_for(hash)?;
+        if dest.exists() {
+            return Ok(dest);
+        }
+        let dir = self.root.join("sha256");
+        tokio::fs::create_dir_all(&dir).await?;
+        let tmp = dir.join(format!(".tmp-{}", uuid::Uuid::new_v4()));
+        tokio::fs::write(&tmp, bytes).await?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(mut perms) = tokio::fs::metadata(&tmp).await.map(|m| m.permissions()) {
+                perms.set_mode(0o755);
+                let _ = tokio::fs::set_permissions(&tmp, perms).await;
+            }
+        }
+        tokio::fs::rename(&tmp, &dest).await?;
+        Ok(dest)
+    }
+
     /// Store the file at `src`, returning its `sha256:<hex>` hash.
     ///
     /// Streams the file (hash + temp copy), then atomically renames it into

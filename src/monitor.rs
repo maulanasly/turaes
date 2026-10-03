@@ -58,9 +58,13 @@ pub async fn run(state: AppState) {
 }
 
 async fn tick(state: &AppState, memo: &mut HashMap<String, AppMemo>) -> turaes_core::Result<()> {
-    let apps = sqlx::query_as::<_, Application>("SELECT * FROM applications")
-        .fetch_all(&state.pool)
-        .await?;
+    // Only monitor apps on this host. Remote apps are supervised (health,
+    // restart) by their node's agent; the control plane can't reach or restart
+    // them locally. (Cross-node metrics land in N2.)
+    let apps =
+        sqlx::query_as::<_, Application>("SELECT * FROM applications WHERE server_id = 'local'")
+            .fetch_all(&state.pool)
+            .await?;
 
     for app in &apps {
         let entry = memo.entry(app.id.clone()).or_default();

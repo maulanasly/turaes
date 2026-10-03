@@ -1,8 +1,9 @@
-// Control-plane <-> agent channel (N1b).
+// Control-plane <-> agent channel (N1b/N1c).
 //
 // The agent dials the control plane outbound (NAT-friendly), registers with a
-// join token, and heartbeats. Desired-state delivery (Poll / bidi AgentSession)
-// and the separate edge role land in N1c/N3.
+// join token, heartbeats, polls desired state, and reports apply status.
+// Artifacts are fetched over HTTP (`/agent/artifacts/{hash}`) with the agent
+// token. The separate edge role lands in N3.
 syntax = "proto3";
 
 package turaes.v1;
@@ -12,6 +13,10 @@ service Control {
   rpc Register(RegisterRequest) returns (RegisterResponse);
   // Liveness / last-seen.
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  // Fetch the desired apps for this node.
+  rpc Poll(PollRequest) returns (PollResponse);
+  // Report an apply result back to the control plane.
+  rpc Report(ReportRequest) returns (ReportResponse);
 }
 
 message RegisterRequest {
@@ -33,4 +38,36 @@ message HeartbeatRequest {
 message HeartbeatResponse {
   bool ok = 1;
   string server_id = 2;
+}
+
+message PollRequest {
+  string agent_token = 1;
+}
+
+message DesiredApp {
+  string name = 1;
+  string artifact_hash = 2;
+  string args = 3;
+  uint32 port = 4;
+  string runtime = 5;
+  string health_path = 6;
+  string metrics_path = 7;
+  map<string, string> env = 8;
+}
+
+message PollResponse {
+  repeated DesiredApp apps = 1;
+}
+
+message ReportRequest {
+  string agent_token = 1;
+  string app_name = 2;
+  // "running" | "failed" | "stopped"
+  string status = 3;
+  string artifact_hash = 4;
+  string message = 5;
+}
+
+message ReportResponse {
+  bool ok = 1;
 }

@@ -337,6 +337,99 @@ async fn agent_register_and_heartbeat() {
 }
 
 #[tokio::test]
+async fn agent_poll_and_report() {
+    use crate::grpc::pb::{PollRequest, RegisterRequest, ReportRequest};
+
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+
+    let reg = crate::grpc::register(
+        &state,
+        RegisterRequest {
+            join_token: "test-join".into(),
+            name: "pollw".into(),
+            address: "10.0.0.5".into(),
+            version: "0".into(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let payload = json!({
+        "name": "papp", "binary_path": "/usr/bin/true", "port": 9400,
+        "server_id": reg.server_id
+    });
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/apps")
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let id = body_json(resp).await["application"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Deploy queues the artifact for the agent.
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/apps/{id}/deploy"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let hash = body_json(resp).await["artifact_hash"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let poll = crate::grpc::poll(
+        &state,
+        PollRequest {
+            agent_token: reg.agent_token.clone(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(poll.apps.len(), 1);
+    assert_eq!(poll.apps[0].name, "papp");
+    assert_eq!(poll.apps[0].artifact_hash, hash);
+
+    let report = crate::grpc::report(
+        &state,
+        ReportRequest {
+            agent_token: reg.agent_token,
+            app_name: "papp".into(),
+            status: "running".into(),
+            artifact_hash: hash,
+            message: String::new(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(report.ok);
+
+    let status: String = sqlx::query_scalar("SELECT status FROM applications WHERE id = ?")
+        .bind(&id)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "running");
+}
+
+#[tokio::test]
 async fn invalid_name_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let router = test_router(dir.path()).await;
