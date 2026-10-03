@@ -66,7 +66,7 @@ crates/turaes-proxy/    router (ArcSwap), tls (certbot), pingora data plane
 crates/turaes-monitor/  health, scrape (Prometheus), stats (cgroup/proc), rollup
 .github/workflows/     ci.yml (gate), release.yml (build + deploy), configure.yml (OAuth secrets)
 proto/control.proto     gRPC Control service (agent register/heartbeat)
-src/                    CLI (serve/migrate/doctor/app/server/agent), Axum app, OAuth, routes, gRPC, embedded UI
+src/                    CLI (serve/migrate/doctor/app/server/agent/edge), Axum app, OAuth, routes, gRPC, embedded UI
 migrations/             SQLite schema (embedded via sqlx::migrate!)
 static/                 zero-build UI compiled into the binary (rust-embed)
 deploy/                 systemd unit, env template, install script

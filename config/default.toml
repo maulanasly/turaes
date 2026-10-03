@@ -42,6 +42,9 @@ https_port = 443
 cert_dir = "/etc/letsencrypt/live"
 # Hostname routed to the dashboard itself. Empty = derive from server.public_url.
 dashboard_host = ""
+# Address the edge role uses to reach the control plane (dashboard route).
+# Empty = the edge omits the dashboard route.
+control_address = ""
 
 [monitor]
 # Seconds between health checks and /metrics scrapes.

@@ -60,6 +60,19 @@ pub enum Command {
         #[arg(long, default_value_t = 15)]
         interval: u64,
     },
+    /// Run as a standalone Pingora edge that pulls routes from the control plane.
+    /// Requires a build with `--features proxy`.
+    Edge {
+        /// Control-plane gRPC endpoint, e.g. http://10.0.0.2:9443.
+        #[arg(long, env = "TURAES_CONTROL_URL")]
+        control: String,
+        /// Shared control token.
+        #[arg(long, env = "TURAES_AGENT_TOKEN")]
+        token: String,
+        /// Route refresh interval in seconds.
+        #[arg(long, default_value_t = 10)]
+        interval: u64,
+    },
 }
 
 /// Local (non-HTTP) server registry management.

@@ -118,6 +118,10 @@ pub struct ProxyConfig {
     /// `server.public_url` when unset.
     #[serde(default)]
     pub dashboard_host: Option<String>,
+    /// Address the edge role should use to reach the control plane (for the
+    /// dashboard route). Empty = omit the dashboard route.
+    #[serde(default)]
+    pub control_address: String,
 }
 
 /// Health and metrics collection settings.
@@ -332,6 +336,10 @@ fn apply_env(cfg: &mut Config) -> Result<()> {
     if let Ok(host) = std::env::var("TURAES_PROXY_DASHBOARD_HOST") {
         cfg.proxy.dashboard_host = Some(host);
     }
+    env_str(
+        "TURAES_PROXY_CONTROL_ADDRESS",
+        &mut cfg.proxy.control_address,
+    );
 
     env_parse(
         "TURAES_MONITOR_INTERVAL_SECS",
