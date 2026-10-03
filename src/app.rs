@@ -21,6 +21,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/apps/{id}/rollback", post(routes::apps::rollback))
         .route("/apps/{id}/stats", get(routes::apps::stats))
         .route("/apps/{id}/visitors", get(routes::apps::visitors))
+        .route("/apps/{id}/deployments", get(routes::apps::deployments))
+        .route("/deployments/{id}", get(routes::deployments::get))
         .route("/artifacts/{hash}", get(routes::artifacts::download))
         .route(
             "/servers",

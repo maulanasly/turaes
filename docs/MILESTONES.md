@@ -123,7 +123,7 @@ must **not** be pointed here (it resolves to another server).
 
 ### Deliverables
 
-- [~] Rollback API + CLI (to the previous artifact) done; history UI pending.
+- [~] Rollback API + CLI + UI button done; deployment history API + table done; live logs/WebSocket pending.
 - [ ] Environment variable editor (sealed at rest; write-only values).
 - [ ] WebSocket realtime: deploy progress, health transitions, log streaming.
 - [ ] Domain management (add/remove/verify/primary) end to end.

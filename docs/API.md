@@ -51,6 +51,8 @@ The session is an HttpOnly, SameSite=Lax JWT cookie.
 | `POST` | `/api/v1/apps/{id}/rollback` | Redeploy the previous artifact |
 | `GET` | `/api/v1/apps/{id}/stats?hours=1` | CPU/memory samples (max 720h) |
 | `GET` | `/api/v1/apps/{id}/visitors?hours=24` | Visitor rows per region (max 720h) |
+| `GET` | `/api/v1/apps/{id}/deployments?limit=20` | Recent deployments (log truncated to 2000 chars) |
+| `GET` | `/api/v1/deployments/{id}` | Full deployment record incl. log |
 | `GET` | `/api/v1/artifacts/{hash}` | Download a stored artifact by `sha256:<hex>` |
 
 Deploys first store the binary in the content-addressed artifact store

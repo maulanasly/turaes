@@ -32,6 +32,7 @@ const fmtBytes = (n) => {
 };
 const parseTs = (s) => Date.parse(s.replace(" ", "T") + "Z");
 const fmtClock = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const shortHash = (h) => (h ? `${h.slice(7, 15)}…${h.slice(-4)}` : "—");
 
 function Chart({ title, points, color, formatY, height = 150 }) {
   const w = 600, pad = { l: 58, r: 8, t: 8, b: 24 };
@@ -89,7 +90,7 @@ function AppCard({ app, selected, onSelect, onDeploy }) {
     </div>`;
 }
 
-function Detail({ app, hours, data }) {
+function Detail({ app, hours, data, deployments }) {
   const metrics = data?.metrics || [];
   const visitors = data?.visitors || [];
   const cpu = metrics.map((m) => ({ x: parseTs(m.recorded_at), y: m.cpu_pct }));
@@ -129,6 +130,29 @@ function Detail({ app, hours, data }) {
               <tbody>
                 ${regions.map(([region, r]) => html`
                   <tr><td class="mono">${region}</td><td>${r.visits}</td><td>${r.uniques}</td></tr>`)}
+              </tbody>
+            </table>`}
+      </div>
+      <div>
+        <h2 style="margin-bottom:8px">Deployments</h2>
+        ${!deployments || deployments.length === 0
+          ? html`<p class="muted">No deployments yet.</p>`
+          : html`<table>
+              <thead><tr><th>Status</th><th>Artifact</th><th>Started</th><th>Finished</th></tr></thead>
+              <tbody>
+                ${deployments.map((d) => html`
+                  <tr>
+                    <td>${d.status}</td>
+                    <td class="mono">${shortHash(d.artifact_hash)}</td>
+                    <td class="muted">${d.started_at || ""}</td>
+                    <td class="muted">${d.finished_at || "—"}</td>
+                  </tr>
+                  ${d.log
+                    ? html`<tr><td colspan="4">
+                        <details><summary class="muted">log</summary>
+                          <pre class="log">${d.log}</pre>
+                        </details></td></tr>`
+                    : null}`)}
               </tbody>
             </table>`}
       </div>
@@ -212,6 +236,7 @@ function Dashboard() {
   const [user, setUser] = useState(undefined);
   const [apps, setApps] = useState([]);
   const [servers, setServers] = useState([]);
+  const [deployments, setDeployments] = useState([]);
   const [selected, setSelected] = useState(null);
   const [hours, setHours] = useState(1);
   const [data, setData] = useState({});
@@ -254,16 +279,34 @@ function Dashboard() {
     }
   }, []);
 
+  const loadDeployments = useCallback(async (id) => {
+    if (!id) { setDeployments([]); return; }
+    try {
+      const r = await api(`/api/v1/apps/${id}/deployments?limit=15`);
+      setDeployments(r.deployments || []);
+    } catch { setDeployments([]); }
+  }, []);
+
   useEffect(() => { loadUser(); loadApps(); loadServers(); }, [loadUser, loadApps, loadServers]);
-  useEffect(() => { loadDetail(selected, hours); }, [selected, hours, loadDetail]);
+  useEffect(() => { loadDetail(selected, hours); loadDeployments(selected); }, [selected, hours, loadDetail, loadDeployments]);
   useEffect(() => {
-    const t = setInterval(() => { loadApps(); loadServers(); if (selected) loadDetail(selected, hours); }, 15000);
+    const t = setInterval(() => {
+      loadApps(); loadServers();
+      if (selected) { loadDetail(selected, hours); loadDeployments(selected); }
+    }, 15000);
     return () => clearInterval(t);
-  }, [loadApps, loadServers, loadDetail, selected, hours]);
+  }, [loadApps, loadServers, loadDetail, loadDeployments, selected, hours]);
 
   const deploy = async (id) => {
     try { await api(`/api/v1/apps/${id}/deploy`, { method: "POST" }); } catch (e) { setError(e.message); }
     await loadApps();
+    loadDeployments(id);
+  };
+
+  const rollback = async (id) => {
+    try { await api(`/api/v1/apps/${id}/rollback`, { method: "POST" }); } catch (e) { setError(e.message); }
+    await loadApps();
+    loadDeployments(id);
   };
 
   const selectedApp = apps.find((a) => a.id === selected);
@@ -310,9 +353,12 @@ function Dashboard() {
         <section class="panel">
           <div class="panel-head">
             <h2 class="mono">${selectedApp.name}</h2>
-            <span class="pill">${selectedApp.runtime} · :${selectedApp.port}</span>
+            <div class="controls">
+              <span class="pill">${selectedApp.runtime} · :${selectedApp.port}</span>
+              <button class="btn small ghost" onClick=${() => rollback(selectedApp.id)}>Rollback</button>
+            </div>
           </div>
-          <${Detail} app=${selectedApp} hours=${hours} data=${data} />
+          <${Detail} app=${selectedApp} hours=${hours} data=${data} deployments=${deployments} />
         </section>`}
     </main>`;
 }
