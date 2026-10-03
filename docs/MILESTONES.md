@@ -125,7 +125,7 @@ must **not** be pointed here (it resolves to another server).
 
 - [~] Rollback API + CLI + UI button done; deployment history API + table done; live logs/WebSocket pending.
 - [x] Environment variable editor (sealed at rest; API returns keys only; UI add/remove).
-- [ ] WebSocket realtime: deploy progress, health transitions, log streaming.
+- [~] Live log streaming over WebSocket done; deploy-progress/health realtime still pending.
 - [ ] Domain management (add/remove/verify/primary) end to end.
 - [ ] Audit `events` timeline per app.
 

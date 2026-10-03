@@ -6,5 +6,6 @@ pub mod artifacts;
 pub mod deployments;
 pub mod env;
 pub mod health;
+pub mod logs;
 pub mod servers;
 pub mod static_assets;

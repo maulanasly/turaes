@@ -22,6 +22,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/apps/{id}/stats", get(routes::apps::stats))
         .route("/apps/{id}/visitors", get(routes::apps::visitors))
         .route("/apps/{id}/deployments", get(routes::apps::deployments))
+        .route("/apps/{id}/logs", get(routes::logs::stream))
         .route("/apps/{id}/env", get(routes::env::list))
         .route(
             "/apps/{id}/env/{key}",

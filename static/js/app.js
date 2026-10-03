@@ -90,6 +90,32 @@ function AppCard({ app, selected, onSelect, onDeploy }) {
     </div>`;
 }
 
+function Logs({ appId }) {
+  const [lines, setLines] = useState([]);
+  const [status, setStatus] = useState("connecting…");
+  useEffect(() => {
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const ws = new WebSocket(`${proto}://${location.host}/api/v1/apps/${appId}/logs`);
+    setLines([]);
+    setStatus("connecting…");
+    ws.onopen = () => setStatus("live");
+    ws.onmessage = (ev) => {
+      setLines((prev) => {
+        const next = prev.concat(String(ev.data).split("\n"));
+        return next.length > 500 ? next.slice(next.length - 500) : next;
+      });
+    };
+    ws.onerror = () => setStatus("error");
+    ws.onclose = () => setStatus("closed");
+    return () => ws.close();
+  }, [appId]);
+  return html`
+    <div>
+      <h2 style="margin-bottom:8px">Logs <span class="muted">· ${status}</span></h2>
+      <pre class="log" style="max-height:300px">${lines.join("\n")}</pre>
+    </div>`;
+}
+
 function Detail({ app, hours, data, deployments, env, onSetEnv, onDelEnv }) {
   const metrics = data?.metrics || [];
   const visitors = data?.visitors || [];
@@ -184,6 +210,7 @@ function Detail({ app, hours, data, deployments, env, onSetEnv, onDelEnv }) {
           <div><button class="btn" type="submit">Save variable</button> <span class="muted">redeploy to apply</span></div>
         </form>
       </div>
+      <${Logs} appId=${app.id} />
     </div>`;
 }
 
