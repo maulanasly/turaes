@@ -25,8 +25,8 @@ pub mod pb {
 
 use pb::control_server::{Control, ControlServer};
 use pb::{
-    DesiredApp, HeartbeatRequest, HeartbeatResponse, PollRequest, PollResponse, RegisterRequest,
-    RegisterResponse, ReportRequest, ReportResponse,
+    DesiredApp, HeartbeatRequest, HeartbeatResponse, MetricsRequest, MetricsResponse, PollRequest,
+    PollResponse, RegisterRequest, RegisterResponse, ReportRequest, ReportResponse,
 };
 
 fn internal(e: impl std::fmt::Display) -> Status {
@@ -76,6 +76,77 @@ impl Control for ControlService {
     ) -> Result<Response<ReportResponse>, Status> {
         Ok(Response::new(report(&self.state, req.into_inner()).await?))
     }
+
+    async fn push_metrics(
+        &self,
+        req: Request<MetricsRequest>,
+    ) -> Result<Response<MetricsResponse>, Status> {
+        Ok(Response::new(
+            push_metrics(&self.state, req.into_inner()).await?,
+        ))
+    }
+}
+
+/// Store agent-pushed app metrics into the same 1-minute rollups as the local
+/// monitor (visits accumulate; CPU/memory overwrite within the minute).
+pub async fn push_metrics(
+    state: &AppState,
+    req: MetricsRequest,
+) -> Result<MetricsResponse, Status> {
+    let server = authenticate(state, &req.agent_token).await?;
+    let minute = chrono::Utc::now().format("%Y-%m-%d %H:%M:00").to_string();
+
+    for m in req.apps {
+        let app_id: Option<String> =
+            sqlx::query_scalar("SELECT id FROM applications WHERE name = ? AND server_id = ?")
+                .bind(&m.app_name)
+                .bind(&server.id)
+                .fetch_optional(&state.pool)
+                .await
+                .map_err(internal)?;
+        let Some(app_id) = app_id else {
+            continue;
+        };
+
+        if let Err(e) = sqlx::query(
+            "INSERT INTO app_metrics (id, application_id, cpu_pct, mem_bytes, recorded_at) \
+             VALUES (?, ?, ?, ?, ?) \
+             ON CONFLICT(application_id, recorded_at) DO UPDATE SET \
+               cpu_pct = excluded.cpu_pct, mem_bytes = excluded.mem_bytes",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(&app_id)
+        .bind(m.cpu_pct)
+        .bind(m.mem_bytes as i64)
+        .bind(&minute)
+        .execute(&state.pool)
+        .await
+        {
+            tracing::warn!(error = %e, "agent app_metrics upsert failed");
+        }
+
+        for v in m.visits {
+            if let Err(e) = sqlx::query(
+                "INSERT INTO visit_metrics (id, application_id, region, visits, uniques, recorded_at) \
+                 VALUES (?, ?, ?, ?, ?, ?) \
+                 ON CONFLICT(application_id, region, recorded_at) DO UPDATE SET \
+                   visits = visit_metrics.visits + excluded.visits, \
+                   uniques = max(visit_metrics.uniques, excluded.uniques)",
+            )
+            .bind(uuid::Uuid::new_v4().to_string())
+            .bind(&app_id)
+            .bind(&v.region)
+            .bind(v.visits)
+            .bind(v.uniques)
+            .bind(&minute)
+            .execute(&state.pool)
+            .await
+            {
+                tracing::warn!(error = %e, "agent visit_metrics upsert failed");
+            }
+        }
+    }
+    Ok(MetricsResponse { ok: true })
 }
 
 /// Resolve the server for an agent token, or fail unauthenticated.

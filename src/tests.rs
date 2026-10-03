@@ -430,6 +430,81 @@ async fn agent_poll_and_report() {
 }
 
 #[tokio::test]
+async fn agent_push_metrics_rolls_up() {
+    use crate::grpc::pb::{AppMetrics, MetricsRequest, RegionVisits, RegisterRequest};
+
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+
+    let reg = crate::grpc::register(
+        &state,
+        RegisterRequest {
+            join_token: "test-join".into(),
+            name: "mw".into(),
+            address: "10.0.0.7".into(),
+            version: "0".into(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let payload = json!({
+        "name": "mapp", "binary_path": "/usr/bin/true", "port": 9500,
+        "server_id": reg.server_id
+    });
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/apps")
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let resp = crate::grpc::push_metrics(
+        &state,
+        MetricsRequest {
+            agent_token: reg.agent_token,
+            apps: vec![AppMetrics {
+                app_name: "mapp".into(),
+                cpu_pct: 12.5,
+                mem_bytes: 1024,
+                visits: vec![RegionVisits {
+                    region: "ID".into(),
+                    visits: 3,
+                    uniques: 2,
+                }],
+            }],
+        },
+    )
+    .await
+    .unwrap();
+    assert!(resp.ok);
+
+    let cpu: f64 = sqlx::query_scalar(
+        "SELECT cpu_pct FROM app_metrics WHERE application_id = (SELECT id FROM applications WHERE name='mapp')",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    assert_eq!(cpu, 12.5);
+
+    let (visits, uniques): (i64, i64) = sqlx::query_as(
+        "SELECT visits, uniques FROM visit_metrics WHERE application_id = (SELECT id FROM applications WHERE name='mapp')",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    assert_eq!(visits, 3);
+    assert_eq!(uniques, 2);
+}
+
+#[tokio::test]
 async fn invalid_name_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let router = test_router(dir.path()).await;
