@@ -34,10 +34,12 @@ Status legend: ✅ done · 🔄 in progress · ⏳ planned
 > **Backlog:** ACME webroot route — done (proxy serves `/.well-known/acme-challenge/`).
 >
 > **SRE reliability work:** [SRE-REVIEW.md](./SRE-REVIEW.md) ·
-> [PLAN-ZERO-DOWNTIME.md](./PLAN-ZERO-DOWNTIME.md). In progress: zero-downtime
-> control/edge + app blue/green. **Backlog:** exposure (Tailscale admin +
-> Cloudflare Tunnel/Access), backups/DR, pre-migration snapshots, patch
-> automation, resource limits, platform `/metrics` + alerting.
+> [PLAN-ZERO-DOWNTIME.md](./PLAN-ZERO-DOWNTIME.md). Done: control/edge
+> SO_REUSEPORT rolling upgrades + graceful drain, and **app blue/green**
+> (slot A/B, health-gated cutover, drain, legacy unslotted → slot migration,
+> periodic route refresh so CLI deploys propagate). **Backlog:** exposure
+> (Tailscale admin + Cloudflare Tunnel/Access), backups/DR, pre-migration
+> snapshots, patch automation, resource limits, platform `/metrics` + alerting.
 
 ## Timeline
 
