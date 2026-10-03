@@ -299,11 +299,12 @@ pub async fn poll(state: &AppState, req: PollRequest) -> Result<PollResponse, St
 
     let server = authenticate(state, &req.agent_token).await?;
     let rows = sqlx::query(
-        "SELECT a.id, a.name, a.args, a.port, a.runtime, a.health_path, a.metrics_path, \
+        "SELECT a.id, a.name, a.args, p.port AS port, a.runtime, a.health_path, a.metrics_path, \
          (SELECT artifact_hash FROM deployments d \
           WHERE d.application_id = a.id AND artifact_hash IS NOT NULL \
           ORDER BY rowid DESC LIMIT 1) AS artifact_hash \
-         FROM applications a WHERE a.server_id = ?",
+         FROM applications a JOIN app_servers p ON p.application_id = a.id \
+         WHERE p.server_id = ?",
     )
     .bind(&server.id)
     .fetch_all(&state.pool)
