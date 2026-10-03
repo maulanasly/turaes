@@ -69,17 +69,83 @@ pub fn spawn(_proxy_cfg: ProxyConfig, _state: ProxyState) {
 
 #[cfg(feature = "pingora")]
 mod pingora_impl {
-    use std::sync::Arc;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
     use pingora::listeners::tls::TlsSettings;
+    use pingora::listeners::TlsAccept;
     use pingora::prelude::*;
+    use pingora::protocols::tls::TlsRef;
+    use pingora::tls::pkey::{PKey, Private};
+    use pingora::tls::ssl::NameType;
+    use pingora::tls::x509::X509;
 
     use turaes_core::config::ProxyConfig;
 
     use crate::router::Router;
+    use crate::tls::CertStore;
 
     use super::ProxyState;
+
+    /// Selects a certificate per SNI from the certbot layout, falling back to
+    /// the dashboard certificate. Loaded certs are cached.
+    struct SniCertStore {
+        certs: CertStore,
+        default: (X509, PKey<Private>),
+        cache: Mutex<HashMap<String, (X509, PKey<Private>)>>,
+    }
+
+    fn load_pair(
+        fullchain: &std::path::Path,
+        key: &std::path::Path,
+    ) -> Option<(X509, PKey<Private>)> {
+        let cert = X509::from_pem(&std::fs::read(fullchain).ok()?).ok()?;
+        let pkey = PKey::private_key_from_pem(&std::fs::read(key).ok()?).ok()?;
+        Some((cert, pkey))
+    }
+
+    impl SniCertStore {
+        fn new(certs: CertStore, default_host: &str) -> Result<Self, String> {
+            let paths = certs.paths(default_host);
+            let default = load_pair(&paths.fullchain, &paths.private_key)
+                .ok_or_else(|| format!("missing certificate for {default_host}"))?;
+            Ok(Self {
+                certs,
+                default,
+                cache: Mutex::new(HashMap::new()),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl TlsAccept for SniCertStore {
+        async fn certificate_callback(&self, ssl: &mut TlsRef) {
+            use pingora::tls::ext;
+
+            if let Some(name) = ssl.servername(NameType::HOST_NAME) {
+                let name = name.to_ascii_lowercase();
+                let mut cache = self.cache.lock().unwrap();
+                if !cache.contains_key(&name) {
+                    let p = self.certs.paths(&name);
+                    if let Some(pair) = load_pair(&p.fullchain, &p.private_key) {
+                        cache.insert(name.clone(), pair);
+                    }
+                }
+                if let Some((cert, key)) = cache.get(&name) {
+                    if ext::ssl_use_certificate(ssl, cert).is_ok()
+                        && ext::ssl_use_private_key(ssl, key).is_ok()
+                    {
+                        return;
+                    }
+                }
+            }
+
+            // Fall back to the default (dashboard) certificate.
+            let _ = ext::ssl_use_certificate(ssl, &self.default.0);
+            let _ = ext::ssl_use_private_key(ssl, &self.default.1);
+        }
+    }
 
     struct Gateway {
         router: Arc<Router>,
@@ -176,12 +242,8 @@ mod pingora_impl {
         service.add_tcp(&format!("0.0.0.0:{}", proxy_cfg.http_port));
 
         if let Some(host) = state.dashboard_host.as_deref() {
-            let paths = state.certs.paths(host);
-            if paths.fullchain.is_file() && paths.private_key.is_file() {
-                match TlsSettings::intermediate(
-                    &paths.fullchain.to_string_lossy(),
-                    &paths.private_key.to_string_lossy(),
-                ) {
+            match SniCertStore::new(state.certs.clone(), host) {
+                Ok(store) => match TlsSettings::with_callbacks(Box::new(store)) {
                     Ok(mut tls) => {
                         tls.enable_h2();
                         service.add_tls_with_settings(
@@ -192,16 +254,12 @@ mod pingora_impl {
                         tracing::info!(
                             host,
                             https_port = proxy_cfg.https_port,
-                            "proxy TLS enabled"
+                            "proxy TLS enabled (multi-cert SNI)"
                         );
                     }
-                    Err(e) => tracing::error!(error = %e, "failed to load TLS settings"),
-                }
-            } else {
-                tracing::warn!(
-                    host,
-                    "no certificate found for dashboard host; HTTPS disabled"
-                );
+                    Err(e) => tracing::error!(error = %e, "failed to build TLS settings"),
+                },
+                Err(e) => tracing::warn!(host, error = %e, "no dashboard cert; HTTPS disabled"),
             }
         }
 
