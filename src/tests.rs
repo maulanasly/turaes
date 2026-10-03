@@ -505,6 +505,59 @@ async fn agent_push_metrics_rolls_up() {
 }
 
 #[tokio::test]
+async fn deployment_history_endpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let id = create_app(&router, "happ", "/usr/bin/true", 9600).await;
+
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/apps/{id}/deploy"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/apps/{id}/deployments"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let deps = body["deployments"].as_array().unwrap();
+    assert_eq!(deps.len(), 1);
+    let dep_id = deps[0]["id"].as_str().unwrap().to_string();
+    assert!(deps[0]["artifact_hash"]
+        .as_str()
+        .unwrap()
+        .starts_with("sha256:"));
+
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/deployments/{dep_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert!(body["deployment"]["log"].is_string());
+}
+
+#[tokio::test]
 async fn invalid_name_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let router = test_router(dir.path()).await;

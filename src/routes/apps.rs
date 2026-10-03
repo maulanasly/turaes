@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use turaes_core::config::Config;
 use turaes_core::db::Pool;
-use turaes_core::models::Application;
+use turaes_core::models::{Application, Deployment};
 use turaes_core::{Error, Result};
 use turaes_proxy::{RouteTable, Upstream};
 use turaes_runtime::proc::ProcRuntime;
@@ -51,6 +51,13 @@ pub struct CreateApp {
 pub struct StatsQuery {
     /// Look-back window in hours (default 1, max 720).
     pub hours: Option<i64>,
+}
+
+/// Query for deployment history.
+#[derive(Debug, Deserialize)]
+pub struct DeploymentsQuery {
+    /// Max rows (default 20, max 200).
+    pub limit: Option<i64>,
 }
 
 pub(crate) fn validate_name(name: &str) -> Result<()> {
@@ -476,6 +483,26 @@ pub async fn visitors(
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(serde_json::json!({ "visitors": rows })))
+}
+
+/// `GET /api/v1/apps/{id}/deployments` — recent deployments (log truncated).
+pub async fn deployments(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<DeploymentsQuery>,
+) -> Result<Json<serde_json::Value>> {
+    fetch_app(&state.pool, &id).await?;
+    let limit = q.limit.unwrap_or(20).clamp(1, 200);
+    let rows = sqlx::query_as::<_, Deployment>(
+        "SELECT id, application_id, status, artifact_hash, substr(log, 1, 2000) AS log, \
+         previous_artifact, started_at, finished_at \
+         FROM deployments WHERE application_id = ? ORDER BY rowid DESC LIMIT ?",
+    )
+    .bind(&id)
+    .bind(limit)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(serde_json::json!({ "deployments": rows })))
 }
 
 #[cfg(test)]
