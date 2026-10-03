@@ -11,6 +11,7 @@ import { AppsView } from "./views/AppsView.js";
 import { AppDetailView } from "./views/AppDetailView.js";
 import { ServersView } from "./views/ServersView.js";
 import { ServerDetailView } from "./views/ServerDetailView.js";
+import { LoginView } from "./views/LoginView.js";
 
 function useTheme() {
   const [theme, setTheme] = useState(() => document.documentElement.dataset.theme || "dark");
@@ -46,13 +47,44 @@ function Shell() {
     try { setHealth(await api("/health")); } catch { setHealth(null); }
   }, []);
 
+  useEffect(() => { loadUser(); }, [loadUser]);
+
+  // Only poll once authenticated.
   useEffect(() => {
-    loadUser(); loadServers(); loadHealth();
+    if (!user) return undefined;
+    loadServers(); loadHealth();
     const t = setInterval(() => {
       if (!document.hidden) { loadServers(); loadHealth(); }
     }, 30000);
     return () => clearInterval(t);
-  }, [loadUser, loadServers, loadHealth]);
+  }, [user, loadServers, loadHealth]);
+
+  // Remember the intended route across a full-page sign-in redirect.
+  useEffect(() => {
+    if (user === null) {
+      try { sessionStorage.setItem("turaes-next", location.hash || "#/apps"); } catch (e) {}
+    }
+  }, [user]);
+  useEffect(() => {
+    if (!user) return;
+    try {
+      const next = sessionStorage.getItem("turaes-next");
+      sessionStorage.removeItem("turaes-next");
+      if (next && next !== location.hash) location.hash = next;
+    } catch (e) {}
+  }, [user]);
+
+  const loginError = (() => {
+    try { return new URLSearchParams(location.search).get("login_error"); } catch (e) { return null; }
+  })();
+
+  if (user === undefined) {
+    return html`<div class="login"><div class="login-card">
+      <div class="login-brand">turaes</div><div class="spinner"></div></div></div>`;
+  }
+  if (user === null) {
+    return html`<${LoginView} error=${loginError} theme=${theme} onToggleTheme=${toggleTheme} />`;
+  }
 
   return html`
     <header class="topbar">
@@ -66,18 +98,16 @@ function Shell() {
           title=${health ? "healthy" : "unreachable"} aria-label=${health ? "healthy" : "unreachable"}></span>
         <button class="btn small ghost" onClick=${toggleTheme}
           title="Toggle theme" aria-label="Toggle theme">${theme === "dark" ? "☾" : "☀"}</button>
-        ${user === undefined ? null : user
-          ? html`<span class="muted small">${user.login}</span>
-              <button class="btn small ghost" onClick=${async () => {
-                try {
-                  await api("/auth/logout", { method: "POST" });
-                } catch (e) {
-                  toast.error(e.message);
-                  return;
-                }
-                location.assign("/");
-              }}>Sign out</button>`
-          : html`<a class="btn small" href="/auth/login">Sign in</a>`}
+        <span class="muted small">${user.login}</span>
+        <button class="btn small ghost" onClick=${async () => {
+          try {
+            await api("/auth/logout", { method: "POST" });
+          } catch (e) {
+            toast.error(e.message);
+            return;
+          }
+          location.assign("/");
+        }}>Sign out</button>
       </div>
     </header>
 

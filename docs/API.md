@@ -15,8 +15,8 @@ The session is an HttpOnly, SameSite=Lax JWT cookie.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/auth/login` | Redirects to GitHub; sets a short-lived CSRF `state` cookie |
-| `GET` | `/auth/callback?code=&state=` | Exchanges the code, enforces the allowlist, sets the session cookie, redirects to `/` |
+| `GET` | `/auth/login` | Redirects to GitHub (or to `/` if already signed in); sets a short-lived CSRF `state` cookie |
+| `GET` | `/auth/callback?code=&state=` | Exchanges the code, enforces the allowlist, sets the session cookie, redirects to `/`; failures redirect to `/?login_error=<msg>` |
 | `GET` | `/auth/me` | Current user (`401` if not signed in) |
 | `POST` | `/auth/logout` | Clears the session cookie (`204`) |
 

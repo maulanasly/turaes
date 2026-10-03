@@ -72,6 +72,14 @@ fn removal_cookie(state: &AppState, name: &str) -> Cookie<'static> {
     cookie
 }
 
+/// Redirect back to the dashboard with a user-facing sign-in error, clearing
+/// the transient OAuth state cookie.
+fn login_error(state: &AppState, jar: CookieJar, msg: &str) -> Response {
+    let jar = jar.add(removal_cookie(state, STATE_COOKIE));
+    let location = format!("/?login_error={}", urlencoding::encode(msg));
+    (jar, Redirect::temporary(&location)).into_response()
+}
+
 fn state_cookie(value: String) -> Cookie<'static> {
     let mut cookie = Cookie::new(STATE_COOKIE, value);
     cookie.set_http_only(true);
@@ -114,6 +122,10 @@ pub async fn login(State(state): State<AppState>, jar: CookieJar) -> Result<Resp
             "GitHub OAuth is not configured (set TURAES_GITHUB_CLIENT_ID)".into(),
         ));
     }
+    // Already signed in: no need to start another OAuth round-trip.
+    if user_from_jar(&state, &jar).is_ok() {
+        return Ok(Redirect::temporary("/").into_response());
+    }
     let nonce = random_token(24);
     let callback = state.cfg.callback_url();
     let url = format!(
@@ -133,26 +145,39 @@ pub async fn callback(
     Query(q): Query<CallbackQuery>,
 ) -> Result<Response> {
     if let Some(err) = q.error {
-        return Err(Error::Unauthorized(format!(
-            "GitHub OAuth error: {err} {}",
-            q.error_description.unwrap_or_default()
-        )));
+        let msg = match q.error_description.as_deref() {
+            Some(d) if !d.is_empty() => format!("GitHub sign-in was not completed ({err}: {d})"),
+            _ => format!("GitHub sign-in was not completed ({err})"),
+        };
+        return Ok(login_error(&state, jar.clone(), &msg));
     }
-    let expected = jar
-        .get(STATE_COOKIE)
-        .map(|c| c.value().to_string())
-        .ok_or_else(|| Error::Unauthorized("missing OAuth state cookie".into()))?;
-    let got = q
-        .state
-        .ok_or_else(|| Error::BadRequest("missing OAuth state".into()))?;
+    let expected = match jar.get(STATE_COOKIE) {
+        Some(c) => c.value().to_string(),
+        None => {
+            return Ok(login_error(
+                &state,
+                jar,
+                "Sign-in session expired; please try again",
+            ))
+        }
+    };
+    let got = match q.state {
+        Some(s) => s,
+        None => return Ok(login_error(&state, jar.clone(), "Invalid sign-in response")),
+    };
     if expected != got {
-        return Err(Error::Unauthorized("OAuth state mismatch".into()));
+        return Ok(login_error(
+            &state,
+            jar.clone(),
+            "Sign-in state mismatch; please try again",
+        ));
     }
-    let code = q
-        .code
-        .ok_or_else(|| Error::BadRequest("missing OAuth code".into()))?;
+    let code = match q.code {
+        Some(c) => c,
+        None => return Ok(login_error(&state, jar.clone(), "Missing sign-in code")),
+    };
 
-    let token: serde_json::Value = state
+    let token_resp = state
         .http
         .post(GITHUB_TOKEN)
         .header(ACCEPT, "application/json")
@@ -166,35 +191,54 @@ pub async fn callback(
             ("redirect_uri", state.cfg.callback_url().as_str()),
         ])
         .send()
-        .await
-        .map_err(|e| Error::Internal(format!("GitHub token exchange failed: {e}")))?
-        .json()
-        .await
-        .map_err(|e| Error::Internal(format!("GitHub token response invalid: {e}")))?;
-    let access_token = token
-        .get("access_token")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| Error::Unauthorized("GitHub did not return an access token".into()))?;
+        .await;
+    let token: serde_json::Value = match token_resp {
+        Ok(resp) => match resp.json().await {
+            Ok(v) => v,
+            Err(_) => return Ok(login_error(&state, jar, "Could not read GitHub's response")),
+        },
+        Err(_) => {
+            return Ok(login_error(
+                &state,
+                jar,
+                "Could not reach GitHub to complete sign-in",
+            ))
+        }
+    };
+    let access_token = match token.get("access_token").and_then(|v| v.as_str()) {
+        Some(t) => t,
+        None => return Ok(login_error(&state, jar, "GitHub did not grant access")),
+    };
 
-    let user: GhUser = state
+    let user_resp = state
         .http
         .get(GITHUB_USER)
         .header(USER_AGENT, "turaes")
         .bearer_auth(access_token)
         .send()
-        .await
-        .map_err(|e| Error::Internal(format!("GitHub user fetch failed: {e}")))?
-        .json()
-        .await
-        .map_err(|e| Error::Internal(format!("GitHub user response invalid: {e}")))?;
+        .await;
+    let user: GhUser = match user_resp {
+        Ok(resp) => match resp.json().await {
+            Ok(u) => u,
+            Err(_) => {
+                return Ok(login_error(
+                    &state,
+                    jar,
+                    "Could not read your GitHub profile",
+                ))
+            }
+        },
+        Err(_) => return Ok(login_error(&state, jar, "Could not reach GitHub")),
+    };
 
     if !state.cfg.auth.allowed_github_ids.is_empty()
         && !state.cfg.auth.allowed_github_ids.contains(&user.id)
     {
-        return Err(Error::Forbidden(format!(
-            "GitHub user {} is not on the allowlist",
-            user.login
-        )));
+        return Ok(login_error(
+            &state,
+            jar,
+            &format!("@{} is not allowed to sign in", user.login),
+        ));
     }
 
     let token = state

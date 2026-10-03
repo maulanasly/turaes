@@ -897,6 +897,30 @@ async fn logout_clears_session_cookie_with_path() {
 }
 
 #[tokio::test]
+async fn callback_error_redirects_to_login() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/auth/callback?error=access_denied&error_description=denied")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
+    let location = resp
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(location.starts_with("/?login_error="), "{location}");
+}
+
+#[tokio::test]
 async fn invalid_name_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let router = test_router(dir.path()).await;
