@@ -53,6 +53,9 @@ The session is an HttpOnly, SameSite=Lax JWT cookie.
 | `GET` | `/api/v1/apps/{id}/visitors?hours=24` | Visitor rows per region (max 720h) |
 | `GET` | `/api/v1/apps/{id}/deployments?limit=20` | Recent deployments (log truncated to 2000 chars) |
 | `GET` | `/api/v1/deployments/{id}` | Full deployment record incl. log |
+| `GET` | `/api/v1/apps/{id}/env` | List env var **keys** (values are never returned) |
+| `PUT` | `/api/v1/apps/{id}/env/{key}` | Create/replace an env var (AES-256-GCM sealed) |
+| `DELETE` | `/api/v1/apps/{id}/env/{key}` | Remove an env var |
 | `GET` | `/api/v1/artifacts/{hash}` | Download a stored artifact by `sha256:<hex>` |
 
 Deploys first store the binary in the content-addressed artifact store

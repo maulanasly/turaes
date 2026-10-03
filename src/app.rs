@@ -22,6 +22,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/apps/{id}/stats", get(routes::apps::stats))
         .route("/apps/{id}/visitors", get(routes::apps::visitors))
         .route("/apps/{id}/deployments", get(routes::apps::deployments))
+        .route("/apps/{id}/env", get(routes::env::list))
+        .route(
+            "/apps/{id}/env/{key}",
+            axum::routing::put(routes::env::put).delete(routes::env::delete),
+        )
         .route("/deployments/{id}", get(routes::deployments::get))
         .route("/artifacts/{hash}", get(routes::artifacts::download))
         .route(

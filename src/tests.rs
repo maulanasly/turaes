@@ -558,6 +558,73 @@ async fn deployment_history_endpoint() {
 }
 
 #[tokio::test]
+async fn env_crud_does_not_leak_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let id = create_app(&router, "eapp", "/usr/bin/true", 9700).await;
+
+    // invalid key
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/v1/apps/{id}/env/1BAD"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"value": "x"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // set
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/v1/apps/{id}/env/API_KEY"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"value": "secret123"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // list returns the key but never the value
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/apps/{id}/env"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert_eq!(body["env"][0]["key"], "API_KEY");
+    let text = body.to_string();
+    assert!(!text.contains("secret123"));
+
+    // delete
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/v1/apps/{id}/env/API_KEY"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
 async fn invalid_name_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let router = test_router(dir.path()).await;
