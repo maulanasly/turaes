@@ -153,6 +153,68 @@ pub async fn validate(
     ))
 }
 
+/// `POST /api/v1/servers/{id}/bootstrap` — install + start the agent over SSH.
+pub async fn bootstrap(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>> {
+    let output = run_bootstrap(&state, &id).await?;
+    Ok(Json(serde_json::json!({ "ok": true, "output": output })))
+}
+
+/// Shared by the HTTP handler and the `turaes server bootstrap` CLI command.
+pub async fn run_bootstrap(state: &AppState, id: &str) -> Result<String> {
+    let server = fetch_server(state, id).await?;
+    if server.is_local {
+        return Err(Error::BadRequest(
+            "the local server cannot be bootstrapped".into(),
+        ));
+    }
+    if state.cfg.agent.join_token.is_empty() {
+        return Err(Error::BadRequest(
+            "agent join token is not configured (set TURAES_AGENT_JOIN_TOKEN)".into(),
+        ));
+    }
+    let control = state.cfg.proxy.control_address.clone();
+    if control.is_empty() {
+        return Err(Error::BadRequest(
+            "proxy.control_address is not set (control-plane address agents dial)".into(),
+        ));
+    }
+    let key_pem = match &server.ssh_key_enc {
+        Some(enc) => state.secrets.open(enc)?,
+        None => {
+            return Err(Error::BadRequest(
+                "server has no ssh key (register with --ssh-key-file)".into(),
+            ))
+        }
+    };
+
+    let plan = crate::bootstrap::BootstrapPlan {
+        host: server
+            .ssh_host
+            .clone()
+            .unwrap_or_else(|| server.address.clone()),
+        port: server.ssh_port.unwrap_or(22) as u16,
+        user: server.ssh_user.clone().unwrap_or_else(|| "root".into()),
+        key_pem,
+        name: server.name.clone(),
+        address: server.address.clone(),
+        control_url: format!("http://{}:{}", control, state.cfg.grpc.port),
+        http_url: format!("http://{}:{}", control, state.cfg.server.port),
+        token: state.cfg.agent.join_token.clone(),
+    };
+
+    let output = crate::bootstrap::run(&plan).await?;
+    sqlx::query(
+        "UPDATE servers SET status = 'online', last_seen_at = datetime('now') WHERE id = ?",
+    )
+    .bind(&server.id)
+    .execute(&state.pool)
+    .await?;
+    Ok(output)
+}
+
 async fn fetch_server(state: &AppState, id: &str) -> Result<Server> {
     sqlx::query_as::<_, Server>("SELECT * FROM servers WHERE id = ?")
         .bind(id)

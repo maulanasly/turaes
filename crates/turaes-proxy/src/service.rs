@@ -44,6 +44,22 @@ pub fn pingora_enabled() -> bool {
     cfg!(feature = "pingora")
 }
 
+/// Extract a certbot HTTP-01 challenge token from a request path, if valid.
+pub fn acme_token(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix("/.well-known/acme-challenge/")?;
+    if rest.is_empty() || rest.contains('/') {
+        return None;
+    }
+    if rest
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        Some(rest)
+    } else {
+        None
+    }
+}
+
 /// Start the proxy on a background OS thread. Non-blocking.
 #[cfg(feature = "pingora")]
 pub fn spawn(proxy_cfg: ProxyConfig, state: ProxyState) {
@@ -189,6 +205,29 @@ mod pingora_impl {
 
     struct Gateway {
         router: Arc<Router>,
+        acme_webroot: String,
+    }
+
+    impl Gateway {
+        /// Serve a certbot HTTP-01 challenge file from the webroot.
+        async fn serve_acme(&self, session: &mut Session, token: &str) -> Result<bool> {
+            let file = Path::new(&self.acme_webroot).join(token);
+            match std::fs::read(&file) {
+                Ok(body) => {
+                    let mut resp = ResponseHeader::build(200, None)?;
+                    resp.insert_header(http::header::CONTENT_TYPE, "text/plain")?;
+                    session.write_response_header(Box::new(resp), false).await?;
+                    session
+                        .write_response_body(Some(bytes::Bytes::from(body)), true)
+                        .await?;
+                }
+                Err(_) => {
+                    let resp = ResponseHeader::build(404, None)?;
+                    session.write_response_header(Box::new(resp), true).await?;
+                }
+            }
+            Ok(true)
+        }
     }
 
     #[async_trait]
@@ -226,6 +265,11 @@ mod pingora_impl {
                     .unwrap_or_else(|| "/".to_string());
                 (host, path)
             };
+
+            // certbot HTTP-01 challenge: serve from the webroot before redirect.
+            if let Some(token) = super::acme_token(&path) {
+                return self.serve_acme(session, token).await;
+            }
 
             let hostname = host.split(':').next().unwrap_or("").to_ascii_lowercase();
             if hostname.is_empty() || self.router.resolve(&hostname).is_none() {
@@ -277,6 +321,7 @@ mod pingora_impl {
 
         let gateway = Gateway {
             router: state.router.clone(),
+            acme_webroot: proxy_cfg.acme_webroot.clone(),
         };
         let mut service = http_proxy_service(&server.configuration, gateway);
         service.add_tcp(&format!("0.0.0.0:{}", proxy_cfg.http_port));
@@ -306,5 +351,27 @@ mod pingora_impl {
         server.add_service(service);
         tracing::info!(http_port = proxy_cfg.http_port, "pingora proxy listening");
         server.run_forever();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{acme_token, pingora_enabled};
+
+    #[test]
+    fn acme_token_accepts_valid_and_rejects_bad() {
+        assert_eq!(
+            acme_token("/.well-known/acme-challenge/abc-123_XYZ"),
+            Some("abc-123_XYZ")
+        );
+        assert_eq!(acme_token("/.well-known/acme-challenge/"), None);
+        assert_eq!(acme_token("/.well-known/acme-challenge/a/b"), None);
+        assert_eq!(
+            acme_token("/.well-known/acme-challenge/../etc/passwd"),
+            None
+        );
+        assert_eq!(acme_token("/health"), None);
+        // sanity: default build has no data plane
+        let _ = pingora_enabled();
     }
 }

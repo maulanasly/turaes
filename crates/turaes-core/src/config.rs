@@ -122,6 +122,14 @@ pub struct ProxyConfig {
     /// dashboard route). Empty = omit the dashboard route.
     #[serde(default)]
     pub control_address: String,
+    /// Directory served at `/.well-known/acme-challenge/` for certbot webroot
+    /// renewals (so turaes need not be stopped to free port 80).
+    #[serde(default = "default_acme_webroot")]
+    pub acme_webroot: String,
+}
+
+fn default_acme_webroot() -> String {
+    "/var/lib/turaes/acme".to_string()
 }
 
 /// Health and metrics collection settings.
@@ -340,6 +348,7 @@ fn apply_env(cfg: &mut Config) -> Result<()> {
         "TURAES_PROXY_CONTROL_ADDRESS",
         &mut cfg.proxy.control_address,
     );
+    env_str("TURAES_ACME_WEBROOT", &mut cfg.proxy.acme_webroot);
 
     env_parse(
         "TURAES_MONITOR_INTERVAL_SECS",

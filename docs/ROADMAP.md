@@ -30,7 +30,7 @@ Status legend: ✅ done · 🔄 in progress · ⏳ planned
 > multi-node fleet — [PLAN-MULTINODE.md](./PLAN-MULTINODE.md) (N0 node registry
 > shipped; N1+ pending a second node).
 >
-> **Backlog:** ACME webroot route so cert renewals need no turaes restart.
+> **Backlog:** ACME webroot route — done (proxy serves `/.well-known/acme-challenge/`).
 
 ## Timeline
 

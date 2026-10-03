@@ -3,8 +3,8 @@
 Status: **in progress.** Implemented and tested: N0 (node registry), N1a
 (artifact store + rollback), N1b (gRPC register/heartbeat), through N1c
 (poll/report desired-state reconcile), N2 (agent-pushed CPU/memory + visitor
-metrics + health), and N3 (`turaes edge` pulling routes via `EdgeRoutes`, plus multi-cert SNI and cert distribution from the control plane). Pending:
-SSH bootstrap, N4. No second node exists
+metrics + health), and N3 (`turaes edge` pulling routes via `EdgeRoutes`, plus multi-cert SNI and cert distribution from the control plane) and N1
+SSH bootstrap (`POST /servers/{id}/bootstrap`). Pending: N4. No second node exists
 yet, so this is the design of record.
 
 ## Decisions (locked)
@@ -86,7 +86,7 @@ during bootstrap). Rollback = redeploy a previous hash. `AppSpec` splits
 | Phase | Scope | Exit |
 |---|---|---|
 | **N0** ✅ | `servers` + `applications.server_id`, `/api/v1/servers`, `turaes server …`, UI panel | local node auto-registered; no regression |
-| **N1** | ArtifactStore ✅ + gRPC `Register`/`Heartbeat`/`Poll`/`Report` ✅ + agent reconcile ✅ + SSH bootstrap | deploy an app to a worker |
+| **N1** ✅ | ArtifactStore + gRPC `Register`/`Heartbeat`/`Poll`/`Report` + agent reconcile + SSH bootstrap | deploy an app to a worker |
 | **N2** ✅ | agent samples cgroup/`/proc` CPU/mem + scrapes `/metrics` (visitors) + health transitions, pushes to control; stored in the shared 1-min rollups | worker shows CPU/mem/health/visitors |
 | **N3** ✅ | `turaes edge` + `EdgeRoutes` + `EdgeCerts` (cert distribution) + multi-cert SNI (mtime reload) | edge serves all apps; control has no :80/:443 |
 | **N4** | DNS-01 multi-cert/wildcard SNI + replicas + Pingora LB + control-plane HA | TLS per app; N replicas behind edge |
