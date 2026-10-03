@@ -17,6 +17,8 @@ service Control {
   rpc Poll(PollRequest) returns (PollResponse);
   // Report an apply result back to the control plane.
   rpc Report(ReportRequest) returns (ReportResponse);
+  // Push per-app resource + visitor metrics.
+  rpc PushMetrics(MetricsRequest) returns (MetricsResponse);
 }
 
 message RegisterRequest {
@@ -69,5 +71,27 @@ message ReportRequest {
 }
 
 message ReportResponse {
+  bool ok = 1;
+}
+
+message RegionVisits {
+  string region = 1;
+  int64 visits = 2;
+  int64 uniques = 3;
+}
+
+message AppMetrics {
+  string app_name = 1;
+  double cpu_pct = 2;
+  uint64 mem_bytes = 3;
+  repeated RegionVisits visits = 4;
+}
+
+message MetricsRequest {
+  string agent_token = 1;
+  repeated AppMetrics apps = 2;
+}
+
+message MetricsResponse {
   bool ok = 1;
 }
