@@ -45,9 +45,9 @@ export function ServerDetailView({ id }) {
       <h2 style="margin-top:16px">Applications on this server</h2>
       ${apps.length === 0
         ? html`<p class="muted">No apps placed here.</p>`
-        : html`<table><thead><tr><th>Name</th><th>Status</th></tr></thead>
+        : html`<div class="table-wrap"><table><thead><tr><th>Name</th><th>Status</th></tr></thead>
             <tbody>${apps.map((a) => html`<tr>
               <td><a class="mono" href=${`#/apps/${a.id}/overview`}>${a.name}</a></td>
-              <td><${StatusBadge} status=${a.status} /></td></tr>`)}</tbody></table>`}
+              <td><${StatusBadge} status=${a.status} /></td></tr>`)}</tbody></table></div>`}
     </section>`;
 }

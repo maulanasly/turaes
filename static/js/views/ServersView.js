@@ -80,7 +80,7 @@ export function ServersView({ user, onChanged }) {
       <div class="panel-head"><h1>Servers</h1></div>
       ${servers === null
         ? html`<p class="muted">Loading…</p>`
-        : html`<table>
+        : html`<div class="table-wrap"><table>
             <thead><tr><th>Name</th><th>Address</th><th>Status</th><th>Last seen</th><th>Agent</th><th></th></tr></thead>
             <tbody>
               ${servers.map((s) => html`
@@ -97,7 +97,7 @@ export function ServersView({ user, onChanged }) {
                   </td>
                 </tr>`)}
             </tbody>
-          </table>`}
+          </table></div>`}
       ${user && html`<form class="form" style="margin-top:14px" onSubmit=${add}>
         <h3>Add server</h3>
         <div class="row">

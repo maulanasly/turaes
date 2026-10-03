@@ -79,16 +79,20 @@ function Deployments({ deployments, onRollbackTo }) {
   if (!deployments) return html`<${Skeleton} lines={3} />`;
   if (deployments.length === 0) return html`<p class="muted">No builds yet.</p>`;
   return html`
+    <div class="table-wrap">
     <table>
       <thead><tr><th>Status</th><th>Build</th><th>Started</th><th>Finished</th><th></th></tr></thead>
       <tbody>
         ${deployments.map((d) => html`
           <tr>
             <td><${StatusBadge} status=${d.status} /></td>
-            <td class="mono" title=${d.artifact_hash || ""}>${shortHash(d.artifact_hash)}
+            <td>
+              <span class="mono">${shortHash(d.artifact_hash)}</span>
               ${d.artifact_hash && html`<button class="btn small ghost" onClick=${() => {
                 navigator.clipboard?.writeText(d.artifact_hash); toast.success("Build id copied");
               }}>Copy</button>`}
+              ${d.artifact_hash && html`<details><summary class="muted small">full id</summary>
+                <div class="mono small break">${d.artifact_hash}</div></details>`}
             </td>
             <td class="muted">${fmtTime(d.started_at)}</td>
             <td class="muted">${fmtTime(d.finished_at)}</td>
@@ -100,7 +104,8 @@ function Deployments({ deployments, onRollbackTo }) {
             </td>
           </tr>`)}
       </tbody>
-    </table>`;
+    </table>
+    </div>`;
 }
 
 function Environment({ env, appId, reload }) {
