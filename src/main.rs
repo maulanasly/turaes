@@ -194,6 +194,20 @@ async fn serve(cfg: Arc<Config>) {
         }
         let proxy_state = turaes_proxy::state(&cfg.proxy, proxy_router, cfg.dashboard_host());
         turaes_proxy::service::spawn(cfg.proxy.clone(), proxy_state);
+
+        // Rebuild routes periodically so DB-driven changes made by other
+        // processes (e.g. a CLI deploy or blue/green cutover) propagate to the
+        // running proxy.
+        let refresh_state = state.clone();
+        let secs = cfg.monitor.interval_secs.max(5);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                if let Err(e) = routes::apps::refresh_proxy_routes(&refresh_state).await {
+                    tracing::warn!(error = %e, "periodic proxy route refresh failed");
+                }
+            }
+        });
     }
     tokio::spawn(monitor::run(state.clone()));
 
