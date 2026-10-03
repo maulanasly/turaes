@@ -30,6 +30,12 @@ test: ## Unit + doc tests
 test-all: ## Unit + integration tests
 	$(CARGO) test --workspace --all-targets
 
+js-check: ## Syntax-check frontend ES modules
+	sh scripts/check-js.sh
+
+test-js: ## Frontend unit tests (node --test, zero-build)
+	node --test tests/frontend/*.test.mjs
+
 build: ## Release build
 	$(CARGO) build --workspace --release
 
@@ -39,7 +45,7 @@ proxy-check: ## Type-check with the optional Pingora proxy enabled (Linux)
 proxy-build: ## Release build with the Pingora proxy enabled (Linux)
 	$(CARGO) build --release --features proxy
 
-verify: lint fmt-check test-all ## The gate: lint + fmt + all tests
+verify: lint fmt-check test-all js-check test-js ## The gate: lint + fmt + tests + frontend
 
 clean: ## Remove build artifacts
 	$(CARGO) clean

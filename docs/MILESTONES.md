@@ -175,6 +175,19 @@ same Tencent VPC, hybrid SSH bootstrap + gRPC agent, separate Pingora edge.
 
 ---
 
+## UX-P0–P3 — Dashboard IA redesign 🔄
+
+Full review/plan: [UX-REVIEW.md](./UX-REVIEW.md).
+
+| Phase | Scope | Status |
+|---|---|---|
+| **UX-P0** | hash router + shell + nav, toasts + confirm, server names, auth gating, keyboard/focus, terminology, light mode | ✅ |
+| **UX-P1** | app detail tabs (Overview/Deployments/Environment/Logs/Settings), env reveal/edit, log controls, chart a11y | ✅ (rollback-target/PATCH pending) |
+| **UX-P2** | Servers list + detail (agent status), Validate/Bootstrap UI, group apps by server, lifecycle (stop/start/edit), domain aliases | 🔄 (servers done; lifecycle/aliases pending) |
+| **UX-P3** | search (apps), responsive, light mode, favicon/theme-color, build-id copy | 🔄 (core done) |
+
+---
+
 ## Cross-milestone definition of done
 
 1. `make verify` green.

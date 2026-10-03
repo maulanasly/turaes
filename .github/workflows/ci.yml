@@ -29,6 +29,10 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests
         run: cargo test --workspace --all-targets
+      - name: Frontend syntax check
+        run: sh scripts/check-js.sh
+      - name: Frontend tests
+        run: node --test tests/frontend/*.test.mjs
 
   # The Pingora data plane is Linux tier-1; requires OpenSSL dev headers and
   # cmake (for libz-ng-sys). Now a required gate (M2 shipped).

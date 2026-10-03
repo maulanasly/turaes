@@ -17,6 +17,7 @@ Status legend: ✅ done · 🔄 in progress · ⏳ planned
 | **M4** | Ops | ⏳ | 2026-11-15 → 11-28 | Deploy history + rollback, env editor, WebSocket realtime |
 | **M5** | Auto-deploy | ⏳ | 2026-11-29 → 12-12 | GitHub/GitLab webhooks, git-based build |
 | **N0–N4** | Multi-node fleet | 🔄 | after M5 | Control plane + agents + edge — [PLAN-MULTINODE.md](./PLAN-MULTINODE.md) |
+| **UX-P0–P3** | Dashboard IA redesign | 🔄 | now | [UX-REVIEW.md](./UX-REVIEW.md) — router, shell, toasts, tabs, light mode, servers |
 
 > **Live instance (2026-10-01):** turaes is deployed on `43.173.9.225`
 > (Debian 13, systemd) and beruang is running under it with live health, CPU,
