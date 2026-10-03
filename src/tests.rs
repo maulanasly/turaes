@@ -723,6 +723,154 @@ async fn edge_certs_serves_cert_material() {
 }
 
 #[tokio::test]
+async fn update_app_patches_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let id = create_app(&router, "uapp", "/usr/bin/true", 9800).await;
+
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/apps/{id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"port": 9801, "domain": "u.test"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert_eq!(body["application"]["port"], 9801);
+    assert_eq!(body["application"]["domain"], "u.test");
+}
+
+#[tokio::test]
+async fn stop_reports_stopped() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let id = create_app(&router, "sapp", "/usr/bin/true", 9810).await;
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/apps/{id}/stop"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(body_json(resp).await["state"], "stopped");
+}
+
+#[tokio::test]
+async fn rollback_to_explicit_build() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let id = create_app(&router, "rbapp", "/usr/bin/true", 9820).await;
+
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/apps/{id}/deploy"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let hash = body_json(resp).await["artifact_hash"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/apps/{id}/rollback"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "artifact_hash": hash }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(body_json(resp).await["rolled_back_to"], hash);
+}
+
+#[tokio::test]
+async fn domains_crud() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let id = create_app(&router, "dapp2", "/usr/bin/true", 9830).await;
+
+    // invalid domain
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/apps/{id}/domains"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"domain": "bad"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // add
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/apps/{id}/domains"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"domain": "WWW.Example.COM"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(body_json(resp).await["domain"]["domain"], "www.example.com");
+
+    // list
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/apps/{id}/domains"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        body_json(resp).await["domains"].as_array().unwrap().len(),
+        1
+    );
+
+    // delete
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/v1/apps/{id}/domains/www.example.com"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
 async fn invalid_name_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let router = test_router(dir.path()).await;

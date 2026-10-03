@@ -159,3 +159,10 @@ summary { cursor: pointer; color: var(--muted); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+
+.menu { position: relative; display: inline-block; }
+.menu > summary { list-style: none; }
+.menu > summary::-webkit-details-marker { display: none; }
+.menu-list { position: absolute; right: 0; top: 110%; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px; display: grid; gap: 4px; z-index: 10; min-width: 120px; }
+.menu-list .btn { width: 100%; text-align: left; }

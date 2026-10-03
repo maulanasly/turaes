@@ -60,6 +60,36 @@ pub struct DeploymentsQuery {
     pub limit: Option<i64>,
 }
 
+/// Body for editing an application (all fields optional).
+#[derive(Debug, Deserialize)]
+pub struct UpdateApp {
+    /// Description.
+    pub description: Option<String>,
+    /// ExecStart arguments.
+    pub args: Option<String>,
+    /// Loopback port.
+    pub port: Option<u16>,
+    /// Health path.
+    pub health_path: Option<String>,
+    /// Metrics path.
+    pub metrics_path: Option<String>,
+    /// Primary hostname.
+    pub domain: Option<String>,
+    /// `systemd` or `proc`.
+    pub runtime: Option<String>,
+    /// Restart on unhealthy.
+    pub auto_restart: Option<bool>,
+    /// Node placement.
+    pub server_id: Option<String>,
+}
+
+/// Body for rollback (optional explicit target).
+#[derive(Debug, Deserialize, Default)]
+pub struct RollbackBody {
+    /// Artifact hash to roll back to (defaults to the previous build).
+    pub artifact_hash: Option<String>,
+}
+
 pub(crate) fn validate_name(name: &str) -> Result<()> {
     let valid = !name.is_empty()
         && name.len() <= 64
@@ -450,25 +480,32 @@ pub(crate) fn select_previous_artifact(hashes: &[String]) -> Option<String> {
     hashes.iter().find(|h| *h != current).cloned()
 }
 
-/// `POST /api/v1/apps/{id}/rollback` — redeploy the previous artifact.
+/// `POST /api/v1/apps/{id}/rollback` — redeploy a build (previous by default).
 pub async fn rollback(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    body: Option<Json<RollbackBody>>,
 ) -> Result<Json<serde_json::Value>> {
     let app = fetch_app(&state.pool, &id).await?;
     ensure_local(&app)?;
-    let hashes: Vec<String> = sqlx::query_scalar(
-        "SELECT artifact_hash FROM deployments \
-         WHERE application_id = ? AND artifact_hash IS NOT NULL ORDER BY rowid DESC",
-    )
-    .bind(&app.id)
-    .fetch_all(&state.pool)
-    .await?;
-    let previous = select_previous_artifact(&hashes)
-        .ok_or_else(|| Error::BadRequest("no previous artifact to roll back to".into()))?;
+    let target = body.and_then(|Json(b)| b.artifact_hash);
+    let previous = match target {
+        Some(hash) => hash,
+        None => {
+            let hashes: Vec<String> = sqlx::query_scalar(
+                "SELECT artifact_hash FROM deployments \
+                 WHERE application_id = ? AND artifact_hash IS NOT NULL ORDER BY rowid DESC",
+            )
+            .bind(&app.id)
+            .fetch_all(&state.pool)
+            .await?;
+            select_previous_artifact(&hashes)
+                .ok_or_else(|| Error::BadRequest("no previous build to roll back to".into()))?
+        }
+    };
     if !state.artifacts.has(&previous) {
         return Err(Error::NotFound(format!(
-            "artifact {previous} is no longer in the store"
+            "build {previous} is no longer in the store"
         )));
     }
     let source = state
@@ -484,6 +521,110 @@ pub async fn rollback(
         "artifact_hash": out.artifact_hash,
         "log": out.log,
     })))
+}
+
+/// Run a lifecycle action (`stop`/`start`/`restart`) and persist the state.
+async fn lifecycle(
+    state: &AppState,
+    app: &Application,
+    action: &str,
+) -> Result<Json<serde_json::Value>> {
+    ensure_local(app)?;
+    let spec = spec_for(&state.cfg, app);
+    let runtime = runtime_for(&state.cfg, &app.runtime);
+    match action {
+        "stop" => runtime.stop(&spec).await?,
+        "start" => runtime.start(&spec).await?,
+        _ => runtime.restart(&spec).await?,
+    }
+    let st = runtime.status(&spec).await.unwrap_or(RunState::Unknown);
+    sqlx::query("UPDATE applications SET status = ?, updated_at = datetime('now') WHERE id = ?")
+        .bind(st.as_status())
+        .bind(&app.id)
+        .execute(&state.pool)
+        .await?;
+    Ok(Json(serde_json::json!({ "state": st })))
+}
+
+/// `POST /api/v1/apps/{id}/stop`
+pub async fn stop(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>> {
+    let app = fetch_app(&state.pool, &id).await?;
+    lifecycle(&state, &app, "stop").await
+}
+
+/// `POST /api/v1/apps/{id}/start`
+pub async fn start(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>> {
+    let app = fetch_app(&state.pool, &id).await?;
+    lifecycle(&state, &app, "start").await
+}
+
+/// `POST /api/v1/apps/{id}/restart`
+pub async fn restart(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>> {
+    let app = fetch_app(&state.pool, &id).await?;
+    lifecycle(&state, &app, "restart").await
+}
+
+/// `PATCH /api/v1/apps/{id}` — edit an application (and its placement).
+pub async fn update(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<UpdateApp>,
+) -> Result<Json<serde_json::Value>> {
+    let app = fetch_app(&state.pool, &id).await?;
+
+    let runtime = input.runtime.unwrap_or_else(|| app.runtime.clone());
+    if !matches!(runtime.as_str(), "systemd" | "proc") {
+        return Err(Error::BadRequest(
+            "runtime must be 'systemd' or 'proc'".into(),
+        ));
+    }
+    let server_id = input.server_id.unwrap_or_else(|| app.server_id.clone());
+    let exists: i64 = sqlx::query_scalar("SELECT count(*) FROM servers WHERE id = ?")
+        .bind(&server_id)
+        .fetch_one(&state.pool)
+        .await?;
+    if exists == 0 {
+        return Err(Error::BadRequest(format!("unknown server '{server_id}'")));
+    }
+
+    let port = input.port.map(|p| p as i64).unwrap_or(app.port);
+    let updated = sqlx::query_as::<_, Application>(
+        "UPDATE applications SET description = ?, args = ?, port = ?, health_path = ?, \
+         metrics_path = ?, domain = ?, runtime = ?, auto_restart = ?, server_id = ?, \
+         updated_at = datetime('now') WHERE id = ? RETURNING *",
+    )
+    .bind(input.description.or(app.description))
+    .bind(input.args.or(app.args))
+    .bind(port)
+    .bind(input.health_path.unwrap_or(app.health_path))
+    .bind(input.metrics_path.or(app.metrics_path))
+    .bind(input.domain.or(app.domain))
+    .bind(&runtime)
+    .bind(input.auto_restart.unwrap_or(app.auto_restart) as i64)
+    .bind(&server_id)
+    .bind(&id)
+    .fetch_one(&state.pool)
+    .await?;
+
+    // Keep the placement in sync (single-placement model).
+    sqlx::query("UPDATE app_servers SET server_id = ?, port = ? WHERE application_id = ?")
+        .bind(&server_id)
+        .bind(port)
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
+
+    let _ = refresh_proxy_routes(&state).await;
+    Ok(Json(serde_json::json!({ "application": updated })))
 }
 
 /// `GET /api/v1/apps/{id}/stats`

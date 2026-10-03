@@ -1,6 +1,6 @@
 //! Router assembly and process bootstrap.
 
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::Router;
 use tower_http::trace::TraceLayer;
 
@@ -15,13 +15,26 @@ pub fn build_router(state: AppState) -> Router {
         .route("/apps", get(routes::apps::list).post(routes::apps::create))
         .route(
             "/apps/{id}",
-            get(routes::apps::get).delete(routes::apps::delete),
+            get(routes::apps::get)
+                .delete(routes::apps::delete)
+                .patch(routes::apps::update),
         )
         .route("/apps/{id}/deploy", post(routes::apps::deploy))
         .route("/apps/{id}/rollback", post(routes::apps::rollback))
+        .route("/apps/{id}/stop", post(routes::apps::stop))
+        .route("/apps/{id}/start", post(routes::apps::start))
+        .route("/apps/{id}/restart", post(routes::apps::restart))
         .route("/apps/{id}/stats", get(routes::apps::stats))
         .route("/apps/{id}/visitors", get(routes::apps::visitors))
         .route("/apps/{id}/deployments", get(routes::apps::deployments))
+        .route(
+            "/apps/{id}/domains",
+            get(routes::domains::list).post(routes::domains::add),
+        )
+        .route(
+            "/apps/{id}/domains/{domain}",
+            delete(routes::domains::delete),
+        )
         .route("/apps/{id}/logs", get(routes::logs::stream))
         .route("/apps/{id}/env", get(routes::env::list))
         .route(

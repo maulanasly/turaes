@@ -64,7 +64,7 @@ Hand-rolled hash router (`lib/router.js`), deep-link/back/refresh safe.
 |---|---|---|
 | **UX-P0** | router + shell + nav, toasts + confirm, server-name mapping, auth gating, keyboard/focus, loading infra, terminology, **light mode** | 🔄 |
 | **UX-P1** | app detail tabs (Overview/Deployments/Environment/Logs/Settings), env editor, logs controls, chart a11y, timestamp consistency | 🔄 |
-| **UX-P2** | Servers list + detail (agent version/last-seen), placement select, Validate/Bootstrap UI, lifecycle (stop/start/restart/delete/edit), domain aliases | ⏳ |
+| **UX-P2** | Servers list + detail (agent version/last-seen), placement select, Validate/Bootstrap UI, lifecycle (stop/start/restart/delete/edit), domain aliases | ✅ |
 | **UX-P3** | search/filter/sort, responsive, favicon/theme-color, build-id detail | ⏳ |
 
 ## API additions (additive, no migrations)
