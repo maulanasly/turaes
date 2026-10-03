@@ -214,6 +214,32 @@ async fn serve(cfg: Arc<Config>) {
         .unwrap_or_else(|e| fatal(format!("failed to bind {addr}: {e}")));
     tracing::info!(%addr, "turaes listening");
     axum::serve(listener, router)
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .unwrap_or_else(|e| fatal(e));
+}
+
+/// Resolve on SIGTERM/SIGINT so the API drains in-flight requests on restart.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let term = async {
+        use tokio::signal::unix::{signal, SignalKind};
+        match signal(SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let term = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = term => {}
+    }
+    tracing::info!("shutdown signal received; draining in-flight requests");
 }

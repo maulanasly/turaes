@@ -74,9 +74,18 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
             set -e
+            # Keep the previous binary for auto-rollback.
+            cp -f /usr/local/bin/turaes /usr/local/bin/turaes.previous
             install -m 0755 /tmp/turaes /usr/local/bin/turaes
             rm -f /tmp/turaes
+            # Control restarts drain in-flight API requests (graceful shutdown);
+            # the edge (if running) keeps serving traffic independently.
             systemctl restart turaes
             sleep 1
-            systemctl is-active turaes
-            curl -fsS http://127.0.0.1:8787/health || true
+            if ! curl -fsS http://127.0.0.1:8787/health >/dev/null; then
+              echo "health check failed; rolling back"
+              install -m 0755 /usr/local/bin/turaes.previous /usr/local/bin/turaes
+              systemctl restart turaes
+              exit 1
+            fi
+            echo "turaes healthy"

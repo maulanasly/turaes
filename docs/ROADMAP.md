@@ -32,6 +32,12 @@ Status legend: ✅ done · 🔄 in progress · ⏳ planned
 > shipped; N1+ pending a second node).
 >
 > **Backlog:** ACME webroot route — done (proxy serves `/.well-known/acme-challenge/`).
+>
+> **SRE reliability work:** [SRE-REVIEW.md](./SRE-REVIEW.md) ·
+> [PLAN-ZERO-DOWNTIME.md](./PLAN-ZERO-DOWNTIME.md). In progress: zero-downtime
+> control/edge + app blue/green. **Backlog:** exposure (Tailscale admin +
+> Cloudflare Tunnel/Access), backups/DR, pre-migration snapshots, patch
+> automation, resource limits, platform `/metrics` + alerting.
 
 ## Timeline
 

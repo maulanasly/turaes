@@ -1,0 +1,65 @@
+# Plan — zero-downtime deploys
+
+Make control, edge, and app releases happen without dropping traffic.
+
+## Root causes
+
+- One process binds :80/:443 **and** serves the API; `systemctl restart` drops
+  traffic; `axum::serve` has no graceful shutdown.
+- App units restart with a gap (old stopped before new is up).
+- Migrations run at boot.
+
+## Decisions
+
+| Decision | Choice |
+|---|---|
+| Edge upgrade | **Pingora native fd-handoff** (`SIGQUIT` + upgrade socket) — covers TLS |
+| Control API | **graceful shutdown** (drain on SIGTERM) |
+| Slots | derived `port` / `port + runtime.slot_offset` + `applications.active_port` |
+| Scope | **systemd local apps first**, `proc` best-effort, agent/remote deferred |
+| Drain window | `runtime.drain_secs` (default 10s) |
+
+## Phase 3 — control + edge
+
+**3.1 Control graceful shutdown.** `axum::serve(...).with_graceful_shutdown()`
+on SIGTERM/SIGINT; systemd `Restart=always` unaffected.
+
+**3.2 Split roles.** Run the edge as its own service (`deploy/turaes-edge.service`)
+and set the control's `TURAES_PROXY_ENABLED=false` in prod. Control restarts no
+longer touch traffic; the edge serves its last routes/certs.
+
+**3.3 Edge fd-handoff.** `turaes edge --upgrade-sock <path>` (+ `-u`) configures
+Pingora's `ServerConf`; upgrades: install new binary → signal the running server
+(`SIGQUIT`) → start the new process with `-u`, which inherits the listeners →
+old process drains and exits.
+
+**3.4 Deploy.** Atomic install with a `.previous` copy; health-gate `/health`
+(control) + a proxy probe; auto-rollback on failure (`scripts/` / `release.yml`).
+
+## Phase 4 — app blue/green
+
+**4.1 Model (migration 006).** `applications.active_port INTEGER NULL`; slot A =
+`port`, slot B = `port + slot_offset`. Routes use `active_port.unwrap_or(port)`.
+
+**4.2 Runtime.** `AppSpec.slot`; slot-scoped unit name (`{name}-a|b.service`),
+env `PORT`, state dir, pid/log.
+
+**4.3 Flow.** deploy → start **inactive** slot → health-gate on its port →
+publish routes (`ArcSwap`) → after `drain_secs` stop the old slot (kept for
+rollback). On failure keep the blue slot, mark failed.
+
+**4.4 Rollback.** Flip `active_port` back, or reinstall the previous artifact and
+cut over.
+
+## Verification
+
+- Unit tests for slot unit rendering + route selection.
+- Local blue/green smoke: deploy v1 → active A; deploy v2 → B healthy →
+  `active_port` flips, old stopped; failure keeps blue; traffic through the
+  cutover has **zero failed requests**.
+- `make verify`, then CI → `release.yml`.
+
+## Backlog (deferred)
+
+Exposure (Tailscale admin + Cloudflare Tunnel/Access), backups/DR,
+pre-migration snapshot, patching, resource limits, `/metrics`+alerting.
