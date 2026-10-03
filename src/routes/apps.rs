@@ -351,6 +351,7 @@ pub async fn delete(State(state): State<AppState>, Path(id): Path<String>) -> Re
     let app = fetch_app(&state.pool, &id).await?;
     let runtime = runtime_for(&state.cfg, &app.runtime);
     let offset = state.cfg.runtime.slot_offset as i64;
+    let _ = runtime.remove(&spec_for(&state.cfg, &app)).await;
     for (slot, port) in [(Slot::A, app.port), (Slot::B, app.port + offset)] {
         let spec = spec_for_slot(&state.cfg, &app, Some(slot), port as u16);
         let _ = runtime.remove(&spec).await;
@@ -440,15 +441,37 @@ pub async fn deploy_app_source(
     let port_b = app.port + offset;
 
     // Target the inactive slot; remember the previous slot to drain on success.
-    let (slot, port, drain): (Slot, i64, Option<(Slot, i64)>) = match app.active_port {
-        None => (Slot::A, port_a, None),
-        Some(active) if active == port_b => (Slot::A, port_a, Some((Slot::B, port_b))),
-        Some(_) => (Slot::B, port_b, Some((Slot::A, port_a))),
-    };
+    let runtime = runtime_for(&state.cfg, &app.runtime);
+
+    // (target slot, target port, previous spec, previous is legacy-unslotted)
+    let (slot, port, previous, prev_legacy): (Slot, i64, Option<AppSpec>, bool) =
+        match app.active_port {
+            None => {
+                // Migrate a running legacy (unslotted) unit to slot B without a
+                // port clash; a never-deployed app starts on slot A.
+                let legacy = spec_for(&state.cfg, app);
+                if matches!(runtime.status(&legacy).await, Ok(RunState::Running)) {
+                    (Slot::B, port_b, Some(legacy), true)
+                } else {
+                    (Slot::A, port_a, None, false)
+                }
+            }
+            Some(active) if active == port_b => (
+                Slot::A,
+                port_a,
+                Some(spec_for_slot(&state.cfg, app, Some(Slot::B), port_b as u16)),
+                false,
+            ),
+            Some(_) => (
+                Slot::B,
+                port_b,
+                Some(spec_for_slot(&state.cfg, app, Some(Slot::A), port_a as u16)),
+                false,
+            ),
+        };
 
     let mut spec = spec_for_slot(&state.cfg, app, Some(slot), port as u16);
     spec.binary_path = source;
-    let runtime = runtime_for(&state.cfg, &app.runtime);
     let dep_id = uuid::Uuid::new_v4().to_string();
 
     sqlx::query(
@@ -498,11 +521,15 @@ pub async fn deploy_app_source(
     .await?;
     let _ = refresh_proxy_routes(state).await;
 
-    // Drain the previous slot after a short window.
-    if let Some((drain_slot, drain_port)) = drain {
-        let drain_spec = spec_for_slot(&state.cfg, app, Some(drain_slot), drain_port as u16);
+    // Drain/replace the previous instance after a short window.
+    if let Some(prev) = previous {
         tokio::time::sleep(std::time::Duration::from_secs(state.cfg.runtime.drain_secs)).await;
-        let _ = runtime.stop(&drain_spec).await;
+        if prev_legacy {
+            // Legacy unslotted unit is superseded by the slots.
+            let _ = runtime.remove(&prev).await;
+        } else {
+            let _ = runtime.stop(&prev).await;
+        }
     }
 
     Ok((dep_id, out))
