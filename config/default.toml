@@ -45,6 +45,8 @@ dashboard_host = ""
 # Address the edge role uses to reach the control plane (dashboard route).
 # Empty = the edge omits the dashboard route.
 control_address = ""
+# Served at /.well-known/acme-challenge/ for certbot webroot renewals.
+acme_webroot = "/var/lib/turaes/acme"
 
 [monitor]
 # Seconds between health checks and /metrics scrapes.

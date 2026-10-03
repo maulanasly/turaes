@@ -51,13 +51,13 @@ pub enum Command {
         #[arg(long, env = "TURAES_AGENT_TOKEN")]
         token: String,
         /// Node name (unique in the fleet).
-        #[arg(long)]
+        #[arg(long, env = "TURAES_AGENT_NAME")]
         name: String,
         /// Reachable address advertised to the control plane.
-        #[arg(long, default_value = "")]
+        #[arg(long, env = "TURAES_AGENT_ADDRESS", default_value = "")]
         address: String,
         /// Heartbeat interval in seconds.
-        #[arg(long, default_value_t = 15)]
+        #[arg(long, env = "TURAES_AGENT_INTERVAL", default_value_t = 15)]
         interval: u64,
     },
     /// Run as a standalone Pingora edge that pulls routes from the control plane.
@@ -103,6 +103,11 @@ pub enum ServerCommand {
     List,
     /// Remove a server by id or name.
     Remove {
+        /// Server id or name.
+        id: String,
+    },
+    /// Install + start the turaes agent on the node over SSH.
+    Bootstrap {
         /// Server id or name.
         id: String,
     },

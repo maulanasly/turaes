@@ -162,6 +162,7 @@ The deploy is idempotent. On failure the app is marked `failed` and the error is
 | `GET` | `/api/v1/servers/{id}` | Fetch one |
 | `DELETE` | `/api/v1/servers/{id}` | Remove a node (not `local`; refuses if apps are placed) |
 | `POST` | `/api/v1/servers/{id}/validate` | Reachability (TCP to SSH for remote) |
+| `POST` | `/api/v1/servers/{id}/bootstrap` | SSH: install + start the turaes agent on the node |
 
 SSH keys are sealed at rest and never returned. See
 [PLAN-MULTINODE.md](./PLAN-MULTINODE.md).

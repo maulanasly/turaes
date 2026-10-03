@@ -68,6 +68,11 @@ pub async fn run_server(state: &AppState, cmd: ServerCommand) -> Result<()> {
         }
         ServerCommand::List => server_list(&state.pool).await,
         ServerCommand::Remove { id } => server_remove(state, &id).await,
+        ServerCommand::Bootstrap { id } => {
+            let output = crate::routes::servers::run_bootstrap(state, &id).await?;
+            println!("{output}");
+            Ok(())
+        }
     }
 }
 
