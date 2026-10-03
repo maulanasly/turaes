@@ -18,7 +18,7 @@ turaes itself is a single binary with an embedded UI.
 | Binary | `/usr/local/bin/turaes` — built in GitHub Actions (no Rust on the box) |
 | Config | `/etc/turaes/turaes.env` (mode 0600) |
 | Data | `/var/lib/turaes/turaes.db` |
-| Cert | `/etc/letsencrypt/live/turaes.rayakala.ink/` (renew hooks stop/start turaes) |
+| Cert | `/etc/letsencrypt/live/turaes.rayakala.ink/` (webroot renewals; proxy reloads on change) |
 | App | `beruang` → `beruang.service`, loopback `:8000` |
 
 ```bash
@@ -141,15 +141,22 @@ Use `proc` to run turaes as a non-root user (no systemd unit generation).
 turaes does **not** do ACME itself; it loads certs issued by certbot into the
 standard layout `{CERT_DIR}/{domain}/{fullchain.pem,privkey.pem}`.
 
+Use the **webroot** plugin — the proxy serves
+`/.well-known/acme-challenge/<token>` from `proxy.acme_webroot`
+(`TURAES_ACME_WEBROOT`, default `/var/lib/turaes/acme`), so no port needs to be
+freed:
+
 ```bash
-sudo apt-get install -y certbot
-sudo certbot certonly --standalone \
-  -d kalkulator.rayakala.ink \
-  --agree-tos -m ops@rayakala.ink --non-interactive
+sudo mkdir -p /var/lib/turaes/acme
+sudo certbot certonly --webroot -w /var/lib/turaes/acme \
+  -d turaes.rayakala.ink --agree-tos -m ops@rayakala.ink --non-interactive
 ```
 
-Renewal (`systemctl enable --now certbot.timer`) updates the files; turaes
-reloads the proxy gracefully (M2) so no downtime is required.
+Renewal (`systemctl enable --now certbot.timer`) rewrites the files; the proxy
+reloads a certificate automatically when its file mtime changes, and the edge
+pulls updated certs from the control plane — **no restart and no downtime**.
+(For multiple hosts, add a `[[webroot_map]]` entry per domain or pass `-d` per
+cert.)
 
 ## 5. First app: beruang
 
