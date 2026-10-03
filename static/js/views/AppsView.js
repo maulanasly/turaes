@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback } from "preact/hooks";
 import { api } from "../lib/api.js";
 import { toast } from "../lib/toast.js";
 import { serverName, runtimeLabel } from "../lib/format.js";
+import { sortApps } from "../lib/sort.js";
 import { StatusBadge } from "../components/StatusBadge.js";
 import { Skeleton } from "../components/Skeleton.js";
 
@@ -72,6 +73,7 @@ export function AppsView({ user, servers }) {
   const [apps, setApps] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [q, setQ] = useState("");
+  const [sortKey, setSortKey] = useState("name");
 
   const load = useCallback(async () => {
     try {
@@ -85,8 +87,10 @@ export function AppsView({ user, servers }) {
 
   useEffect(() => { load(); }, [load]);
 
-  const filtered = (apps || []).filter((a) =>
-    !q || a.name.includes(q) || (a.domain || "").includes(q),
+  const filtered = sortApps(
+    (apps || []).filter((a) => !q || a.name.includes(q) || (a.domain || "").includes(q)),
+    sortKey,
+    (id) => serverName(servers, id),
   );
 
   return html`
@@ -96,6 +100,13 @@ export function AppsView({ user, servers }) {
         <div class="controls">
           <input class="search" placeholder="Search…" value=${q}
             onInput=${(e) => setQ(e.target.value)} />
+          <select value=${sortKey} onChange=${(e) => setSortKey(e.target.value)} aria-label="Sort by">
+            <option value="name">Sort: name</option>
+            <option value="status">Sort: status</option>
+            <option value="server">Sort: server</option>
+            <option value="port">Sort: port</option>
+            <option value="recent">Sort: recently updated</option>
+          </select>
           ${user && html`<button class="btn" onClick=${() => setShowAdd((v) => !v)}>
             ${showAdd ? "Close" : "+ New app"}
           </button>`}
