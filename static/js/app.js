@@ -90,7 +90,7 @@ function AppCard({ app, selected, onSelect, onDeploy }) {
     </div>`;
 }
 
-function Detail({ app, hours, data, deployments }) {
+function Detail({ app, hours, data, deployments, env, onSetEnv, onDelEnv }) {
   const metrics = data?.metrics || [];
   const visitors = data?.visitors || [];
   const cpu = metrics.map((m) => ({ x: parseTs(m.recorded_at), y: m.cpu_pct }));
@@ -155,6 +155,34 @@ function Detail({ app, hours, data, deployments }) {
                     : null}`)}
               </tbody>
             </table>`}
+      </div>
+      <div>
+        <h2 style="margin-bottom:8px">Environment</h2>
+        ${!env || env.length === 0
+          ? html`<p class="muted">No variables.</p>`
+          : html`<table>
+              <thead><tr><th>Key</th><th>Set</th><th></th></tr></thead>
+              <tbody>
+                ${env.map((e) => html`
+                  <tr>
+                    <td class="mono">${e.key}</td>
+                    <td class="muted">${e.created_at}</td>
+                    <td><button class="btn small ghost" onClick=${() => onDelEnv(e.key)}>Remove</button></td>
+                  </tr>`)}
+              </tbody>
+            </table>`}
+        <form class="form" style="margin-top:10px" onSubmit=${(ev) => {
+          ev.preventDefault();
+          const fd = new FormData(ev.target);
+          onSetEnv(fd.get("key"), fd.get("value"));
+          ev.target.reset();
+        }}>
+          <div class="row">
+            <label>Key <input name="key" placeholder="API_KEY" required /></label>
+            <label>Value <input name="value" placeholder="…" required /></label>
+          </div>
+          <div><button class="btn" type="submit">Save variable</button> <span class="muted">redeploy to apply</span></div>
+        </form>
       </div>
     </div>`;
 }
@@ -237,6 +265,7 @@ function Dashboard() {
   const [apps, setApps] = useState([]);
   const [servers, setServers] = useState([]);
   const [deployments, setDeployments] = useState([]);
+  const [env, setEnv] = useState([]);
   const [selected, setSelected] = useState(null);
   const [hours, setHours] = useState(1);
   const [data, setData] = useState({});
@@ -287,15 +316,44 @@ function Dashboard() {
     } catch { setDeployments([]); }
   }, []);
 
+  const loadEnv = useCallback(async (id) => {
+    if (!id) { setEnv([]); return; }
+    try {
+      const r = await api(`/api/v1/apps/${id}/env`);
+      setEnv(r.env || []);
+    } catch { setEnv([]); }
+  }, []);
+
+  const setEnvVar = useCallback(async (id, key, value) => {
+    try {
+      await api(`/api/v1/apps/${id}/env/${encodeURIComponent(key)}`, {
+        method: "PUT",
+        body: JSON.stringify({ value }),
+      });
+    } catch (e) { setError(e.message); }
+    loadEnv(id);
+  }, [loadEnv]);
+
+  const delEnvVar = useCallback(async (id, key) => {
+    try {
+      await api(`/api/v1/apps/${id}/env/${encodeURIComponent(key)}`, { method: "DELETE" });
+    } catch (e) { setError(e.message); }
+    loadEnv(id);
+  }, [loadEnv]);
+
   useEffect(() => { loadUser(); loadApps(); loadServers(); }, [loadUser, loadApps, loadServers]);
-  useEffect(() => { loadDetail(selected, hours); loadDeployments(selected); }, [selected, hours, loadDetail, loadDeployments]);
+  useEffect(() => {
+    loadDetail(selected, hours);
+    loadDeployments(selected);
+    loadEnv(selected);
+  }, [selected, hours, loadDetail, loadDeployments, loadEnv]);
   useEffect(() => {
     const t = setInterval(() => {
       loadApps(); loadServers();
-      if (selected) { loadDetail(selected, hours); loadDeployments(selected); }
+      if (selected) { loadDetail(selected, hours); loadDeployments(selected); loadEnv(selected); }
     }, 15000);
     return () => clearInterval(t);
-  }, [loadApps, loadServers, loadDetail, loadDeployments, selected, hours]);
+  }, [loadApps, loadServers, loadDetail, loadDeployments, loadEnv, selected, hours]);
 
   const deploy = async (id) => {
     try { await api(`/api/v1/apps/${id}/deploy`, { method: "POST" }); } catch (e) { setError(e.message); }
@@ -358,7 +416,15 @@ function Dashboard() {
               <button class="btn small ghost" onClick=${() => rollback(selectedApp.id)}>Rollback</button>
             </div>
           </div>
-          <${Detail} app=${selectedApp} hours=${hours} data=${data} deployments=${deployments} />
+          <${Detail}
+            app=${selectedApp}
+            hours=${hours}
+            data=${data}
+            deployments=${deployments}
+            env=${env}
+            onSetEnv=${(k, v) => setEnvVar(selectedApp.id, k, v)}
+            onDelEnv=${(k) => delEnvVar(selectedApp.id, k)}
+          />
         </section>`}
     </main>`;
 }
