@@ -19,6 +19,23 @@ service Control {
   rpc Report(ReportRequest) returns (ReportResponse);
   // Push per-app resource + visitor metrics.
   rpc PushMetrics(MetricsRequest) returns (MetricsResponse);
+  // Edge role: fetch the current route table (host -> backend).
+  rpc EdgeRoutes(EdgeRoutesRequest) returns (EdgeRoutesResponse);
+}
+
+message EdgeRoutesRequest {
+  string token = 1;
+}
+
+message EdgeRoute {
+  string host = 1;
+  string address = 2;
+  uint32 port = 3;
+  bool tls = 4;
+}
+
+message EdgeRoutesResponse {
+  repeated EdgeRoute routes = 1;
 }
 
 message RegisterRequest {

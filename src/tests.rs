@@ -625,6 +625,53 @@ async fn env_crud_does_not_leak_values() {
 }
 
 #[tokio::test]
+async fn edge_routes_lists_apps_and_rejects_bad_token() {
+    use crate::grpc::pb::EdgeRoutesRequest;
+
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+
+    let payload = json!({
+        "name": "edgeapp", "binary_path": "/usr/bin/true", "port": 9900, "domain": "app.test"
+    });
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/apps")
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    assert!(crate::grpc::edge_routes(
+        &state,
+        EdgeRoutesRequest {
+            token: "bad".into()
+        }
+    )
+    .await
+    .is_err());
+
+    let resp = crate::grpc::edge_routes(
+        &state,
+        EdgeRoutesRequest {
+            token: "test-join".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(resp
+        .routes
+        .iter()
+        .any(|r| r.host == "app.test" && r.address == "127.0.0.1" && r.port == 9900));
+}
+
+#[tokio::test]
 async fn invalid_name_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let router = test_router(dir.path()).await;

@@ -5,6 +5,7 @@ mod app;
 mod auth;
 mod cli;
 mod commands;
+mod edge;
 mod grpc;
 mod monitor;
 mod routes;
@@ -78,6 +79,22 @@ async fn main() {
                     token,
                     name,
                     address,
+                    interval,
+                },
+            )
+            .await
+            .unwrap_or_else(|e| fatal(e));
+        }
+        Command::Edge {
+            control,
+            token,
+            interval,
+        } => {
+            edge::run(
+                cfg,
+                edge::EdgeArgs {
+                    control,
+                    token,
                     interval,
                 },
             )

@@ -25,8 +25,9 @@ pub mod pb {
 
 use pb::control_server::{Control, ControlServer};
 use pb::{
-    DesiredApp, HeartbeatRequest, HeartbeatResponse, MetricsRequest, MetricsResponse, PollRequest,
-    PollResponse, RegisterRequest, RegisterResponse, ReportRequest, ReportResponse,
+    DesiredApp, EdgeRoute, EdgeRoutesRequest, EdgeRoutesResponse, HeartbeatRequest,
+    HeartbeatResponse, MetricsRequest, MetricsResponse, PollRequest, PollResponse, RegisterRequest,
+    RegisterResponse, ReportRequest, ReportResponse,
 };
 
 fn internal(e: impl std::fmt::Display) -> Status {
@@ -85,6 +86,61 @@ impl Control for ControlService {
             push_metrics(&self.state, req.into_inner()).await?,
         ))
     }
+
+    async fn edge_routes(
+        &self,
+        req: Request<EdgeRoutesRequest>,
+    ) -> Result<Response<EdgeRoutesResponse>, Status> {
+        Ok(Response::new(
+            edge_routes(&self.state, req.into_inner()).await?,
+        ))
+    }
+}
+
+/// Return the current route table for the edge role (host → backend address).
+pub async fn edge_routes(
+    state: &AppState,
+    req: EdgeRoutesRequest,
+) -> Result<EdgeRoutesResponse, Status> {
+    use sqlx::Row;
+
+    let expected = &state.cfg.agent.join_token;
+    if expected.is_empty() || &req.token != expected {
+        return Err(Status::unauthenticated("invalid edge token"));
+    }
+
+    let rows = sqlx::query(
+        "SELECT a.domain AS host, a.port AS port, s.address AS address \
+         FROM applications a JOIN servers s ON s.id = a.server_id \
+         WHERE a.domain IS NOT NULL AND a.domain != ''",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(internal)?;
+
+    let mut routes = Vec::with_capacity(rows.len() + 1);
+    for row in rows {
+        let host: String = row.try_get("host").map_err(internal)?;
+        routes.push(EdgeRoute {
+            host: host.to_lowercase(),
+            address: row.try_get("address").map_err(internal)?,
+            port: row.try_get::<i64, _>("port").map_err(internal)? as u32,
+            tls: false,
+        });
+    }
+
+    if !state.cfg.proxy.control_address.is_empty() {
+        if let Some(dashboard) = state.cfg.dashboard_host() {
+            routes.push(EdgeRoute {
+                host: dashboard.to_lowercase(),
+                address: state.cfg.proxy.control_address.clone(),
+                port: state.cfg.server.port as u32,
+                tls: false,
+            });
+        }
+    }
+
+    Ok(EdgeRoutesResponse { routes })
 }
 
 /// Store agent-pushed app metrics into the same 1-minute rollups as the local
