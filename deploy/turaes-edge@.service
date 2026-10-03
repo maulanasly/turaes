@@ -1,5 +1,5 @@
 [Unit]
-Description=turaes edge (Pingora reverse proxy)
+Description=turaes edge (Pingora reverse proxy) [%i]
 Documentation=https://github.com/maulanasly/turaes
 After=network-online.target
 Wants=network-online.target
@@ -8,13 +8,11 @@ Wants=network-online.target
 Type=simple
 # The edge terminates TLS and binds :80/:443, so it runs as root. Keep the
 # control plane (turaes.service) separate so its restarts never drop traffic.
+# Template instances (@a, @b) enable a SO_REUSEPORT rolling replace.
 User=root
 WorkingDirectory=/var/lib/turaes
 EnvironmentFile=-/etc/turaes/edge.env
 ExecStart=/usr/local/bin/turaes edge
-# Graceful upgrade (Pingora fd-handoff): SIGQUIT tells the running server to
-# hand its listeners to the next process. See docs/PLAN-ZERO-DOWNTIME.md.
-ExecReload=/bin/kill -QUIT $MAINPID
 Restart=always
 RestartSec=5
 LimitNOFILE=65535

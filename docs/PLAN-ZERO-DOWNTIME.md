@@ -13,7 +13,7 @@ Make control, edge, and app releases happen without dropping traffic.
 
 | Decision | Choice |
 |---|---|
-| Edge upgrade | **Pingora native fd-handoff** (`SIGQUIT` + upgrade socket) — covers TLS |
+| Edge upgrade | **SO_REUSEPORT rolling** (two template instances) — Pingora's `add_tls_with_settings` accepts `Option<TcpSocketOptions>`, so this covers TLS too |
 | Control API | **graceful shutdown** (drain on SIGTERM) |
 | Slots | derived `port` / `port + runtime.slot_offset` + `applications.active_port` |
 | Scope | **systemd local apps first**, `proc` best-effort, agent/remote deferred |
@@ -28,10 +28,12 @@ on SIGTERM/SIGINT; systemd `Restart=always` unaffected.
 and set the control's `TURAES_PROXY_ENABLED=false` in prod. Control restarts no
 longer touch traffic; the edge serves its last routes/certs.
 
-**3.3 Edge fd-handoff.** `turaes edge --upgrade-sock <path>` (+ `-u`) configures
-Pingora's `ServerConf`; upgrades: install new binary → signal the running server
-(`SIGQUIT`) → start the new process with `-u`, which inherits the listeners →
-old process drains and exits.
+**3.3 Edge rolling replace (SO_REUSEPORT).** `proxy.reuse_port=true` makes the
+edge bind :80/:443 with `SO_REUSEPORT`, so `deploy/turaes-edge@.service`
+instances can coexist. Upgrade: install the new binary → start the idle
+instance (`@b`) → confirm active → stop the previous instance (`@a`) → record
+the active slot in `/var/lib/turaes/edge-active`. The kernel load-balances
+across both during the overlap, so no request is dropped.
 
 **3.4 Deploy.** Atomic install with a `.previous` copy; health-gate `/health`
 (control) + a proxy probe; auto-rollback on failure (`scripts/` / `release.yml`).

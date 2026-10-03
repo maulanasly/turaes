@@ -126,6 +126,10 @@ pub struct ProxyConfig {
     /// renewals (so turaes need not be stopped to free port 80).
     #[serde(default = "default_acme_webroot")]
     pub acme_webroot: String,
+    /// Enable `SO_REUSEPORT` so two edge instances can bind :80/:443 during a
+    /// zero-downtime rolling replace.
+    #[serde(default)]
+    pub reuse_port: bool,
 }
 
 fn default_acme_webroot() -> String {
@@ -349,6 +353,7 @@ fn apply_env(cfg: &mut Config) -> Result<()> {
         &mut cfg.proxy.control_address,
     );
     env_str("TURAES_ACME_WEBROOT", &mut cfg.proxy.acme_webroot);
+    env_bool("TURAES_PROXY_REUSE_PORT", &mut cfg.proxy.reuse_port);
 
     env_parse(
         "TURAES_MONITOR_INTERVAL_SECS",

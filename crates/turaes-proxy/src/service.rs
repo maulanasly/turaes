@@ -92,7 +92,7 @@ mod pingora_impl {
 
     use async_trait::async_trait;
     use pingora::listeners::tls::TlsSettings;
-    use pingora::listeners::TlsAccept;
+    use pingora::listeners::{TcpSocketOptions, TlsAccept};
     use pingora::prelude::*;
     use pingora::protocols::tls::TlsRef;
     use pingora::tls::pkey::{PKey, Private};
@@ -334,16 +334,23 @@ mod pingora_impl {
             counter: std::sync::atomic::AtomicUsize::new(0),
         };
         let mut service = http_proxy_service(&server.configuration, gateway);
-        service.add_tcp(&format!("0.0.0.0:{}", proxy_cfg.http_port));
+        // SO_REUSEPORT lets a rolling replace bind the same ports alongside the
+        // old edge instance (zero-downtime edge upgrades).
+        let reuse = proxy_cfg.reuse_port;
+        let mut http_opts = TcpSocketOptions::default();
+        http_opts.so_reuseport = reuse.then_some(true);
+        service.add_tcp_with_settings(&format!("0.0.0.0:{}", proxy_cfg.http_port), http_opts);
 
         if let Some(host) = state.dashboard_host.as_deref() {
             match SniCertStore::new(state.certs.clone(), host) {
                 Ok(store) => match TlsSettings::with_callbacks(Box::new(store)) {
                     Ok(mut tls) => {
                         tls.enable_h2();
+                        let mut tls_opts = TcpSocketOptions::default();
+                        tls_opts.so_reuseport = reuse.then_some(true);
                         service.add_tls_with_settings(
                             &format!("0.0.0.0:{}", proxy_cfg.https_port),
-                            None,
+                            Some(tls_opts),
                             tls,
                         );
                         tracing::info!(

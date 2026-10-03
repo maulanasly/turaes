@@ -47,6 +47,8 @@ dashboard_host = ""
 control_address = ""
 # Served at /.well-known/acme-challenge/ for certbot webroot renewals.
 acme_webroot = "/var/lib/turaes/acme"
+# SO_REUSEPORT: allow two edge instances to bind :80/:443 for rolling replaces.
+reuse_port = false
 
 [monitor]
 # Seconds between health checks and /metrics scrapes.

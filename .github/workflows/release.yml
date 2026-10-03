@@ -88,4 +88,21 @@ jobs:
               systemctl restart turaes
               exit 1
             fi
+            # Zero-downtime edge replace via SO_REUSEPORT rolling instances.
+            # No-op until the edge is enabled on this host.
+            if systemctl is-active --quiet 'turaes-edge@a' || systemctl is-active --quiet 'turaes-edge@b'; then
+              CUR=$(cat /var/lib/turaes/edge-active 2>/dev/null || echo a)
+              NEXT=$([ "$CUR" = a ] && echo b || echo a)
+              systemctl start "turaes-edge@$NEXT"
+              sleep 2
+              if systemctl is-active --quiet "turaes-edge@$NEXT"; then
+                systemctl stop "turaes-edge@$CUR" || true
+                echo "$NEXT" > /var/lib/turaes/edge-active
+                echo "edge rolled to @$NEXT"
+              else
+                echo "edge @$NEXT failed to start; keeping @$CUR"
+                systemctl stop "turaes-edge@$NEXT" || true
+                exit 1
+              fi
+            fi
             echo "turaes healthy"
