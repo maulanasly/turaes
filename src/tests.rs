@@ -871,6 +871,32 @@ async fn domains_crud() {
 }
 
 #[tokio::test]
+async fn logout_clears_session_cookie_with_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/logout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    let set_cookie = resp
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(set_cookie.contains("turaes_session="), "{set_cookie}");
+    assert!(set_cookie.contains("Path=/"), "{set_cookie}");
+}
+
+#[tokio::test]
 async fn invalid_name_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let router = test_router(dir.path()).await;

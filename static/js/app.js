@@ -3,6 +3,7 @@ import { render } from "preact";
 import { useEffect, useState, useCallback } from "preact/hooks";
 import { html } from "./lib/html.js";
 import { api } from "./lib/api.js";
+import { toast } from "./lib/toast.js";
 import { useRoute, pathFor } from "./lib/router.js";
 import { Toasts } from "./components/Toasts.js";
 import { ConfirmHost } from "./components/ConfirmHost.js";
@@ -68,7 +69,13 @@ function Shell() {
         ${user === undefined ? null : user
           ? html`<span class="muted small">${user.login}</span>
               <button class="btn small ghost" onClick=${async () => {
-                await api("/auth/logout", { method: "POST" }); setUser(null);
+                try {
+                  await api("/auth/logout", { method: "POST" });
+                } catch (e) {
+                  toast.error(e.message);
+                  return;
+                }
+                location.assign("/");
               }}>Sign out</button>`
           : html`<a class="btn small" href="/auth/login">Sign in</a>`}
       </div>
