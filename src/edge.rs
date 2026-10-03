@@ -43,37 +43,51 @@ pub async fn run(cfg: Arc<Config>, args: EdgeArgs) -> Result<()> {
         "edge proxy started"
     );
 
-    let mut client = pb::control_client::ControlClient::connect(args.control.clone())
-        .await
-        .map_err(|e| {
-            turaes_core::Error::Internal(format!("failed to connect to {}: {e}", args.control))
-        })?;
-
     let interval = Duration::from_secs(args.interval.max(5));
+
+    // Keep serving even if the control plane is temporarily unreachable:
+    // reconnect and keep the last published routes.
     loop {
-        match client
-            .edge_routes(pb::EdgeRoutesRequest {
-                token: args.token.clone(),
-            })
+        let mut client = match pb::control_client::ControlClient::connect(args.control.clone())
             .await
         {
-            Ok(resp) => {
-                let mut routes = HashMap::new();
-                for r in resp.into_inner().routes {
-                    routes.insert(
-                        r.host.to_lowercase(),
-                        Upstream {
-                            host: r.address,
-                            port: r.port as u16,
-                            tls: r.tls,
-                        },
-                    );
-                }
-                let count = routes.len();
-                router.publish(RouteTable::new(cfg.server.base_domain.clone(), routes));
-                tracing::debug!(routes = count, "edge routes updated");
+            Ok(client) => client,
+            Err(e) => {
+                tracing::warn!(control = %args.control, error = %e, "edge: control plane unreachable; retrying");
+                tokio::time::sleep(interval).await;
+                continue;
             }
-            Err(e) => tracing::warn!(error = %e.message(), "edge route fetch failed"),
+        };
+
+        loop {
+            match client
+                .edge_routes(pb::EdgeRoutesRequest {
+                    token: args.token.clone(),
+                })
+                .await
+            {
+                Ok(resp) => {
+                    let mut routes = HashMap::new();
+                    for r in resp.into_inner().routes {
+                        routes.insert(
+                            r.host.to_lowercase(),
+                            Upstream {
+                                host: r.address,
+                                port: r.port as u16,
+                                tls: r.tls,
+                            },
+                        );
+                    }
+                    let count = routes.len();
+                    router.publish(RouteTable::new(cfg.server.base_domain.clone(), routes));
+                    tracing::debug!(routes = count, "edge routes updated");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e.message(), "edge: route fetch failed; reconnecting");
+                    break;
+                }
+            }
+            tokio::time::sleep(interval).await;
         }
         tokio::time::sleep(interval).await;
     }
