@@ -161,17 +161,39 @@ pub async fn edge_routes(
         return Err(Status::unauthenticated("invalid edge token"));
     }
 
-    let rows = sqlx::query(
-        "SELECT a.domain AS host, a.port AS port, s.address AS address \
-         FROM applications a JOIN servers s ON s.id = a.server_id \
+    // One EdgeRoute per (host, backend): app domains + aliases over placements.
+    let mut routes = Vec::new();
+
+    let primaries = sqlx::query(
+        "SELECT a.domain AS host, s.address AS address, p.port AS port \
+         FROM app_servers p \
+         JOIN servers s ON s.id = p.server_id \
+         JOIN applications a ON a.id = p.application_id \
          WHERE a.domain IS NOT NULL AND a.domain != ''",
     )
     .fetch_all(&state.pool)
     .await
     .map_err(internal)?;
+    for row in primaries {
+        let host: String = row.try_get("host").map_err(internal)?;
+        routes.push(EdgeRoute {
+            host: host.to_lowercase(),
+            address: row.try_get("address").map_err(internal)?,
+            port: row.try_get::<i64, _>("port").map_err(internal)? as u32,
+            tls: false,
+        });
+    }
 
-    let mut routes = Vec::with_capacity(rows.len() + 1);
-    for row in rows {
+    let aliases = sqlx::query(
+        "SELECT d.domain AS host, s.address AS address, p.port AS port \
+         FROM domains d \
+         JOIN app_servers p ON p.application_id = d.application_id \
+         JOIN servers s ON s.id = p.server_id",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(internal)?;
+    for row in aliases {
         let host: String = row.try_get("host").map_err(internal)?;
         routes.push(EdgeRoute {
             host: host.to_lowercase(),
