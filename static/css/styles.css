@@ -160,6 +160,17 @@ summary { cursor: pointer; color: var(--muted); }
 
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 
+.login { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.login-card { position: relative; width: 100%; max-width: 360px; text-align: center;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 28px 24px; }
+.login-brand { font-size: 28px; font-weight: 700; }
+.login-btn { margin: 16px 0 12px; display: block; }
+.login-error { color: var(--bad); font-size: 13px; margin: 10px 0 0; }
+.login-theme { position: absolute; top: 10px; right: 10px; }
+.spinner { width: 26px; height: 26px; margin: 18px auto 0; border: 3px solid var(--border);
+  border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
 .table-wrap { overflow-x: auto; }
 .break { word-break: break-all; }
 @media (max-width: 720px) {

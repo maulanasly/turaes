@@ -67,6 +67,13 @@ Hand-rolled hash router (`lib/router.js`), deep-link/back/refresh safe.
 | **UX-P2** | Servers list + detail (agent version/last-seen), placement select, Validate/Bootstrap UI, lifecycle (stop/start/restart/delete/edit), domain aliases | ✅ |
 | **UX-P3** | search/filter/sort, responsive, favicon/theme-color, build-id detail | ⏳ |
 
+## Sign-in page
+
+When unauthenticated the SPA renders a standalone **LoginView** (brand, "Sign
+in with GitHub", optional error from `?login_error=`) with **no nav/menu**; OAuth
+failures redirect back to it with a friendly message. The intended deep link is
+restored after sign-in (sessionStorage).
+
 ## API additions (additive, no migrations)
 
 - `PATCH /api/v1/apps/{id}` — edit fields + placement.
