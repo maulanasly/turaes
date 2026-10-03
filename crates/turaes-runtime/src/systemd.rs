@@ -253,6 +253,7 @@ mod tests {
     fn spec() -> AppSpec {
         AppSpec {
             name: "beruang".into(),
+            slot: None,
             binary_path: "/tmp/beruang-gateway".into(),
             installed_path: "/usr/local/bin/beruang-gateway".into(),
             args: None,

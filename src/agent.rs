@@ -278,6 +278,7 @@ async fn reconcile(
 
     let spec = AppSpec {
         name: app.name.clone(),
+        slot: None,
         binary_path: store.path_for(hash)?.to_string_lossy().to_string(),
         installed_path: format!("{}/{}", cfg.runtime.bin_dir, app.name),
         args: if app.args.trim().is_empty() {

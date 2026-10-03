@@ -165,7 +165,7 @@ pub async fn edge_routes(
     let mut routes = Vec::new();
 
     let primaries = sqlx::query(
-        "SELECT a.domain AS host, s.address AS address, p.port AS port \
+        "SELECT a.domain AS host, s.address AS address, COALESCE(a.active_port, p.port) AS port \
          FROM app_servers p \
          JOIN servers s ON s.id = p.server_id \
          JOIN applications a ON a.id = p.application_id \
@@ -185,10 +185,11 @@ pub async fn edge_routes(
     }
 
     let aliases = sqlx::query(
-        "SELECT d.domain AS host, s.address AS address, p.port AS port \
+        "SELECT d.domain AS host, s.address AS address, COALESCE(a.active_port, p.port) AS port \
          FROM domains d \
          JOIN app_servers p ON p.application_id = d.application_id \
-         JOIN servers s ON s.id = p.server_id",
+         JOIN servers s ON s.id = p.server_id \
+         JOIN applications a ON a.id = p.application_id",
     )
     .fetch_all(&state.pool)
     .await

@@ -31,11 +31,11 @@ impl ProcRuntime {
     }
 
     fn pid_path(&self, spec: &AppSpec) -> PathBuf {
-        Path::new(&spec.state_dir).join(format!("{}.pid", spec.name))
+        Path::new(&spec.state_dir).join(format!("{}.pid", spec.instance()))
     }
 
     fn log_path(&self, spec: &AppSpec) -> PathBuf {
-        Path::new(&spec.state_dir).join(format!("{}.log", spec.name))
+        Path::new(&spec.state_dir).join(format!("{}.log", spec.instance()))
     }
 
     async fn read_pid(&self, spec: &AppSpec) -> Option<u32> {
@@ -198,6 +198,7 @@ mod tests {
         let rt = ProcRuntime::new("/tmp");
         let spec = AppSpec {
             name: "demo".into(),
+            slot: None,
             binary_path: "/bin/true".into(),
             installed_path: "/tmp/demo".into(),
             args: None,

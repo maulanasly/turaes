@@ -224,10 +224,11 @@ async fn sample_resources(
     memo: &mut AppMemo,
     elapsed_secs: f64,
 ) {
+    let instance = active_instance(&state.cfg, app);
     let reading = match app.runtime.as_str() {
-        "proc" => read_proc_reading(state, app).await,
+        "proc" => read_proc_reading(state, app, &instance).await,
         _ => {
-            let dir = format!("/sys/fs/cgroup/system.slice/{}.service", app.name);
+            let dir = format!("/sys/fs/cgroup/system.slice/{instance}.service");
             stats::read_cgroup(std::path::Path::new(&dir)).await
         }
     };
@@ -290,11 +291,25 @@ async fn flush_bucket(state: &AppState, app: &Application, memo: &AppMemo) {
     }
 }
 
-async fn read_proc_reading(state: &AppState, app: &Application) -> Option<stats::ResourceStats> {
-    // ProcRuntime writes the pid at {state_dir}/{app}/{app}.pid.
+/// The running blue/green instance name (`name`, `name-a`, or `name-b`).
+fn active_instance(cfg: &turaes_core::config::Config, app: &Application) -> String {
+    let offset = cfg.runtime.slot_offset as i64;
+    match app.active_port {
+        Some(ap) if ap == app.port + offset => format!("{}-b", app.name),
+        Some(_) => format!("{}-a", app.name),
+        None => app.name.clone(),
+    }
+}
+
+async fn read_proc_reading(
+    state: &AppState,
+    app: &Application,
+    instance: &str,
+) -> Option<stats::ResourceStats> {
+    // ProcRuntime writes the pid at {state_dir}/{app}/{instance}.pid.
     let pid_path = format!(
         "{}/{}/{}.pid",
-        state.cfg.runtime.state_dir, app.name, app.name
+        state.cfg.runtime.state_dir, app.name, instance
     );
     let pid = tokio::fs::read_to_string(pid_path).await.ok()?;
     let body = tokio::fs::read_to_string(format!("/proc/{}/stat", pid.trim()))

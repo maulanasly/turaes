@@ -55,6 +55,8 @@ bin_dir = "{base}/bin"
 state_dir = "{base}/state"
 env_dir = "{base}/etc"
 artifact_dir = "{base}/artifacts"
+slot_offset = 1000
+drain_secs = 0
 
 [grpc]
 enabled = false
@@ -239,6 +241,33 @@ async fn create_app(router: &axum::Router, name: &str, binary: &str, port: u16) 
         .to_string()
 }
 
+/// Write a tiny HTTP server that answers `/health` with 200, for deploy tests
+/// (blue/green health-gates the new slot before cutting over).
+fn write_health_server(dir: &std::path::Path) -> String {
+    let path = dir.join("healthapp.py");
+    std::fs::write(
+        &path,
+        "#!/usr/bin/env python3\n\
+         import os\n\
+         from http.server import BaseHTTPRequestHandler, HTTPServer\n\
+         class H(BaseHTTPRequestHandler):\n\
+         \x20   def do_GET(self):\n\
+         \x20       self.send_response(200)\n\
+         \x20       self.send_header('Content-Length','2')\n\
+         \x20       self.end_headers()\n\
+         \x20       self.wfile.write(b'ok')\n\
+         \x20   def log_message(self,*a): pass\n\
+         HTTPServer(('127.0.0.1', int(os.environ.get('PORT','0'))), H).serve_forever()\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    path.to_string_lossy().to_string()
+}
+
 #[tokio::test]
 async fn rollback_without_previous_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
@@ -261,7 +290,8 @@ async fn rollback_without_previous_is_rejected() {
 async fn deploy_stores_and_serves_artifact() {
     let dir = tempfile::tempdir().unwrap();
     let router = test_router(dir.path()).await;
-    let id = create_app(&router, "dapp", "/usr/bin/true", 9201).await;
+    let bin = write_health_server(dir.path());
+    let id = create_app(&router, "dapp", &bin, 9201).await;
 
     let resp = router
         .clone()
@@ -508,7 +538,8 @@ async fn agent_push_metrics_rolls_up() {
 async fn deployment_history_endpoint() {
     let dir = tempfile::tempdir().unwrap();
     let router = test_router(dir.path()).await;
-    let id = create_app(&router, "happ", "/usr/bin/true", 9600).await;
+    let bin = write_health_server(dir.path());
+    let id = create_app(&router, "happ", &bin, 9600).await;
 
     let resp = router
         .clone()
@@ -770,7 +801,8 @@ async fn stop_reports_stopped() {
 async fn rollback_to_explicit_build() {
     let dir = tempfile::tempdir().unwrap();
     let router = test_router(dir.path()).await;
-    let id = create_app(&router, "rbapp", "/usr/bin/true", 9820).await;
+    let bin = write_health_server(dir.path());
+    let id = create_app(&router, "rbapp", &bin, 9820).await;
 
     let resp = router
         .clone()
@@ -918,6 +950,95 @@ async fn callback_error_redirects_to_login() {
         .unwrap()
         .to_string();
     assert!(location.starts_with("/?login_error="), "{location}");
+}
+
+#[tokio::test]
+async fn deploy_uses_blue_green_slots() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let bin = write_health_server(dir.path());
+    let id = create_app(&router, "bgapp", &bin, 9250).await;
+
+    let deploy = || {
+        router.clone().oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/apps/{id}/deploy"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+    };
+
+    // First deploy -> slot A (base port).
+    let resp = deploy().await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let app = body_json(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/apps/{id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(app["application"]["active_port"], 9250);
+
+    // Second deploy -> slot B (base + slot_offset = 1000).
+    let resp = deploy().await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let app = body_json(
+        router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/apps/{id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(app["application"]["active_port"], 10250);
+}
+
+#[tokio::test]
+async fn deploy_health_failure_keeps_previous() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    // /usr/bin/true exits immediately and serves no health endpoint.
+    let id = create_app(&router, "badapp", "/usr/bin/true", 9260).await;
+
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/apps/{id}/deploy"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(!resp.status().is_success());
+
+    let app = body_json(
+        router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/apps/{id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(app["application"]["status"], "failed");
+    assert!(app["application"]["active_port"].is_null());
 }
 
 #[tokio::test]

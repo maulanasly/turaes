@@ -12,10 +12,11 @@ use turaes_core::config::Config;
 use turaes_core::db::Pool;
 use turaes_core::models::{Application, Deployment};
 use turaes_core::{Error, Result};
+use turaes_monitor::health;
 use turaes_proxy::{RouteTable, Upstream};
 use turaes_runtime::proc::ProcRuntime;
 use turaes_runtime::systemd::SystemdRuntime;
-use turaes_runtime::{AppSpec, DeployOutcome, Deployer, RunState, Runtime};
+use turaes_runtime::{AppSpec, DeployOutcome, Deployer, RunState, Runtime, Slot};
 
 use crate::state::AppState;
 
@@ -115,16 +116,36 @@ pub(crate) async fn fetch_app(pool: &Pool, id: &str) -> Result<Application> {
         .ok_or_else(|| Error::NotFound(format!("application {id}")))
 }
 
-/// Assemble the runtime spec for an app from configuration.
+/// Assemble the runtime spec for an app (unslotted).
 pub fn spec_for(cfg: &Config, app: &Application) -> AppSpec {
+    spec_for_slot(cfg, app, None, app.port as u16)
+}
+
+/// The spec for the currently-active slot (for lifecycle: stop/start/restart).
+pub fn active_spec(cfg: &Config, app: &Application) -> AppSpec {
+    let offset = cfg.runtime.slot_offset as i64;
+    match app.active_port {
+        Some(ap) if ap == app.port + offset => spec_for_slot(cfg, app, Some(Slot::B), ap as u16),
+        Some(ap) => spec_for_slot(cfg, app, Some(Slot::A), ap as u16),
+        None => spec_for(cfg, app),
+    }
+}
+
+/// Assemble a slot-scoped runtime spec (blue/green).
+pub fn spec_for_slot(cfg: &Config, app: &Application, slot: Option<Slot>, port: u16) -> AppSpec {
+    let instance = match slot {
+        Some(s) => format!("{}-{}", app.name, s.as_str()),
+        None => app.name.clone(),
+    };
     AppSpec {
         name: app.name.clone(),
+        slot,
         binary_path: app.binary_path.clone(),
         installed_path: format!("{}/{}", cfg.runtime.bin_dir, app.name),
         args: app.args.clone(),
-        port: app.port as u16,
+        port,
         state_dir: format!("{}/{}", cfg.runtime.state_dir, app.name),
-        env_file: Some(format!("{}/{}.env", cfg.runtime.env_dir, app.name)),
+        env_file: Some(format!("{}/{}.env", cfg.runtime.env_dir, instance)),
         user: None,
     }
 }
@@ -139,9 +160,12 @@ pub async fn refresh_proxy_routes(state: &AppState) -> Result<()> {
     };
 
     // Placements (replicas) joined with their server address.
+    // Route to the active blue/green slot port (falls back to the base port).
     let placements: Vec<(String, String, i64)> = sqlx::query_as(
-        "SELECT p.application_id, s.address, p.port \
-         FROM app_servers p JOIN servers s ON s.id = p.server_id",
+        "SELECT p.application_id, s.address, COALESCE(a.active_port, p.port) AS port \
+         FROM app_servers p \
+         JOIN servers s ON s.id = p.server_id \
+         JOIN applications a ON a.id = p.application_id",
     )
     .fetch_all(&state.pool)
     .await?;
@@ -325,8 +349,12 @@ pub async fn get(
 /// `DELETE /api/v1/apps/{id}`
 pub async fn delete(State(state): State<AppState>, Path(id): Path<String>) -> Result<StatusCode> {
     let app = fetch_app(&state.pool, &id).await?;
-    let spec = spec_for(&state.cfg, &app);
-    let _ = runtime_for(&state.cfg, &app.runtime).remove(&spec).await;
+    let runtime = runtime_for(&state.cfg, &app.runtime);
+    let offset = state.cfg.runtime.slot_offset as i64;
+    for (slot, port) in [(Slot::A, app.port), (Slot::B, app.port + offset)] {
+        let spec = spec_for_slot(&state.cfg, &app, Some(slot), port as u16);
+        let _ = runtime.remove(&spec).await;
+    }
     sqlx::query("DELETE FROM applications WHERE id = ?")
         .bind(&id)
         .execute(&state.pool)
@@ -398,15 +426,29 @@ pub async fn deploy_app(state: &AppState, app: &Application) -> Result<(String, 
     ))
 }
 
-/// Deploy an app from an explicit on-disk artifact `source`.
+/// Deploy an app from an explicit on-disk artifact `source`, using blue/green
+/// slots: start the inactive slot, health-gate it, then cut the route over and
+/// drain the previous slot. The previous slot is left installed for rollback.
 pub async fn deploy_app_source(
     state: &AppState,
     app: &Application,
     source: String,
 ) -> Result<(String, DeployOutcome)> {
     let env = load_env(state, &app.id).await?;
-    let mut spec = spec_for(&state.cfg, app);
+    let offset = state.cfg.runtime.slot_offset as i64;
+    let port_a = app.port;
+    let port_b = app.port + offset;
+
+    // Target the inactive slot; remember the previous slot to drain on success.
+    let (slot, port, drain): (Slot, i64, Option<(Slot, i64)>) = match app.active_port {
+        None => (Slot::A, port_a, None),
+        Some(active) if active == port_b => (Slot::A, port_a, Some((Slot::B, port_b))),
+        Some(_) => (Slot::B, port_b, Some((Slot::A, port_a))),
+    };
+
+    let mut spec = spec_for_slot(&state.cfg, app, Some(slot), port as u16);
     spec.binary_path = source;
+    let runtime = runtime_for(&state.cfg, &app.runtime);
     let dep_id = uuid::Uuid::new_v4().to_string();
 
     sqlx::query(
@@ -418,50 +460,89 @@ pub async fn deploy_app_source(
     .execute(&state.pool)
     .await?;
 
-    let outcome = Deployer::new(runtime_for(&state.cfg, &app.runtime))
-        .deploy(&spec, &env)
-        .await;
-
-    match outcome {
-        Ok(out) => {
-            let status = out.state.as_status();
-            sqlx::query(
-                "UPDATE applications SET status = ?, updated_at = datetime('now') WHERE id = ?",
-            )
-            .bind(status)
-            .bind(&app.id)
-            .execute(&state.pool)
-            .await?;
-            sqlx::query(
-                "UPDATE deployments SET status = ?, artifact_hash = ?, log = ?, \
-                 finished_at = datetime('now') WHERE id = ?",
-            )
-            .bind(status)
-            .bind(&out.artifact_hash)
-            .bind(&out.log)
-            .bind(&dep_id)
-            .execute(&state.pool)
-            .await?;
-            let _ = refresh_proxy_routes(state).await;
-            Ok((dep_id, out))
-        }
+    let outcome = Deployer::new(runtime.clone()).deploy(&spec, &env).await;
+    let out = match outcome {
+        Ok(out) => out,
         Err(e) => {
-            sqlx::query(
-                "UPDATE deployments SET status = 'failed', log = ?, finished_at = datetime('now') WHERE id = ?",
-            )
-            .bind(e.to_string())
-            .bind(&dep_id)
-            .execute(&state.pool)
-            .await?;
-            sqlx::query(
-                "UPDATE applications SET status = 'failed', updated_at = datetime('now') WHERE id = ?",
-            )
-            .bind(&app.id)
-            .execute(&state.pool)
-            .await?;
-            Err(e)
+            let _ = runtime.stop(&spec).await;
+            fail_deployment(state, app, &dep_id, &format!("start failed: {e}")).await?;
+            return Err(e);
         }
+    };
+
+    // Health-gate the new slot before cutting over (zero-downtime only if it is up).
+    if !health_gate(state, app, port).await {
+        let _ = runtime.stop(&spec).await;
+        fail_deployment(state, app, &dep_id, "new slot failed health check").await?;
+        return Err(Error::Internal(
+            "deploy failed health check; previous slot kept".into(),
+        ));
     }
+
+    sqlx::query(
+        "UPDATE applications SET active_port = ?, status = 'running', updated_at = datetime('now') \
+         WHERE id = ?",
+    )
+    .bind(port)
+    .bind(&app.id)
+    .execute(&state.pool)
+    .await?;
+    sqlx::query(
+        "UPDATE deployments SET status = 'running', artifact_hash = ?, log = ?, \
+         finished_at = datetime('now') WHERE id = ?",
+    )
+    .bind(&out.artifact_hash)
+    .bind(&out.log)
+    .bind(&dep_id)
+    .execute(&state.pool)
+    .await?;
+    let _ = refresh_proxy_routes(state).await;
+
+    // Drain the previous slot after a short window.
+    if let Some((drain_slot, drain_port)) = drain {
+        let drain_spec = spec_for_slot(&state.cfg, app, Some(drain_slot), drain_port as u16);
+        tokio::time::sleep(std::time::Duration::from_secs(state.cfg.runtime.drain_secs)).await;
+        let _ = runtime.stop(&drain_spec).await;
+    }
+
+    Ok((dep_id, out))
+}
+
+/// Poll the app's health endpoint on `port` until healthy (bounded).
+async fn health_gate(state: &AppState, app: &Application, port: i64) -> bool {
+    let url = format!("http://127.0.0.1:{}{}", port, app.health_path);
+    for _ in 0..20 {
+        if health::probe(&state.http, &url, std::time::Duration::from_secs(2))
+            .await
+            .is_healthy()
+        {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    false
+}
+
+async fn fail_deployment(
+    state: &AppState,
+    app: &Application,
+    dep_id: &str,
+    reason: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE deployments SET status = 'failed', log = ?, finished_at = datetime('now') WHERE id = ?",
+    )
+    .bind(reason)
+    .bind(dep_id)
+    .execute(&state.pool)
+    .await?;
+    sqlx::query(
+        "UPDATE applications SET status = 'failed', updated_at = datetime('now') WHERE id = ?",
+    )
+    .bind(&app.id)
+    .execute(&state.pool)
+    .await?;
+    Ok(())
 }
 
 fn ensure_local(app: &Application) -> Result<()> {
@@ -530,7 +611,7 @@ async fn lifecycle(
     action: &str,
 ) -> Result<Json<serde_json::Value>> {
     ensure_local(app)?;
-    let spec = spec_for(&state.cfg, app);
+    let spec = active_spec(&state.cfg, app);
     let runtime = runtime_for(&state.cfg, &app.runtime);
     match action {
         "stop" => runtime.stop(&spec).await?,

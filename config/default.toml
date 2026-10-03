@@ -81,3 +81,6 @@ state_dir = "/var/lib"
 env_dir = "/etc"
 # Content-addressed artifact store ({artifact_dir}/sha256/{hex}).
 artifact_dir = "/var/lib/turaes/artifacts"
+# Blue/green: slot B port = slot A port + slot_offset; drain window after cutover.
+slot_offset = 10000
+drain_secs = 10

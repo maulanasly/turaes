@@ -19,8 +19,10 @@ pub struct Application {
     pub binary_path: String,
     /// Optional command-line arguments.
     pub args: Option<String>,
-    /// Port the process listens on (loopback).
+    /// Port the process listens on (loopback). Slot A.
     pub port: i64,
+    /// Port the proxy currently routes to (blue/green slot); falls back to `port`.
+    pub active_port: Option<i64>,
     /// Health check path, e.g. `/health`.
     pub health_path: String,
     /// Metrics path (tonggeret Prometheus exposition), e.g. `/metrics`.
