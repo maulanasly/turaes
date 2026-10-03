@@ -107,37 +107,65 @@ pub async fn refresh_proxy_routes(state: &AppState) -> Result<()> {
     let Some(router) = &state.proxy_router else {
         return Ok(());
     };
-    // N0: only local apps are routed (remote upstreams land in N1).
-    let apps = sqlx::query_as::<_, Application>(
-        "SELECT * FROM applications \
-         WHERE domain IS NOT NULL AND domain != '' AND server_id = 'local'",
+
+    // Placements (replicas) joined with their server address.
+    let placements: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT p.application_id, s.address, p.port \
+         FROM app_servers p JOIN servers s ON s.id = p.server_id",
     )
     .fetch_all(&state.pool)
     .await?;
+    let mut by_app: HashMap<String, Vec<Upstream>> = HashMap::new();
+    for (app_id, address, port) in placements {
+        by_app.entry(app_id).or_default().push(Upstream {
+            host: address,
+            port: port as u16,
+            tls: false,
+        });
+    }
 
-    let mut routes: HashMap<String, Upstream> = HashMap::new();
-    for app in apps {
-        if let Some(domain) = app.domain {
-            routes.insert(
-                domain.to_lowercase(),
-                Upstream {
-                    host: "127.0.0.1".into(),
-                    port: app.port as u16,
-                    tls: false,
-                },
-            );
+    let mut routes: HashMap<String, Vec<Upstream>> = HashMap::new();
+
+    // Primary domain per app.
+    let primaries: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id, domain FROM applications WHERE domain IS NOT NULL AND domain != ''",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    for (app_id, domain) in primaries {
+        if let Some(ups) = by_app.get(&app_id) {
+            routes
+                .entry(domain.to_lowercase())
+                .or_default()
+                .extend(ups.iter().cloned());
         }
     }
+
+    // Domain aliases.
+    let aliases: Vec<(String, String)> =
+        sqlx::query_as("SELECT application_id, domain FROM domains")
+            .fetch_all(&state.pool)
+            .await?;
+    for (app_id, domain) in aliases {
+        if let Some(ups) = by_app.get(&app_id) {
+            routes
+                .entry(domain.to_lowercase())
+                .or_default()
+                .extend(ups.iter().cloned());
+        }
+    }
+
     if let Some(host) = state.cfg.dashboard_host() {
-        routes.insert(
-            host.to_lowercase(),
-            Upstream {
+        routes
+            .entry(host.to_lowercase())
+            .or_default()
+            .push(Upstream {
                 host: "127.0.0.1".into(),
                 port: state.cfg.server.port,
                 tls: false,
-            },
-        );
+            });
     }
+
     router.publish(RouteTable::new(
         state.cfg.server.base_domain.clone(),
         routes,
@@ -227,6 +255,19 @@ pub async fn create(
     .fetch_one(&state.pool)
     .await
     .map_err(map_unique_name)?;
+
+    // Seed the app's first placement (replicas can be added later).
+    sqlx::query(
+        "INSERT OR IGNORE INTO app_servers (id, application_id, server_id, port) \
+         VALUES (?, ?, ?, ?)",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(&inserted.id)
+    .bind(&inserted.server_id)
+    .bind(inserted.port)
+    .execute(&state.pool)
+    .await?;
+
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({ "application": inserted })),

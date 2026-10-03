@@ -1,5 +1,6 @@
-//! Host → upstream routing table.
+//! Host → upstreams routing table.
 //!
+//! A host may map to several upstreams (replicas); the data plane picks one.
 //! The table is immutable behind an `ArcSwap`, so the request hot path never
 //! locks while deploys rebuild and publish a new snapshot.
 
@@ -11,7 +12,7 @@ use serde::{Deserialize, Serialize};
 /// Where a request should be forwarded.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Upstream {
-    /// Loopback host, usually `127.0.0.1`.
+    /// Backend host (loopback or a node's private address).
     pub host: String,
     /// Application port.
     pub port: u16,
@@ -26,16 +27,25 @@ impl Upstream {
     }
 }
 
+/// Pick a backend round-robin by a monotonically increasing counter.
+pub fn pick(upstreams: &[Upstream], counter: u64) -> Option<&Upstream> {
+    if upstreams.is_empty() {
+        None
+    } else {
+        Some(&upstreams[(counter as usize) % upstreams.len()])
+    }
+}
+
 /// An immutable snapshot of the routing table.
 #[derive(Debug, Clone, Default)]
 pub struct RouteTable {
-    routes: HashMap<String, Upstream>,
+    routes: HashMap<String, Vec<Upstream>>,
     base_domain: String,
 }
 
 impl RouteTable {
     /// Build a table from explicit hostnames and a wildcard base domain.
-    pub fn new(base_domain: impl Into<String>, routes: HashMap<String, Upstream>) -> Self {
+    pub fn new(base_domain: impl Into<String>, routes: HashMap<String, Vec<Upstream>>) -> Self {
         Self {
             routes: routes
                 .into_iter()
@@ -45,27 +55,32 @@ impl RouteTable {
         }
     }
 
-    /// Resolve a `Host` header value (port optional) to an upstream.
+    /// Resolve a `Host` header value (port optional) to all upstreams.
     ///
     /// Exact hostname matches win; otherwise `{app}.{base_domain}` resolves the
     /// `{app}` route, enabling wildcard/multitenant subdomains.
-    pub fn resolve(&self, host: &str) -> Option<&Upstream> {
+    pub fn resolve_all(&self, host: &str) -> &[Upstream] {
         let host = host.split(':').next().unwrap_or(host).trim().to_lowercase();
         if let Some(u) = self.routes.get(&host) {
-            return Some(u);
+            return u;
         }
         if !self.base_domain.is_empty() {
             let suffix = format!(".{}", self.base_domain);
             if let Some(label) = host.strip_suffix(&suffix) {
                 if let Some(u) = self.routes.get(label) {
-                    return Some(u);
+                    return u;
                 }
             }
         }
-        None
+        &[]
     }
 
-    /// Number of configured routes.
+    /// First upstream for a host (backward-compatible convenience).
+    pub fn resolve(&self, host: &str) -> Option<&Upstream> {
+        self.resolve_all(host).first()
+    }
+
+    /// Number of configured hosts.
     pub fn len(&self) -> usize {
         self.routes.len()
     }
@@ -84,7 +99,7 @@ pub struct Router {
 
 impl Router {
     /// Create a router with a base domain and initial routes.
-    pub fn new(base_domain: impl Into<String>, routes: HashMap<String, Upstream>) -> Self {
+    pub fn new(base_domain: impl Into<String>, routes: HashMap<String, Vec<Upstream>>) -> Self {
         Self {
             table: ArcSwap::from_pointee(RouteTable::new(base_domain, routes)),
         }
@@ -95,12 +110,17 @@ impl Router {
         self.table.store(std::sync::Arc::new(table));
     }
 
-    /// Resolve a host using the current snapshot.
+    /// All upstreams for a host using the current snapshot.
+    pub fn resolve_all(&self, host: &str) -> Vec<Upstream> {
+        self.table.load().resolve_all(host).to_vec()
+    }
+
+    /// First upstream for a host (convenience).
     pub fn resolve(&self, host: &str) -> Option<Upstream> {
         self.table.load().resolve(host).cloned()
     }
 
-    /// Current snapshot length.
+    /// Current number of hosts.
     pub fn len(&self) -> usize {
         self.table.load().len()
     }
@@ -124,13 +144,10 @@ mod tests {
     }
 
     fn router() -> Router {
-        let mut routes = HashMap::new();
-        routes.insert("kalkulator.rayakala.ink".into(), up(8000));
-        routes.insert("beruang".into(), up(8000));
-        router_with(routes)
-    }
-
-    fn router_with(routes: HashMap<String, Upstream>) -> Router {
+        let mut routes: HashMap<String, Vec<Upstream>> = HashMap::new();
+        routes.insert("kalkulator.rayakala.ink".into(), vec![up(8000)]);
+        routes.insert("beruang".into(), vec![up(8000)]);
+        routes.insert("replica.test".into(), vec![up(8001), up(8002), up(8003)]);
         Router::new("rayakala.ink", routes)
     }
 
@@ -153,17 +170,29 @@ mod tests {
     }
 
     #[test]
+    fn multi_upstream_and_round_robin() {
+        let r = router();
+        let ups = r.resolve_all("replica.test");
+        assert_eq!(ups.len(), 3);
+        assert_eq!(pick(&ups, 0).unwrap().port, 8001);
+        assert_eq!(pick(&ups, 1).unwrap().port, 8002);
+        assert_eq!(pick(&ups, 3).unwrap().port, 8001);
+        assert!(pick(&[], 0).is_none());
+    }
+
+    #[test]
     fn unknown_host_is_none() {
         let r = router();
         assert!(r.resolve("nope.example.com").is_none());
+        assert!(r.resolve_all("nope.example.com").is_empty());
     }
 
     #[test]
     fn publish_swaps_snapshot() {
         let r = router();
         assert!(r.resolve("new.rayakala.ink").is_none());
-        let mut routes = HashMap::new();
-        routes.insert("new".into(), up(9001));
+        let mut routes: HashMap<String, Vec<Upstream>> = HashMap::new();
+        routes.insert("new".into(), vec![up(9001)]);
         r.publish(RouteTable::new("rayakala.ink", routes));
         assert_eq!(r.resolve("new.rayakala.ink").unwrap().port, 9001);
     }

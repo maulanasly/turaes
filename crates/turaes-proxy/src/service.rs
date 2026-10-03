@@ -206,6 +206,7 @@ mod pingora_impl {
     struct Gateway {
         router: Arc<Router>,
         acme_webroot: String,
+        counter: std::sync::atomic::AtomicUsize,
     }
 
     impl Gateway {
@@ -304,8 +305,12 @@ mod pingora_impl {
                 .or_else(|| req.uri.host())
                 .unwrap_or_default()
                 .to_string();
-            match self.router.resolve(&host) {
-                // Loopback upstreams speak plain HTTP.
+            // Round-robin across an app's replicas (one upstream => always it).
+            let upstreams = self.router.resolve_all(&host);
+            let n = self
+                .counter
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed) as u64;
+            match crate::router::pick(&upstreams, n) {
                 Some(upstream) => Ok(Box::new(HttpPeer::new(
                     upstream.addr(),
                     false,
@@ -326,6 +331,7 @@ mod pingora_impl {
         let gateway = Gateway {
             router: state.router.clone(),
             acme_webroot: proxy_cfg.acme_webroot.clone(),
+            counter: std::sync::atomic::AtomicUsize::new(0),
         };
         let mut service = http_proxy_service(&server.configuration, gateway);
         service.add_tcp(&format!("0.0.0.0:{}", proxy_cfg.http_port));

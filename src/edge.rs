@@ -79,16 +79,16 @@ pub async fn run(cfg: Arc<Config>, args: EdgeArgs) -> Result<()> {
                 .await
             {
                 Ok(resp) => {
-                    let mut routes = HashMap::new();
+                    let mut routes: HashMap<String, Vec<Upstream>> = HashMap::new();
                     for r in resp.into_inner().routes {
-                        routes.insert(
-                            r.host.to_lowercase(),
-                            Upstream {
+                        routes
+                            .entry(r.host.to_lowercase())
+                            .or_default()
+                            .push(Upstream {
                                 host: r.address,
                                 port: r.port as u16,
                                 tls: r.tls,
-                            },
-                        );
+                            });
                     }
                     let count = routes.len();
                     router.publish(RouteTable::new(cfg.server.base_domain.clone(), routes));
