@@ -158,7 +158,7 @@ function Environment({ env, appId, reload }) {
             </span>
           </label>
         </div>
-        <div><button class="btn" type="submit">Save</button> <span class="muted">redeploy to apply</span></div>
+        <div><button class="btn" type="submit">Add</button> <span class="muted">redeploy to apply</span></div>
       </form>
     </div>`;
 }
