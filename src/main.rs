@@ -230,6 +230,74 @@ fn check_writable_dir(name: &'static str, dir: &str) -> Check {
 }
 
 async fn doctor(cfg: &Config, json: bool) -> turaes_core::Result<()> {
+    // Capability checks first: both output modes share them, and `--json`
+    // must emit pure JSON (no human lines) for scripting.
+    let mut checks: Vec<Check> = Vec::new();
+    match db::connect(&cfg.database.url).await {
+        Ok(pool) => {
+            match sqlx::query_scalar::<_, i64>("SELECT 1")
+                .fetch_one(&pool)
+                .await
+            {
+                Ok(_) => checks.push(check_ok("database", "opens and answers")),
+                Err(e) => checks.push(check_fail("database", format!("query failed: {e}"))),
+            }
+        }
+        Err(e) => checks.push(check_fail("database", format!("cannot open: {e}"))),
+    }
+    for (name, dir) in [
+        ("dir.backup", cfg.backup.dir.as_str()),
+        ("dir.artifacts", cfg.runtime.artifact_dir.as_str()),
+        ("dir.units", cfg.runtime.unit_dir.as_str()),
+        ("dir.bin", cfg.runtime.bin_dir.as_str()),
+        ("dir.state", cfg.runtime.state_dir.as_str()),
+        ("dir.env", cfg.runtime.env_dir.as_str()),
+        ("dir.acme", cfg.proxy.acme_webroot.as_str()),
+    ] {
+        checks.push(check_writable_dir(name, dir));
+    }
+    if cfg.proxy.enabled {
+        match cfg.dashboard_host() {
+            Some(host) => {
+                let cert = format!("{}/{host}/fullchain.pem", cfg.proxy.cert_dir);
+                if std::path::Path::new(&cert).is_file() {
+                    checks.push(check_ok("tls.cert", format!("{cert} present")));
+                } else {
+                    checks.push(check_fail(
+                        "tls.cert",
+                        format!("{cert} missing (certbot has not issued for {host})"),
+                    ));
+                }
+            }
+            None => checks.push(check_fail(
+                "tls.cert",
+                "no dashboard hostname derivable from server.public_url".to_string(),
+            )),
+        }
+    }
+
+    let failed = checks.iter().filter(|c| !c.ok).count();
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "ok": failed == 0,
+                "checks": checks
+                    .iter()
+                    .map(|c| serde_json::json!({"name": c.name, "ok": c.ok, "detail": c.detail}))
+                    .collect::<Vec<_>>(),
+            })
+        );
+        return if failed > 0 {
+            Err(turaes_core::Error::Internal(format!(
+                "doctor: {failed} check(s) failed"
+            )))
+        } else {
+            Ok(())
+        };
+    }
+
     println!("turaes {}", env!("CARGO_PKG_VERSION"));
     println!(
         "  listen            {}:{}",
@@ -299,74 +367,13 @@ async fn doctor(cfg: &Config, json: bool) -> turaes_core::Result<()> {
     println!("  proxy.pingora     {}", turaes_proxy::pingora_enabled());
     println!("  secure_cookies    {}", cfg.secure_cookies());
 
-    // Capability checks. Anything failing here fails boot or first use, so
-    // doctor exits non-zero when a check fails.
-    let mut checks: Vec<Check> = Vec::new();
-    match db::connect(&cfg.database.url).await {
-        Ok(pool) => {
-            match sqlx::query_scalar::<_, i64>("SELECT 1")
-                .fetch_one(&pool)
-                .await
-            {
-                Ok(_) => checks.push(check_ok("database", "opens and answers")),
-                Err(e) => checks.push(check_fail("database", format!("query failed: {e}"))),
-            }
-        }
-        Err(e) => checks.push(check_fail("database", format!("cannot open: {e}"))),
-    }
-    for (name, dir) in [
-        ("dir.backup", cfg.backup.dir.as_str()),
-        ("dir.artifacts", cfg.runtime.artifact_dir.as_str()),
-        ("dir.units", cfg.runtime.unit_dir.as_str()),
-        ("dir.bin", cfg.runtime.bin_dir.as_str()),
-        ("dir.state", cfg.runtime.state_dir.as_str()),
-        ("dir.env", cfg.runtime.env_dir.as_str()),
-        ("dir.acme", cfg.proxy.acme_webroot.as_str()),
-    ] {
-        checks.push(check_writable_dir(name, dir));
-    }
-    if cfg.proxy.enabled {
-        match cfg.dashboard_host() {
-            Some(host) => {
-                let cert = format!("{}/{host}/fullchain.pem", cfg.proxy.cert_dir);
-                if std::path::Path::new(&cert).is_file() {
-                    checks.push(check_ok("tls.cert", format!("{cert} present")));
-                } else {
-                    checks.push(check_fail(
-                        "tls.cert",
-                        format!("{cert} missing (certbot has not issued for {host})"),
-                    ));
-                }
-            }
-            None => checks.push(check_fail(
-                "tls.cert",
-                "no dashboard hostname derivable from server.public_url".to_string(),
-            )),
-        }
-    }
-
-    let failed = checks.iter().filter(|c| !c.ok).count();
-    if json {
+    for c in &checks {
         println!(
-            "{}",
-            serde_json::json!({
-                "version": env!("CARGO_PKG_VERSION"),
-                "ok": failed == 0,
-                "checks": checks
-                    .iter()
-                    .map(|c| serde_json::json!({"name": c.name, "ok": c.ok, "detail": c.detail}))
-                    .collect::<Vec<_>>(),
-            })
+            "  check.{:<12} {} {}",
+            c.name,
+            if c.ok { "ok  " } else { "FAIL" },
+            c.detail
         );
-    } else {
-        for c in &checks {
-            println!(
-                "  check.{:<12} {} {}",
-                c.name,
-                if c.ok { "ok  " } else { "FAIL" },
-                c.detail
-            );
-        }
     }
     if failed > 0 {
         return Err(turaes_core::Error::Internal(format!(
