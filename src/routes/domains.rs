@@ -8,6 +8,7 @@ use serde::Deserialize;
 use turaes_core::models::Domain;
 use turaes_core::{Error, Result};
 
+use crate::audit;
 use crate::authz::{self, CurrentUser, Role};
 use crate::routes::apps::{fetch_org_app, refresh_proxy_routes};
 use crate::state::AppState;
@@ -79,6 +80,18 @@ pub async fn add(
         }
         Error::Db(e)
     })?;
+    audit::record(
+        &state,
+        Some(&org_id),
+        Some(&user),
+        Some(&id),
+        "domain.add",
+        Some("domain"),
+        Some(&row.id),
+        Some(&serde_json::json!({"domain": domain}).to_string()),
+    )
+    .await?;
+
     let _ = refresh_proxy_routes(&state).await;
     Ok((
         StatusCode::CREATED,
@@ -103,6 +116,17 @@ pub async fn delete(
     if affected == 0 {
         return Err(Error::NotFound(format!("domain {domain}")));
     }
+    audit::record(
+        &state,
+        Some(&org_id),
+        Some(&user),
+        Some(&id),
+        "domain.remove",
+        Some("domain"),
+        None,
+        Some(&serde_json::json!({"domain": domain.to_ascii_lowercase()}).to_string()),
+    )
+    .await?;
     let _ = refresh_proxy_routes(&state).await;
     Ok(StatusCode::NO_CONTENT)
 }

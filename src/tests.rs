@@ -1285,3 +1285,109 @@ async fn role_floors_gate_org_access() {
     assert!(err.to_string().contains("forbidden"));
     assert!(crate::authz::require_operator(&viewer).is_err());
 }
+
+#[tokio::test]
+async fn audit_records_mutations_without_secrets() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+
+    let payload = json!({"name": "auditapp", "binary_path": "/bin/true", "port": 9200});
+    let created = body_json(
+        router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/orgs/default/apps")
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    let id = created["application"]["id"].as_str().unwrap().to_string();
+
+    let router = test_router(dir.path()).await;
+    let secret = "super-secret-value";
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/v1/orgs/default/apps/{id}/env/API_KEY"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"value": secret}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let router = test_router(dir.path()).await;
+    let body = body_json(
+        router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/orgs/default/audit?app={id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    let rows = body["audit"].as_array().unwrap();
+    let actions: Vec<&str> = rows.iter().map(|r| r["action"].as_str().unwrap()).collect();
+    assert!(actions.contains(&"app.create"));
+    assert!(actions.contains(&"env.set"));
+    // Actor attribution resolves to the dev login.
+    assert!(rows.iter().all(|r| r["actor_login"] == "dev"));
+    // The secret value never lands in the audit trail.
+    let dump = serde_json::to_string(rows).unwrap();
+    assert!(!dump.contains(secret));
+    let env_row = rows.iter().find(|r| r["action"] == "env.set").unwrap();
+    assert!(env_row["metadata"].as_str().unwrap().contains("API_KEY"));
+}
+
+#[tokio::test]
+async fn audit_is_org_scoped() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    sqlx::query("INSERT INTO organizations (id, slug, name) VALUES ('other', 'other', 'Other')")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO audit_log (id, org_id, action) VALUES ('lx', 'other', 'app.create')")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+    // The other org's rows are invisible from default...
+    let router = app::build_router(state.clone());
+    let body = body_json(
+        router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/orgs/default/audit")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(body["audit"].as_array().unwrap().is_empty());
+
+    // ...and the other org itself is forbidden to this principal.
+    let router = app::build_router(state.clone());
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/orgs/other/audit")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}

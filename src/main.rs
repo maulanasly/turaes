@@ -2,6 +2,7 @@
 
 mod agent;
 mod app;
+mod audit;
 mod auth;
 mod authz;
 mod bootstrap;
