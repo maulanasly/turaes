@@ -14,30 +14,36 @@ const SCOPES = [
 export function TokensView({ user }) {
   const [tokens, setTokens] = useState(null);
   const [fresh, setFresh] = useState(null);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(null);
 
   const load = useCallback(async () => {
     try {
       const r = await oapi("/tokens");
       setTokens(r.tokens || []);
+      setError(null);
     } catch (e) {
-      if (e.status === 403 || e.status === 401) setTokens("denied");
-      else toast.error(e.message);
+      if (e.status === 403 || e.status === 401) { setTokens("denied"); setError(null); }
+      else { setError(e.message); toast.error(e.message); }
     }
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
+  const retry = () => { setError(null); load(); };
+
   const create = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
     const payload = { name: String(fd.get("name") || ""), scopes: String(fd.get("scopes") || "read") };
+    setBusy("create");
     try {
       const r = await oapi("/tokens", { method: "POST", body: JSON.stringify(payload) });
       setFresh({ name: r.token.name, plaintext: r.plaintext });
       toast.success(`Token ${r.token.name} created`);
       e.target.reset();
       load();
-    } catch (err) { toast.error(err.message); }
+    } catch (err) { toast.error(err.message); } finally { setBusy(null); }
   };
 
   const revoke = async (t) => {
@@ -47,11 +53,12 @@ export function TokensView({ user }) {
       confirmLabel: "Revoke",
       danger: true,
     }))) return;
+    setBusy(`revoke:${t.id}`);
     try {
       await oapi(`/tokens/${t.id}`, { method: "DELETE" });
       toast.success(`Revoked ${t.name}`);
       load();
-    } catch (e) { toast.error(e.message); }
+    } catch (e) { toast.error(e.message); } finally { setBusy(null); }
   };
 
   const copy = async (text) => {
@@ -75,7 +82,10 @@ export function TokensView({ user }) {
           <button class="btn small ghost" onClick=${() => setFresh(null)}>Dismiss</button>
         </div>
       </div>`}
-      ${tokens === null
+      ${error
+        ? html`<p class="muted">Could not load tokens: ${error}</p>
+          <div><button class="btn" onClick=${retry}>Retry</button></div>`
+        : tokens === null
         ? html`<p class="muted">Loading…</p>`
         : tokens === "denied"
           ? html`<p class="muted">Token management needs an admin of this organization.</p>`
@@ -89,7 +99,7 @@ export function TokensView({ user }) {
                     <td class="muted">${t.created_at ? fmtTime(t.created_at) : "—"}</td>
                     <td class="muted">${t.last_used_at ? fmtTime(t.last_used_at) : "never"}</td>
                     <td class="controls">
-                      ${user && html`<button class="btn small ghost" onClick=${() => revoke(t)}>Revoke</button>`}
+                      ${user && html`<button class="btn small ghost" disabled=${busy !== null} onClick=${() => revoke(t)}>Revoke</button>`}
                     </td>
                   </tr>`)}
               </tbody>
@@ -102,7 +112,7 @@ export function TokensView({ user }) {
             ${SCOPES.map(([v, label]) => html`<option value=${v}>${label}</option>`)}
           </select></label>
         </div>
-        <div><button class="btn" type="submit">Create token</button></div>
+        <div><button class="btn" type="submit" disabled=${busy === "create"}>${busy === "create" ? "Creating…" : "Create token"}</button></div>
       </form>`}
     </section>`;
 }

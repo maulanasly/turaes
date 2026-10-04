@@ -4,6 +4,9 @@ export const APP_TABS = ["overview", "deployments", "activity", "environment", "
 export function parseRoute(hash) {
   const path = String(hash || "").replace(/^#/, "").split("?")[0];
   const parts = path.split("/").filter(Boolean);
+  if (parts.length === 0 || (parts[0] === "apps" && !parts[1])) {
+    return { view: "apps" };
+  }
   if (parts[0] === "servers") {
     return parts[1] ? { view: "server", id: parts[1] } : { view: "servers" };
   }
@@ -14,10 +17,11 @@ export function parseRoute(hash) {
     return { view: "org" };
   }
   if (parts[0] === "apps" && parts[1]) {
-    const tab = APP_TABS.includes(parts[2]) ? parts[2] : "overview";
-    return { view: "app", id: parts[1], tab };
+    // Unknown tabs pass through raw; the detail view names them instead of
+    // silently showing the wrong tab.
+    return { view: "app", id: parts[1], tab: parts[2] || "overview" };
   }
-  return { view: "apps" };
+  return { view: "notfound", path: `/${parts.join("/")}` };
 }
 
 export function pathFor(route) {
@@ -26,5 +30,6 @@ export function pathFor(route) {
   if (route.view === "server") return `#/servers/${route.id}`;
   if (route.view === "tokens") return "#/tokens";
   if (route.view === "org") return "#/org";
-  return `#/apps/${route.id}/${route.tab || "overview"}`;
+  if (route.view === "app") return `#/apps/${route.id}/${route.tab || "overview"}`;
+  return "#/apps";
 }

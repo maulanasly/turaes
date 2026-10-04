@@ -22,13 +22,17 @@ export function OrgView({ user }) {
     } catch (e) { toast.error(e.message); }
   }, []);
 
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(null);
+
   const loadMembers = useCallback(async () => {
     try {
       const r = await oapi("/members");
       setMembers(r.members || []);
+      setError(null);
     } catch (e) {
-      if (e.status === 403 || e.status === 401 || e.status === 404) setMembers("denied");
-      else toast.error(e.message);
+      if (e.status === 403 || e.status === 401 || e.status === 404) { setMembers("denied"); setError(null); }
+      else { setError(e.message); toast.error(e.message); }
     }
   }, []);
 
@@ -47,6 +51,8 @@ export function OrgView({ user }) {
     location.reload();
   };
 
+  const retry = () => { setError(null); loadMembers(); };
+
   const createOrg = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -54,11 +60,12 @@ export function OrgView({ user }) {
       slug: String(fd.get("slug") || ""),
       name: String(fd.get("name") || "") || undefined,
     };
+    setBusy("createOrg");
     try {
       const r = await api("/api/v1/orgs", { method: "POST", body: JSON.stringify(payload) });
       toast.success(`Organization ${r.organization.slug} created`);
       switchOrg(r.organization.slug);
-    } catch (err) { toast.error(err.message); }
+    } catch (err) { toast.error(err.message); } finally { setBusy(null); }
   };
 
   const invite = async (e) => {
@@ -69,15 +76,17 @@ export function OrgView({ user }) {
     const payload = { role: String(fd.get("role") || "viewer") };
     if (login) payload.login = login;
     else if (gid) payload.github_id = Number(gid);
+    setBusy("invite");
     try {
       await oapi("/members", { method: "POST", body: JSON.stringify(payload) });
       toast.success("Member added");
       e.target.reset();
       loadMembers();
-    } catch (err) { toast.error(err.message); }
+    } catch (err) { toast.error(err.message); } finally { setBusy(null); }
   };
 
   const changeRole = async (m, role) => {
+    setBusy(`role:${m.user_id}`);
     try {
       await oapi(`/members/${m.user_id}`, {
         method: "PATCH",
@@ -85,7 +94,7 @@ export function OrgView({ user }) {
       });
       toast.success(`${m.login} is now ${role}`);
       loadMembers();
-    } catch (e) { toast.error(e.message); }
+    } catch (e) { toast.error(e.message); } finally { setBusy(null); }
   };
 
   const remove = async (m) => {
@@ -95,11 +104,12 @@ export function OrgView({ user }) {
       confirmLabel: "Remove",
       danger: true,
     }))) return;
+    setBusy(`remove:${m.user_id}`);
     try {
       await oapi(`/members/${m.user_id}`, { method: "DELETE" });
       toast.success(`Removed ${m.login}`);
       loadMembers();
-    } catch (e) { toast.error(e.message); }
+    } catch (e) { toast.error(e.message); } finally { setBusy(null); }
   };
 
   return html`
@@ -125,7 +135,10 @@ export function OrgView({ user }) {
             <div class="kpi"><div class="kpi-label">Domains</div><div class="kpi-value">${quota.usage.domains}/${quota.quota.max_domains}</div></div>
           </div>`}
       <h3>Members</h3>
-      ${members === null
+      ${error
+        ? html`<p class="muted">Could not load members: ${error}</p>
+          <div><button class="btn" onClick=${retry}>Retry</button></div>`
+        : members === null
         ? html`<p class="muted">Loading…</p>`
         : members === "denied"
           ? html`<p class="muted">You are not a member of this organization.</p>`
@@ -137,14 +150,14 @@ export function OrgView({ user }) {
                     <td class="mono">${m.login}</td>
                     <td>
                       ${isOwner
-                        ? html`<select value=${m.role} onChange=${(e) => changeRole(m, e.target.value)}>
+                        ? html`<select value=${m.role} disabled=${busy !== null} onChange=${(e) => changeRole(m, e.target.value)}>
                             ${ROLES.map((r) => html`<option value=${r}>${r}</option>`)}
                           </select>`
                         : html`<span class="pill">${m.role}</span>`}
                     </td>
                     <td class="muted">${m.created_at ? fmtTime(m.created_at) : "—"}</td>
                     <td class="controls">
-                      ${isOwner && html`<button class="btn small ghost" onClick=${() => remove(m)}>Remove</button>`}
+                      ${isOwner && html`<button class="btn small ghost" disabled=${busy !== null} onClick=${() => remove(m)}>Remove</button>`}
                     </td>
                   </tr>`)}
               </tbody>
@@ -160,7 +173,7 @@ export function OrgView({ user }) {
             ${ROLES.map((r) => html`<option value=${r}>${r}</option>`)}
           </select></label>
         </div>
-        <div><button class="btn" type="submit">Add member</button></div>
+        <div><button class="btn" type="submit" disabled=${busy === "invite"}>${busy === "invite" ? "Adding…" : "Add member"}</button></div>
       </form>`}
       ${user && html`<form class="form" style="margin-top:14px" onSubmit=${createOrg}>
         <h3>New organization</h3>
@@ -168,7 +181,7 @@ export function OrgView({ user }) {
           <label>Slug <input name="slug" placeholder="acme" required maxlength="32" /></label>
           <label>Display name <input name="name" placeholder="Acme" /></label>
         </div>
-        <div><button class="btn" type="submit">Create organization</button></div>
+        <div><button class="btn" type="submit" disabled=${busy === "createOrg"}>${busy === "createOrg" ? "Creating…" : "Create organization"}</button></div>
       </form>`}
     </section>`;
 }

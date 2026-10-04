@@ -13,8 +13,14 @@ test("app detail with tab", () => {
   assert.deepEqual(parseRoute("#/apps/abc/logs"), { view: "app", id: "abc", tab: "logs" });
 });
 
-test("unknown tab falls back to overview", () => {
-  assert.deepEqual(parseRoute("#/apps/abc/bogus"), { view: "app", id: "abc", tab: "overview" });
+test("unknown tab passes through for the detail view to name", () => {
+  assert.deepEqual(parseRoute("#/apps/abc/bogus"), { view: "app", id: "abc", tab: "bogus" });
+});
+
+test("unknown routes go to notfound instead of silently aliasing", () => {
+  assert.deepEqual(parseRoute("#/nope"), { view: "notfound", path: "/nope" });
+  assert.deepEqual(parseRoute("#/apps/abc/overview/extra"), { view: "app", id: "abc", tab: "overview" });
+  assert.equal(pathFor({ view: "notfound", path: "/nope" }), "#/apps");
 });
 
 test("servers and server detail", () => {

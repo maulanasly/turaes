@@ -1,5 +1,6 @@
 import { html } from "../lib/html.js";
 import { useEffect, useState, useCallback } from "preact/hooks";
+import { navigate } from "../lib/router.js";
 import { oapi } from "../lib/api.js";
 import { toast } from "../lib/toast.js";
 import { serverName, runtimeLabel } from "../lib/format.js";
@@ -32,8 +33,7 @@ function NewAppForm({ servers, onCreated }) {
     try {
       const r = await oapi("/apps", { method: "POST", body: JSON.stringify(payload) });
       toast.success(`Created ${r.application.name}`);
-      e.target.reset();
-      onCreated();
+      onCreated(r.application);
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -72,6 +72,7 @@ function NewAppForm({ servers, onCreated }) {
 export function AppsView({ user, servers }) {
   const [apps, setApps] = useState(null);
   const [alerts, setAlerts] = useState([]);
+  const [error, setError] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [q, setQ] = useState("");
   const [sortKey, setSortKey] = useState("name");
@@ -80,9 +81,10 @@ export function AppsView({ user, servers }) {
     try {
       const r = await oapi("/apps");
       setApps(r.applications || []);
+      setError(null);
     } catch (e) {
-      if (e.status === 401) setApps([]);
-      else toast.error(e.message);
+      if (e.status === 401) { setApps([]); setError(null); }
+      else { setError(e.message); toast.error(e.message); }
     }
     try {
       const a = await oapi("/alerts?status=firing&limit=10");
@@ -91,6 +93,14 @@ export function AppsView({ user, servers }) {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const retry = () => { setError(null); load(); };
+
+  const created = (app) => {
+    setShowAdd(false);
+    load();
+    navigate(`#/apps/${app.id}/overview`);
+  };
 
   const filtered = sortApps(
     (apps || []).filter((a) => !q || a.name.includes(q) || (a.domain || "").includes(q)),
@@ -125,8 +135,11 @@ export function AppsView({ user, servers }) {
             : a.subject}
         </div>`)}
       </div>`}
-      ${showAdd && user && html`<div class="form-wrap"><${NewAppForm} servers=${servers} onCreated=${load} /></div>`}
-      ${apps === null
+      ${showAdd && user && html`<div class="form-wrap"><${NewAppForm} servers=${servers} onCreated=${created} /></div>`}
+      ${error
+        ? html`<p class="muted">Could not load applications: ${error}</p>
+          <div><button class="btn" onClick=${retry}>Retry</button></div>`
+        : apps === null
         ? html`<${Skeleton} lines={4} height=${64} />`
         : apps.length === 0
           ? html`<p class="muted">No applications yet.${user ? "" : " Sign in to create one."}</p>`
