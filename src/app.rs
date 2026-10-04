@@ -12,6 +12,7 @@ use crate::state::AppState;
 pub fn build_router(state: AppState) -> Router {
     // Authenticated API surface.
     let api = Router::new()
+        .route("/me", get(routes::me::me))
         .route("/apps", get(routes::apps::list).post(routes::apps::create))
         .route(
             "/apps/{id}",

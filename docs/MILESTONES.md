@@ -199,7 +199,7 @@ org-scoped.
 - [x] **T0** Schema: `users`, `organizations`, `memberships`, `api_tokens`,
       `audit_log`; `applications.org_id` (default `default`) — migration
       `007_tenancy.sql`; core models.
-- [ ] **T1a** Authz core: persist users on login, `Role` lattice, membership
+- [x] **T1a** Authz core: persist users on login, `Role` lattice, membership
       checks, `GET /api/v1/me`.
 - [ ] **T1b** Scope every route under `/api/v1/orgs/{org}/…` with per-action
       role checks; cross-org isolation tests.

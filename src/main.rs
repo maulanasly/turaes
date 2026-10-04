@@ -3,6 +3,7 @@
 mod agent;
 mod app;
 mod auth;
+mod authz;
 mod bootstrap;
 mod cli;
 mod commands;
