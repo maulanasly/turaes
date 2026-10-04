@@ -62,10 +62,10 @@ pub enum Command {
         #[command(subcommand)]
         cmd: AppCommand,
         /// Organization id or slug to scope the operation to.
-        #[arg(long)]
+        #[arg(long, global = true)]
         org: Option<String>,
         /// Emit list/show output as JSON.
-        #[arg(long)]
+        #[arg(long, global = true)]
         json: bool,
     },
     /// Fleet node registry operations (local database; nodes are platform-global).
@@ -74,7 +74,7 @@ pub enum Command {
         #[command(subcommand)]
         cmd: ServerCommand,
         /// Emit list output as JSON.
-        #[arg(long)]
+        #[arg(long, global = true)]
         json: bool,
     },
     /// Run as a node agent: register with the control plane and heartbeat.
