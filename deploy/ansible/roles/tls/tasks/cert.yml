@@ -1,0 +1,64 @@
+---
+# TLS via certbot webroot. Order matters: this role runs *after* the turaes
+# role has started the proxy (TURAES_PROXY_ENABLED=true), because the
+# challenge path is served by Pingora from {turaes_acme_webroot}. DNS must
+# already point {turaes_domain} at this host.
+
+- name: Install certbot
+  ansible.builtin.apt:
+    name: certbot
+    state: present
+
+- name: Resolve the dashboard domain
+  ansible.builtin.command: getent hosts {{ turaes_domain }}
+  register: tls_getent
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Fetch the host public IP
+  ansible.builtin.uri:
+    url: https://api.ipify.org
+    return_content: true
+  register: tls_public_ip
+  check_mode: false
+
+- name: Assert DNS points at this host
+  ansible.builtin.assert:
+    that:
+      - tls_getent.stdout_lines | length > 0
+      - tls_getent.stdout_lines[0].split()[-1] == tls_public_ip.content | trim
+    msg: >-
+      {{ turaes_domain }} does not resolve to this host's public IP
+      ({{ tls_public_ip.content }}). Point the DNS A record at this host before
+      issuing the certificate, or the proxy returns 404 for unknown hosts.
+  when: not (turaes_tls_skip_dns_check | default(false))
+
+- name: Check for an existing certificate
+  ansible.builtin.stat:
+    path: "{{ turaes_cert_dir }}/{{ turaes_domain }}/fullchain.pem"
+  register: tls_cert_stat
+
+- name: Issue the certificate (webroot)
+  ansible.builtin.command:
+    argv:
+      - certbot
+      - certonly
+      - --webroot
+      - -w
+      - "{{ turaes_acme_webroot }}"
+      - -d
+      - "{{ turaes_domain }}"
+      - --agree-tos
+      - -m
+      - "{{ turaes_cert_email }}"
+      - --non-interactive
+      - --keep-until-expiring
+  changed_when: false
+  when: not tls_cert_stat.stat.exists
+
+- name: Enable certbot renewal timer
+  ansible.builtin.systemd_service:
+    name: certbot.timer
+    enabled: true
+    state: started

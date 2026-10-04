@@ -1,0 +1,8 @@
+---
+- name: Install turaes
+  ansible.builtin.import_tasks: install.yml
+  tags: turaes
+
+- name: Health gate
+  ansible.builtin.import_tasks: health.yml
+  tags: turaes

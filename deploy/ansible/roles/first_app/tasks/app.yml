@@ -1,0 +1,63 @@
+---
+- name: Ensure the app binary exists
+  ansible.builtin.assert:
+    that:
+      - turaes_first_app_name is defined and turaes_first_app_name | length > 0
+    msg: turaes_first_app_name is empty — set it or skip this role with --skip-tags first-app
+
+- name: Upload the app binary when a local source is provided
+  ansible.builtin.copy:
+    src: "{{ turaes_first_app_upload_src }}"
+    dest: "{{ turaes_first_app_binary }}"
+    remote_src: false
+    mode: "0755"
+  when:
+    - turaes_first_app_upload_src is defined
+    - turaes_first_app_upload_src | length > 0
+
+- name: Stat the app binary
+  ansible.builtin.stat:
+    path: "{{ turaes_first_app_binary }}"
+  register: first_app_bin_stat
+
+- name: Assert the app binary is on the box
+  ansible.builtin.assert:
+    that:
+      - first_app_bin_stat.stat.exists
+    msg: >-
+      The first-app binary {{ turaes_first_app_binary }} does not exist. Build
+      it on the server (or set turaes_first_app_upload_src to a local path).
+
+- name: Create the app manifest directory
+  ansible.builtin.file:
+    path: "{{ turaes_config_dir }}/apps"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Write the app manifest
+  ansible.builtin.template:
+    src: app.yaml.j2
+    dest: "{{ turaes_config_dir }}/apps/{{ turaes_first_app_name }}.yaml"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Apply the manifest (idempotent create-or-update)
+  ansible.builtin.command: turaes apply -f "{{ turaes_config_dir }}/apps/{{ turaes_first_app_name }}.yaml"
+  changed_when: false
+  failed_when: false
+
+- name: Check whether any slot is already running
+  ansible.builtin.command: systemctl is-active "{{ turaes_first_app_name }}-a" "{{ turaes_first_app_name }}-b"
+  register: first_app_active
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Deploy the first app (blue/green, health-gated)
+  ansible.builtin.command: turaes app deploy "{{ turaes_first_app_name }}"
+  register: first_app_deploy
+  changed_when: "'deployed' in first_app_deploy.stdout"
+  when: first_app_active.rc != 0

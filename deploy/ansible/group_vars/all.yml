@@ -1,0 +1,51 @@
+---
+# turaes provisioning variables. Edit before the first run; never commit
+# secrets here — those live in vault.yml (ansible-vault).
+
+# --- target ---------------------------------------------------------------
+turaes_domain: turaes.rayakala.ink
+turaes_base_domain: rayakala.ink
+turaes_app_origin: "https://{{ turaes_domain }}"
+turaes_timezone: Asia/Makassar
+
+# --- GitHub release (pinned tag, never "latest") --------------------------
+# The asset is the `turaes-linux-x86_64` binary built by CI with
+# --features proxy. Set sha256 from the release notes.
+turaes_release_tag: v0.1.0
+turaes_release_url: >-
+  https://github.com/maulanasly/turaes/releases/download/{{ turaes_release_tag }}/turaes-linux-x86_64
+turaes_release_sha256: ""
+
+# --- binary layout (matches deploy/turaes.service + runtime defaults) -----
+turaes_bin_dir: /usr/local/bin
+turaes_config_dir: /etc/turaes
+turaes_state_dir: /var/lib/turaes
+turaes_env_file: "{{ turaes_config_dir }}/turaes.env"
+
+# --- proxy / TLS ----------------------------------------------------------
+turaes_proxy_enabled: true
+turaes_acme_webroot: "{{ turaes_state_dir }}/acme"
+turaes_cert_dir: /etc/letsencrypt/live
+turaes_cert_email: ops@rayakala.ink
+
+# --- firewall + SSH hardening (enabled by default) ------------------------
+turaes_firewall: true
+turaes_admin_user: ansible
+turaes_ssh_port: 22
+turaes_ssh_hardening: true
+# Controller public key installed on the box before password auth is disabled.
+# Required when turaes_ssh_hardening is true — the playbook fails closed.
+turaes_admin_pubkey: ""
+turaes_ssh_allow_users_base:
+  - "{{ turaes_admin_user }}"
+  - root
+
+# --- first app (skip with --skip-tags first-app) --------------------------
+turaes_first_app_name: beruang
+turaes_first_app_binary: /srv/{{ turaes_first_app_name }}/target/release/{{ turaes_first_app_name }}-gateway
+turaes_first_app_port: 8000
+turaes_first_app_domain: "{{ turaes_first_app_name }}.{{ turaes_domain }}"
+turaes_first_app_health_path: /health
+turaes_first_app_metrics_path: /metrics
+# Optional: a local path on the controller to upload as the app binary.
+turaes_first_app_upload_src: ""

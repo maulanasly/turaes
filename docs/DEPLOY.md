@@ -89,6 +89,12 @@ cargo build --release --features proxy      # or: make proxy-build
 
 ## 2. Install
 
+> **Automated option:** `deploy/ansible/` provisions a fresh VPS end-to-end
+> (base hardening + UFW/SSH, binary install, env seed, systemd units/timers,
+> certbot TLS, optional first app). See `deploy/ansible/README.md` — manual
+> prerequisites are DNS pointing at the host, a GitHub OAuth app, and a tagged
+> release with the `turaes-linux-x86_64` asset. Run with `make ansible-provision`.
+
 Prefer `deploy/install.sh` — it installs the binary, generates the JWT secret,
 seeds the env file, and enables the service **and** the backup/GC timers:
 

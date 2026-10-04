@@ -1,0 +1,54 @@
+---
+# SSH hardening, applied in two phases so key-based login is proven *before*
+# password auth is disabled. Phase A only tightens (never drops) access; the
+# connection is then re-tested. Phase B disables passwords. If the play ever
+# fails after reload, recover via the cloud console / provider serial console.
+
+- name: Abort SSH hardening when no admin key is configured
+  ansible.builtin.assert:
+    that:
+      - turaes_admin_pubkey is defined and turaes_admin_pubkey | length > 0
+    msg: >-
+      turaes_admin_pubkey is empty but turaes_ssh_hardening is enabled. Set the
+      controller public key in group_vars/all.yml or set turaes_ssh_hardening
+      to false.
+  when: turaes_ssh_hardening
+
+- name: Compose the SSH allow-list (admin + root + current connection user)
+  ansible.builtin.set_fact:
+    base_ssh_allow_users: "{{ (turaes_ssh_allow_users_base + [ansible_user]) | unique | list }}"
+  when: turaes_ssh_hardening
+
+# --- Phase A: tighten without disabling password auth ----------------------
+- name: Install base sshd policy
+  ansible.builtin.template:
+    src: 10-turaes-base.conf.j2
+    dest: /etc/ssh/sshd_config.d/10-turaes-base.conf
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Reload sshd
+  when: turaes_ssh_hardening
+
+- name: Apply Phase A
+  ansible.builtin.meta: flush_handlers
+
+- name: Verify key-based login survives (fails closed if not)
+  ansible.builtin.wait_for_connection:
+    delay: 2
+    sleep: 3
+    timeout: 30
+  when: turaes_ssh_hardening
+
+# --- Phase B: disable password auth (only after the key is proven) --------
+- name: Install hardening sshd policy
+  ansible.builtin.template:
+    src: 20-turaes-hardening.conf.j2
+    dest: /etc/ssh/sshd_config.d/20-turaes-hardening.conf
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Reload sshd
+  when: turaes_ssh_hardening

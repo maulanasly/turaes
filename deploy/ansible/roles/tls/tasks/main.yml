@@ -1,0 +1,4 @@
+---
+- name: TLS via certbot
+  ansible.builtin.import_tasks: cert.yml
+  tags: tls

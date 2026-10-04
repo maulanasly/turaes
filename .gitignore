@@ -8,3 +8,7 @@
 /data/
 /dist/
 .DS_Store
+# Ansible secrets and scratch files (deploy/ansible)
+/deploy/ansible/group_vars/vault.yml
+*.retry
+.ansible/
