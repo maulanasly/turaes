@@ -195,13 +195,21 @@ cert.)
 cd /srv/beruang && cargo build --release
 ```
 
-Pick one of two ways to register and deploy. **No OAuth needed:** the CLI talks
+Pick one of three ways to register and deploy. **No OAuth needed:** the CLI talks
 to the local database directly (fastest for bootstrap):
 
 ```bash
 turaes app add --name beruang \
   --binary /srv/beruang/target/release/beruang-gateway \
   --port 8000 --domain beruang.turaes.rayakala.ink
+turaes app deploy beruang
+```
+
+Or declaratively from a file (see [MANIFEST.md](./MANIFEST.md) — any language,
+plus static sites and workers):
+
+```bash
+turaes apply -f turaes.yaml
 turaes app deploy beruang
 ```
 

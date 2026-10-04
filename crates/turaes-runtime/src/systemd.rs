@@ -105,6 +105,31 @@ impl SystemdRuntime {
     }
 }
 
+/// Quote one argv element for `ExecStart` (whitespace splits unless quoted).
+fn quote_systemd_arg(arg: &str) -> String {
+    if arg
+        .bytes()
+        .any(|b| b.is_ascii_whitespace() || b == b'"' || b == b'\'' || b == b'\\')
+    {
+        format!("\"{}\"", arg.replace('\\', "\\\\").replace('"', "\\\""))
+    } else {
+        arg.to_string()
+    }
+}
+
+/// The `ExecStart` program line for process apps (service/worker): either the
+/// explicit argv array or the installed binary plus flat args.
+fn exec_line(spec: &AppSpec, args: &str) -> String {
+    match &spec.command {
+        Some(argv) => argv
+            .iter()
+            .map(|a| quote_systemd_arg(a))
+            .collect::<Vec<_>>()
+            .join(" "),
+        None => format!("{}{}", spec.installed_path, args),
+    }
+}
+
 /// Render a hardened systemd unit for an app. Pure so it is trivially testable.
 pub fn render_unit(spec: &AppSpec) -> String {
     let args = spec
@@ -137,10 +162,10 @@ pub fn render_unit(spec: &AppSpec) -> String {
          Type=simple\n\
          User={user}\n\
          Group={user}\n\
-         WorkingDirectory={state_dir}\n\
+         WorkingDirectory={workdir}\n\
          {env_file}\
          Environment=PORT={port}\n\
-         ExecStart={exec}{args}\n\
+         ExecStart={exec}\n\
          Restart=always\n\
          RestartSec=5\n\
          NoNewPrivileges=true\n\
@@ -155,11 +180,59 @@ pub fn render_unit(spec: &AppSpec) -> String {
          WantedBy=multi-user.target\n",
         name = spec.name,
         user = user,
+        workdir = spec.working_dir(),
         state_dir = spec.state_dir,
         env_file = env_file,
         port = spec.port,
-        exec = spec.installed_path,
-        args = args,
+        exec = exec_line(spec, &args),
+        memory = memory,
+        cpu = cpu,
+    )
+}
+
+/// Render the unit for a `static` app: the turaes binary itself serves the
+/// synced public directory (`turaes serve-static`). Pure and testable.
+pub fn render_static_unit(spec: &AppSpec, server_bin: &str) -> String {
+    let user = spec.user();
+    let memory = spec
+        .mem_limit_mb
+        .map(|m| format!("MemoryMax={m}M\n"))
+        .unwrap_or_default();
+    let cpu = spec
+        .cpu_quota_pct
+        .map(|c| format!("CPUQuota={c}%\n"))
+        .unwrap_or_default();
+    format!(
+        "[Unit]\n\
+         Description=turaes-managed static site ({name})\n\
+         After=network.target\n\
+         \n\
+         [Service]\n\
+         Type=simple\n\
+         User={user}\n\
+         Group={user}\n\
+         WorkingDirectory={workdir}\n\
+         Environment=PORT={port}\n\
+         ExecStart={server_bin} serve-static --dir {public_dir} --port {port}\n\
+         Restart=always\n\
+         RestartSec=5\n\
+         NoNewPrivileges=true\n\
+         PrivateTmp=true\n\
+         ProtectSystem=strict\n\
+         ReadWritePaths={state_dir}\n\
+         {memory}\
+         {cpu}\
+         TasksMax=512\n\
+         \n\
+         [Install]\n\
+         WantedBy=multi-user.target\n",
+        name = spec.name,
+        user = user,
+        workdir = spec.working_dir(),
+        port = spec.port,
+        server_bin = server_bin,
+        public_dir = spec.public_dir(),
+        state_dir = spec.state_dir,
         memory = memory,
         cpu = cpu,
     )
@@ -182,8 +255,19 @@ pub fn render_env_file(env: &BTreeMap<String, String>) -> String {
 #[async_trait]
 impl Runtime for SystemdRuntime {
     async fn apply(&self, spec: &AppSpec, env: &BTreeMap<String, String>) -> Result<()> {
-        // 1. Install the binary atomically (safe while the old copy runs).
-        crate::runtime::install_binary(&spec.binary_path, &spec.installed_path).await?;
+        // 1. Materialize the artifact: sync the publish dir for `static` apps,
+        // install the binary otherwise (skipped for `command` apps, which
+        // execute their argv in place). Installs are atomic (safe while the
+        // old copy runs).
+        if spec.kind == "static" {
+            let src = spec
+                .publish_dir
+                .as_deref()
+                .ok_or_else(|| Error::Internal("static app spec is missing publish_dir".into()))?;
+            crate::runtime::sync_dir(src, &spec.public_dir()).await?;
+        } else if spec.command.is_none() {
+            crate::runtime::install_binary(&spec.binary_path, &spec.installed_path).await?;
+        }
 
         // 2. Service user, state dir + env file.
         self.ensure_user(spec).await?;
@@ -197,8 +281,16 @@ impl Runtime for SystemdRuntime {
         self.chown_state(spec).await;
 
         // 3. Unit file.
+        let body = if spec.kind == "static" {
+            let server_bin = std::env::current_exe()
+                .map(|p| p.to_string_lossy().into_owned())
+                .map_err(|e| Error::Internal(format!("cannot locate turaes binary: {e}")))?;
+            render_static_unit(spec, &server_bin)
+        } else {
+            render_unit(spec)
+        };
         tokio::fs::create_dir_all(&self.unit_dir).await?;
-        tokio::fs::write(self.unit_path(spec), render_unit(spec)).await?;
+        tokio::fs::write(self.unit_path(spec), body).await?;
         self.systemctl(&["daemon-reload"]).await?;
         self.systemctl(&["enable", &spec.unit_name()]).await?;
         Ok(())
@@ -276,6 +368,10 @@ mod tests {
             user: None,
             mem_limit_mb: None,
             cpu_quota_pct: None,
+            kind: "service".into(),
+            command: None,
+            workdir: None,
+            publish_dir: None,
         }
     }
 
@@ -305,6 +401,45 @@ mod tests {
         assert!(!bare.contains("MemoryMax="));
         assert!(!bare.contains("CPUQuota="));
         assert!(bare.contains("TasksMax=512"));
+    }
+
+    #[test]
+    fn unit_renders_command_argv_quoted() {
+        let mut s = spec();
+        s.command = Some(vec![
+            "/opt/venv/bin/python".into(),
+            "-m".into(),
+            "gunicorn".into(),
+            "--bind".into(),
+            "127.0.0.1:8000".into(),
+        ]);
+        let unit = render_unit(&s);
+        assert!(unit.contains("ExecStart=/opt/venv/bin/python -m gunicorn --bind 127.0.0.1:8000"));
+
+        let mut s = spec();
+        s.command = Some(vec!["/bin/echo".into(), "hello world".into()]);
+        let unit = render_unit(&s);
+        assert!(unit.contains("ExecStart=/bin/echo \"hello world\""));
+    }
+
+    #[test]
+    fn unit_renders_static_server() {
+        let mut s = spec();
+        s.kind = "static".into();
+        let unit = render_static_unit(&s, "/usr/local/bin/turaes");
+        assert!(unit.contains(
+            "ExecStart=/usr/local/bin/turaes serve-static --dir /var/lib/beruang/beruang/public --port 8000"
+        ));
+        assert!(unit.contains("Description=turaes-managed static site (beruang)"));
+        assert!(unit.contains("TasksMax=512"));
+    }
+
+    #[test]
+    fn unit_honors_workdir_override() {
+        let mut s = spec();
+        s.workdir = Some("/srv/beruang".into());
+        let unit = render_unit(&s);
+        assert!(unit.contains("WorkingDirectory=/srv/beruang"));
     }
 
     #[test]

@@ -42,15 +42,41 @@ pub enum Command {
         #[arg(long)]
         force: bool,
     },
-    /// Secret rotation tooling (local database).
+    /// Sealed secrets: per-app values plus rotation tooling (local database).
     Secrets {
         /// Which secrets operation to run.
         #[command(subcommand)]
         cmd: SecretsCommand,
+        /// Organization id or slug to scope per-app operations to.
+        #[arg(long, global = true)]
+        org: Option<String>,
     },
     /// Delete artifact blobs no deployment references (plus stale uploads).
     Gc {
         /// Count and measure without deleting anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Serve a static directory on loopback (internal: supervision target for
+    /// `static` apps; also handy for debugging).
+    ServeStatic {
+        /// Directory to serve.
+        #[arg(long)]
+        dir: PathBuf,
+        /// Loopback port to bind.
+        #[arg(long)]
+        port: u16,
+    },
+    /// Apply a `turaes.yaml` manifest: create or update the app, domains, env
+    /// and health checks (config only; deploy separately).
+    Apply {
+        /// Manifest file (defaults to `./turaes.yaml`).
+        #[arg(long, short = 'f')]
+        file: Option<PathBuf>,
+        /// Organization id or slug to apply into.
+        #[arg(long, global = true)]
+        org: Option<String>,
+        /// Print the diff without writing anything.
         #[arg(long)]
         dry_run: bool,
     },
@@ -113,13 +139,34 @@ pub enum Command {
     },
 }
 
-/// Local secret rotation tooling.
+/// Sealed secrets: per-app values (manifest `secrets:` keys) and rotation.
 #[derive(Debug, Subcommand)]
 pub enum SecretsCommand {
     /// Re-seal every stored secret (app env vars, server SSH keys) with the
     /// primary cipher. Migrates legacy blobs; with TURAES_SECRET_PREVIOUS set,
     /// completes a rotation to the new secret.
     Reseal,
+    /// Set a secret value (arg, `$KEY` env, or stdin when piped).
+    Set {
+        /// Application name.
+        app: String,
+        /// Secret key (`[A-Za-z_][A-Za-z0-9_]*`).
+        key: String,
+        /// Value (else read `$KEY` from the environment, else stdin).
+        value: Option<String>,
+    },
+    /// Remove a secret value.
+    Unset {
+        /// Application name.
+        app: String,
+        /// Secret key.
+        key: String,
+    },
+    /// List secret/env key names (values are never shown).
+    List {
+        /// Application name.
+        app: String,
+    },
 }
 
 /// Local (non-HTTP) server registry management.
@@ -162,18 +209,33 @@ pub enum ServerCommand {
 
 /// Local (non-HTTP) application management.
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 pub enum AppCommand {
     /// Register an application.
     Add {
         /// Lowercase slug (unit + install name).
         #[arg(long)]
         name: String,
-        /// Absolute path to the prebuilt binary.
+        /// Absolute path to the prebuilt binary (service/binary; defaults to
+        /// `command[0]` / `publish_dir` for command/static apps).
         #[arg(long)]
-        binary: String,
-        /// Loopback port.
+        binary: Option<String>,
+        /// Exec argv for interpreted apps; repeat per element
+        /// (`--command /opt/venv/bin/python --command worker.py`).
         #[arg(long)]
-        port: u16,
+        command: Option<Vec<String>>,
+        /// Working directory override.
+        #[arg(long)]
+        workdir: Option<String>,
+        /// Source directory synced for `static` apps.
+        #[arg(long)]
+        publish_dir: Option<String>,
+        /// `service` (default), `static`, or `worker`.
+        #[arg(long, default_value = "service")]
+        kind: String,
+        /// Loopback port (required for service/static; omit or 0 for workers).
+        #[arg(long)]
+        port: Option<u16>,
         /// Primary hostname.
         #[arg(long)]
         domain: Option<String>,

@@ -49,6 +49,58 @@ impl Deployer {
         Self { runtime }
     }
 
+    /// Sync, (re)configure, start, and observe a `static` app. The caller
+    /// supplies the content hash (directory trees have no single file to
+    /// hash here; the sync itself happens in `Runtime::apply`).
+    pub async fn deploy_static(
+        &self,
+        spec: &AppSpec,
+        env: &BTreeMap<String, String>,
+    ) -> Result<DeployOutcome> {
+        let mut log = String::new();
+        self.runtime.apply(spec, env).await?;
+        log.push_str("synced publish directory\n");
+
+        self.runtime.restart(spec).await?;
+        log.push_str("started service\n");
+
+        let state = self.runtime.status(spec).await.unwrap_or(RunState::Unknown);
+        log.push_str(&format!("state: {}\n", state.as_status()));
+
+        Ok(DeployOutcome {
+            artifact_hash: String::new(),
+            state,
+            log,
+        })
+    }
+
+    /// Start and observe an app whose artifact identity is already known
+    /// (command apps execute in place; there is no file to hash or store).
+    pub async fn deploy_with_hash(
+        &self,
+        spec: &AppSpec,
+        env: &BTreeMap<String, String>,
+        hash: String,
+    ) -> Result<DeployOutcome> {
+        let mut log = String::new();
+        log.push_str(&format!("artifact {hash}\n"));
+
+        self.runtime.apply(spec, env).await?;
+        log.push_str("applied runtime config\n");
+
+        self.runtime.restart(spec).await?;
+        log.push_str("started service\n");
+
+        let state = self.runtime.status(spec).await.unwrap_or(RunState::Unknown);
+        log.push_str(&format!("state: {}\n", state.as_status()));
+
+        Ok(DeployOutcome {
+            artifact_hash: hash,
+            state,
+            log,
+        })
+    }
+
     /// Install, (re)configure, start, and observe an app.
     pub async fn deploy(
         &self,

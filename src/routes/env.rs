@@ -20,7 +20,7 @@ pub struct PutEnv {
     pub value: String,
 }
 
-fn validate_key(key: &str) -> Result<()> {
+pub(crate) fn validate_key(key: &str) -> Result<()> {
     let valid = !key.is_empty()
         && key.len() <= 128
         && key

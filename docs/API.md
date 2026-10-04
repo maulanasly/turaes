@@ -175,20 +175,25 @@ curl -X POST localhost:8787/api/v1/orgs/default/apps \
 | Field | Required | Notes |
 |---|---|---|
 | `name` | yes | lowercase slug `a-z0-9-`, ≤ 64 chars; becomes the unit + install name |
-| `binary_path` | yes | absolute path to a prebuilt binary on the server |
-| `port` | yes | loopback port the process binds |
+| `binary_path` | service/binary | absolute path to a prebuilt binary on the server (server uses `command[0]` / `publish_dir` when those are set) |
+| `command` | service+command / worker | exec argv array, e.g. `["/opt/venv/bin/python", "worker.py"]` (mutually exclusive with `args`; no shell) |
+| `workdir` | no | `WorkingDirectory` override (defaults to the state dir) |
+| `publish_dir` | static only | source directory synced per deploy |
+| `kind` | no | `service` (default), `static`, or `worker`; immutable after create |
+| `port` | service/static | loopback port the process binds (workers pass `0` or omit) |
 | `description` | no | free text |
 | `args` | no | extra `ExecStart` arguments |
 | `health_path` | no | default `/health` |
-| `metrics_path` | no | default `/metrics` |
-| `domain` | no | primary hostname routed by the proxy |
+| `metrics_path` | no | default `/metrics` (service only) |
+| `domain` | no | primary hostname routed by the proxy (service/static) |
 | `runtime` | no | `systemd` (default) or `proc` |
 | `auto_restart` | no | default `true` |
 | `mem_limit_mb` | no | memory ceiling 16–65536 (`systemd` only; takes effect on next deploy/restart) |
 | `cpu_quota_pct` | no | CPU ceiling 1–6400 (% of one core; `systemd` only) |
 
-`PATCH` accepts the same optional fields; `mem_limit_mb`/`cpu_quota_pct` are
-tri-state (absent keeps, `null` clears, a number sets). Limits with the `proc`
+`PATCH` accepts the same optional fields; `mem_limit_mb`/`cpu_quota_pct` and
+`command`/`workdir`/`publish_dir` are tri-state (absent keeps, `null` clears,
+a value sets). `kind` is immutable after create. Limits with the `proc`
 runtime are rejected (`422`) rather than silently ignored.
 
 ## Quotas

@@ -54,6 +54,7 @@ futures = "0.3"
 # serialization / config
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9"
 toml = "0.8"
 
 # db
@@ -105,6 +106,7 @@ futures.workspace = true
 
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 
 sqlx.workspace = true
 
