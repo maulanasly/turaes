@@ -1,5 +1,17 @@
-// Pure list sorting helpers (unit-testable).
+// Pure list sorting/filter helpers (unit-testable).
 export const APP_SORTS = ["name", "status", "server", "port", "recent"];
+
+// Case-insensitive, whitespace-trimmed search across name and primary domain.
+// Empty query returns the input unchanged (new array, never mutates).
+export function filterApps(apps, q) {
+  const needle = String(q || "").trim().toLowerCase();
+  if (!needle) return [...(apps || [])];
+  return (apps || []).filter(
+    (a) =>
+      String(a.name || "").toLowerCase().includes(needle) ||
+      String(a.domain || "").toLowerCase().includes(needle),
+  );
+}
 
 function value(app, key, serverNameFn) {
   switch (key) {
