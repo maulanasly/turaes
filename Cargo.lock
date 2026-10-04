@@ -3933,6 +3933,7 @@ dependencies = [
  "axum 0.8.9",
  "base64 0.22.1",
  "chrono",
+ "hkdf",
  "jsonwebtoken",
  "rand 0.8.8",
  "serde",

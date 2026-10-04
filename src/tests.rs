@@ -1763,3 +1763,59 @@ async fn member_management_requires_owner() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn secrets_reseal_migrates_legacy_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    sqlx::query(
+        "INSERT INTO applications (id, name, binary_path, port) \
+         VALUES ('s1', 'sres', '/bin/true', 9300)",
+    )
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    let legacy = state.secrets.seal_legacy("old-value").unwrap();
+    let current = state.secrets.seal("new-value").unwrap();
+    sqlx::query(
+        "INSERT INTO env_vars (id, application_id, key, value_enc) VALUES ('e1', 's1', 'A', ?)",
+    )
+    .bind(&legacy)
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO env_vars (id, application_id, key, value_enc) VALUES ('e2', 's1', 'B', ?)",
+    )
+    .bind(&current)
+    .execute(&state.pool)
+    .await
+    .unwrap();
+
+    let (up, total, ssh_up, ssh_total) = crate::secrets::reseal(&state).await.unwrap();
+    assert_eq!((up, total), (1, 2));
+    assert_eq!((ssh_up, ssh_total), (0, 0));
+
+    // Values intact and everything is v1 now; a second run is a no-op.
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT key, value_enc FROM env_vars ORDER BY key")
+            .fetch_all(&state.pool)
+            .await
+            .unwrap();
+    for (key, sealed) in &rows {
+        assert!(!turaes_core::crypto::SecretBox::is_legacy_format(sealed));
+        let want = if key == "A" { "old-value" } else { "new-value" };
+        assert_eq!(state.secrets.open(sealed).unwrap(), want);
+    }
+    let (up2, _, _, _) = crate::secrets::reseal(&state).await.unwrap();
+    assert_eq!(up2, 0);
+
+    // The run itself is audited.
+    let action: String = sqlx::query_scalar(
+        "SELECT action FROM audit_log WHERE action = 'secrets.reseal' ORDER BY rowid DESC LIMIT 1",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    assert_eq!(action, "secrets.reseal");
+}

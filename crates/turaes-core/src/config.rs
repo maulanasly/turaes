@@ -12,6 +12,32 @@ use crate::error::{Error, Result};
 /// Embedded fallback so turaes boots without a config file on disk.
 const EMBEDDED_DEFAULT: &str = include_str!("../../../config/default.toml");
 
+/// The shipped placeholder secret. Release builds refuse to boot with it even
+/// though it satisfies the length check.
+pub const DEFAULT_JWT_PLACEHOLDER: &str = "change-me-change-me-change-me-change-me";
+
+/// Refuse the shipped placeholder secret (release gate).
+fn reject_default_secret(secret: &str) -> Result<()> {
+    if secret == DEFAULT_JWT_PLACEHOLDER {
+        return Err(Error::Config(
+            "refusing the default jwt_secret placeholder; set TURAES_JWT_SECRET".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Refuse an empty sign-in allowlist unless explicitly opened (release gate).
+fn reject_open_signin(allowed: &[i64], allow_open: bool) -> Result<()> {
+    if allowed.is_empty() && !allow_open {
+        return Err(Error::Config(
+            "allowed_github_ids is empty: sign-in would be open to every GitHub user; \
+             add ids or set TURAES_ALLOW_OPEN_SIGNIN=true explicitly"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Root configuration object.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -92,12 +118,21 @@ pub struct DatabaseConfig {
 pub struct AuthConfig {
     /// JWT signing secret (>= 32 chars in production).
     pub jwt_secret: String,
+    /// Previous signing/sealing secret, kept only while rotating: its ciphers
+    /// decrypt (never encrypt) until `turaes secrets reseal` migrates every
+    /// stored value, then unset it.
+    #[serde(default)]
+    pub secret_previous: String,
     /// GitHub OAuth app client id.
     pub github_client_id: String,
     /// GitHub OAuth app client secret.
     pub github_client_secret: String,
     /// Numeric GitHub user ids allowed to sign in.
     pub allowed_github_ids: Vec<i64>,
+    /// Explicitly allow every GitHub user to sign in (empty allowlist).
+    /// Default false; release builds refuse an empty allowlist without it.
+    #[serde(default)]
+    pub allow_open_signin: bool,
     /// Canonical dashboard origin, e.g. `https://turaes.example.com`.
     pub app_origin: String,
     /// Sliding session lifetime in days.
@@ -242,9 +277,14 @@ impl Config {
         Ok(cfg)
     }
 
-    /// Boot-time validation. Release builds refuse the placeholder secret and
-    /// insecure non-localhost cookies.
+    /// Boot-time validation. Release builds refuse the placeholder secret, an
+    /// empty sign-in allowlist (unless explicitly opened), and insecure
+    /// non-localhost cookies.
     pub fn validate(&self) -> Result<()> {
+        if !cfg!(debug_assertions) {
+            reject_default_secret(&self.auth.jwt_secret)?;
+            reject_open_signin(&self.auth.allowed_github_ids, self.auth.allow_open_signin)?;
+        }
         if self.auth.jwt_secret.len() < 32 {
             // Debug builds may run with the placeholder for convenience.
             if !cfg!(debug_assertions) {
@@ -359,6 +399,8 @@ fn apply_env(cfg: &mut Config) -> Result<()> {
     env_str("TURAES_DATABASE_URL", &mut cfg.database.url);
 
     env_str("TURAES_JWT_SECRET", &mut cfg.auth.jwt_secret);
+    env_str("TURAES_SECRET_PREVIOUS", &mut cfg.auth.secret_previous);
+    env_bool("TURAES_ALLOW_OPEN_SIGNIN", &mut cfg.auth.allow_open_signin);
     env_str("TURAES_GITHUB_CLIENT_ID", &mut cfg.auth.github_client_id);
     env_str(
         "TURAES_GITHUB_CLIENT_SECRET",
@@ -456,5 +498,14 @@ mod tests {
             cfg.callback_url(),
             "https://turaes.example.com/auth/callback"
         );
+    }
+
+    #[test]
+    fn release_gates_reject_unsafe_defaults() {
+        assert!(reject_default_secret(DEFAULT_JWT_PLACEHOLDER).is_err());
+        assert!(reject_default_secret("a-real-secret-that-is-long-enough-123").is_ok());
+        assert!(reject_open_signin(&[], false).is_err());
+        assert!(reject_open_signin(&[], true).is_ok());
+        assert!(reject_open_signin(&[5284227], false).is_ok());
     }
 }

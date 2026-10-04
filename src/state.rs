@@ -45,7 +45,15 @@ impl AppState {
         Self {
             artifacts: ArtifactStore::new(&cfg.runtime.artifact_dir),
             issuer: TokenIssuer::new(&cfg.auth.jwt_secret, cfg.auth.session_ttl_days),
-            secrets: SecretBox::new(&cfg.auth.jwt_secret),
+            secrets: if cfg.auth.secret_previous.is_empty() {
+                SecretBox::new(&cfg.auth.jwt_secret)
+            } else {
+                tracing::warn!(
+                    "TURAES_SECRET_PREVIOUS is set: old ciphers still decrypt; \
+                     run `turaes secrets reseal`, verify, then unset it"
+                );
+                SecretBox::with_previous(&cfg.auth.jwt_secret, &cfg.auth.secret_previous)
+            },
             http: reqwest::Client::new(),
             proxy_router: None,
             auth_disabled,

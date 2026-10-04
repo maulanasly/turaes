@@ -219,6 +219,26 @@ turaes restore /var/lib/turaes/backups/turaes-<timestamp>.db --force
 systemctl start turaes
 ```
 
+### Rotate the platform secret
+
+`TURAES_JWT_SECRET` signs sessions *and* derives the at-rest sealing key
+(HKDF-SHA256, domain-separated). Rotate it without losing stored env vars:
+
+```bash
+# 1. Set the new secret, keep the old one for decryption.
+#    In /etc/turaes/turaes.env:
+#      TURAES_JWT_SECRET=<new openssl rand -hex 32>
+#      TURAES_SECRET_PREVIOUS=<old secret>
+systemctl restart turaes
+# 2. Re-seal everything with the new primary (migrates legacy blobs too).
+turaes secrets reseal
+# 3. Verify: deploy an app, confirm env-dependent behavior, check
+#    `turaes doctor` no longer reports a staged rotation.
+# 4. Remove TURAES_SECRET_PREVIOUS from the env file and restart.
+```
+
+All sessions invalidate on rotation (users sign in again) — that is expected.
+
 ### Upgrade
 
 ```bash

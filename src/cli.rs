@@ -37,6 +37,12 @@ pub enum Command {
         #[arg(long)]
         force: bool,
     },
+    /// Secret rotation tooling (local database).
+    Secrets {
+        /// Which secrets operation to run.
+        #[command(subcommand)]
+        cmd: SecretsCommand,
+    },
     /// One-shot app operations against the local database (bootstrap/ops; no
     /// HTTP auth required).
     App {
@@ -84,6 +90,15 @@ pub enum Command {
         #[arg(long, default_value_t = 10)]
         interval: u64,
     },
+}
+
+/// Local secret rotation tooling.
+#[derive(Debug, Subcommand)]
+pub enum SecretsCommand {
+    /// Re-seal every stored secret (app env vars, server SSH keys) with the
+    /// primary cipher. Migrates legacy blobs; with TURAES_SECRET_PREVIOUS set,
+    /// completes a rotation to the new secret.
+    Reseal,
 }
 
 /// Local (non-HTTP) server registry management.

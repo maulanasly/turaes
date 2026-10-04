@@ -1,9 +1,14 @@
 //! Cryptographic primitives: session JWTs and secret-at-rest sealing.
 //!
-//! - **Sessions** are stateless JWTs (`HS256`) stored in an HttpOnly cookie.
-//! - **App environment variables** are sealed with AES-256-GCM. The 32-byte key
-//!   is derived from the configured secret via SHA-256, so operators only need
-//!   to manage one string.
+//! - **Sessions** are stateless JWTs (`HS256`) stored in an HttpOnly cookie,
+//!   signed with the configured secret.
+//! - **App environment variables** (and sealed agent/SSH material) use
+//!   AES-256-GCM with a key derived from the configured secret via
+//!   HKDF-SHA256 under a dedicated info string — never the raw signing
+//!   secret, and never the same key as any other use.
+//! - Sealed blobs carry a version prefix (`v1$…`). Unprefixed blobs are the
+//!   pre-HKDF legacy format (key = SHA-256 of the secret) and still decrypt
+//!   via a fallback cipher; `turaes secrets reseal` migrates them.
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
@@ -76,27 +81,95 @@ impl TokenIssuer {
     }
 }
 
+/// Domain separation label for the at-rest sealing key.
+const SEAL_INFO: &[u8] = b"turaes/env-seal/v1";
+
+/// Prefix marking the current sealed-blob format.
+const SEAL_VERSION_PREFIX: &str = "v1$";
+
+/// Derive a 32-byte sealing key from the configured secret via HKDF-SHA256.
+fn sealing_key(secret: &str) -> [u8; 32] {
+    let hk = hkdf::Hkdf::<Sha256>::new(None, secret.as_bytes());
+    let mut key = [0u8; 32];
+    hk.expand(SEAL_INFO, &mut key)
+        .expect("HKDF-SHA256 expands to 32 bytes");
+    key
+}
+
+/// Legacy (pre-HKDF) key: SHA-256 of the secret, kept as a decrypt-only
+/// fallback until `turaes secrets reseal` migrates every stored value.
+fn legacy_key(secret: &str) -> [u8; 32] {
+    Sha256::digest(secret.as_bytes()).into()
+}
+
+fn cipher_for(key: &[u8; 32]) -> Aes256Gcm {
+    Aes256Gcm::new_from_slice(key).expect("32-byte key")
+}
+
 /// Seals and opens small secrets with AES-256-GCM.
+///
+/// The primary cipher derives from the configured secret via HKDF-SHA256, so
+/// the at-rest key is independent of the JWT signing key. `with_previous`
+/// adds the previous secret's ciphers as decrypt-only fallbacks for rotation;
+/// `open` transparently handles both the current (`v1$…`) and legacy
+/// (unprefixed) blob formats.
 #[derive(Clone)]
 pub struct SecretBox {
-    cipher: Aes256Gcm,
+    /// Ciphers for `v1$` blobs, primary first.
+    primary: Vec<Aes256Gcm>,
+    /// Ciphers for unprefixed legacy blobs, newest first.
+    legacy: Vec<Aes256Gcm>,
 }
 
 impl SecretBox {
-    /// Derive the cipher from the configured secret.
+    /// Derive ciphers from the configured secret.
     pub fn new(secret: &str) -> Self {
-        let digest = Sha256::digest(secret.as_bytes());
-        let cipher = Aes256Gcm::new_from_slice(&digest).expect("32-byte key");
-        Self { cipher }
+        Self {
+            primary: vec![cipher_for(&sealing_key(secret))],
+            legacy: vec![cipher_for(&legacy_key(secret))],
+        }
     }
 
-    /// Encrypt UTF-8 plaintext into a URL-safe base64 `nonce||ciphertext`.
+    /// Derive ciphers from the current secret plus a previous secret that is
+    /// being rotated out (its ciphers decrypt, never encrypt).
+    pub fn with_previous(secret: &str, previous: &str) -> Self {
+        Self {
+            primary: vec![
+                cipher_for(&sealing_key(secret)),
+                cipher_for(&sealing_key(previous)),
+            ],
+            legacy: vec![
+                cipher_for(&legacy_key(secret)),
+                cipher_for(&legacy_key(previous)),
+            ],
+        }
+    }
+
+    /// Encrypt UTF-8 plaintext into a versioned `v1$base64(nonce||ciphertext)`
+    /// blob using the primary cipher.
     pub fn seal(&self, plaintext: &str) -> Result<String> {
         let mut nonce_bytes = [0u8; 12];
         rand::thread_rng().fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
-        let ciphertext = self
-            .cipher
+        let ciphertext = self.primary[0]
+            .encrypt(nonce, plaintext.as_bytes())
+            .map_err(|_| Error::Internal("failed to seal secret".into()))?;
+        let mut out = Vec::with_capacity(nonce_bytes.len() + ciphertext.len());
+        out.extend_from_slice(&nonce_bytes);
+        out.extend_from_slice(&ciphertext);
+        Ok(format!(
+            "{SEAL_VERSION_PREFIX}{}",
+            URL_SAFE_NO_PAD.encode(out)
+        ))
+    }
+
+    /// Encrypt with the legacy (unprefixed) format. Migration tooling and
+    /// tests only — everything else must use [`SecretBox::seal`].
+    pub fn seal_legacy(&self, plaintext: &str) -> Result<String> {
+        let mut nonce_bytes = [0u8; 12];
+        rand::thread_rng().fill_bytes(&mut nonce_bytes);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let ciphertext = self.legacy[0]
             .encrypt(nonce, plaintext.as_bytes())
             .map_err(|_| Error::Internal("failed to seal secret".into()))?;
         let mut out = Vec::with_capacity(nonce_bytes.len() + ciphertext.len());
@@ -105,21 +178,32 @@ impl SecretBox {
         Ok(URL_SAFE_NO_PAD.encode(out))
     }
 
-    /// Decrypt a value produced by [`SecretBox::seal`].
+    /// True for pre-HKDF blobs (no version prefix): still decryptable, but a
+    /// `turaes secrets reseal` away from the current format.
+    pub fn is_legacy_format(sealed: &str) -> bool {
+        !sealed.starts_with(SEAL_VERSION_PREFIX)
+    }
+
+    /// Decrypt a value produced by [`SecretBox::seal`] or the legacy format.
     pub fn open(&self, sealed: &str) -> Result<String> {
+        let (ciphers, body) = match sealed.strip_prefix(SEAL_VERSION_PREFIX) {
+            Some(body) => (&self.primary, body),
+            None => (&self.legacy, sealed),
+        };
         let raw = URL_SAFE_NO_PAD
-            .decode(sealed)
+            .decode(body)
             .map_err(|_| Error::Internal("invalid sealed secret encoding".into()))?;
         if raw.len() < 13 {
             return Err(Error::Internal("sealed secret too short".into()));
         }
         let (nonce_bytes, ciphertext) = raw.split_at(12);
-        let plaintext = self
-            .cipher
-            .decrypt(Nonce::from_slice(nonce_bytes), ciphertext)
-            .map_err(|_| Error::Internal("failed to open secret".into()))?;
-        String::from_utf8(plaintext)
-            .map_err(|_| Error::Internal("sealed secret is not valid UTF-8".into()))
+        for cipher in ciphers {
+            if let Ok(plaintext) = cipher.decrypt(Nonce::from_slice(nonce_bytes), ciphertext) {
+                return String::from_utf8(plaintext)
+                    .map_err(|_| Error::Internal("sealed secret is not valid UTF-8".into()));
+            }
+        }
+        Err(Error::Internal("failed to open secret".into()))
     }
 }
 
@@ -167,8 +251,46 @@ mod tests {
     fn seal_roundtrip() {
         let sbox = SecretBox::new("master-secret");
         let sealed = sbox.seal("postgres://secret").unwrap();
+        assert!(sealed.starts_with("v1$"));
         assert_ne!(sealed, "postgres://secret");
         assert_eq!(sbox.open(&sealed).unwrap(), "postgres://secret");
+    }
+
+    #[test]
+    fn seal_key_differs_from_signing_key_material() {
+        // The at-rest key must not be the raw secret (JWT HMAC key) nor its
+        // plain SHA-256 (the legacy format): HKDF domain separation.
+        let derived = sealing_key("master-secret");
+        assert_ne!(derived, legacy_key("master-secret"));
+        assert_ne!(derived.as_slice(), b"master-secret".as_slice());
+        let again = sealing_key("master-secret");
+        assert_eq!(derived, again);
+        assert_ne!(derived, sealing_key("other-secret"));
+    }
+
+    #[test]
+    fn legacy_blobs_still_open() {
+        let sbox = SecretBox::new("master-secret");
+        let legacy = sbox.seal_legacy("postgres://legacy").unwrap();
+        assert!(SecretBox::is_legacy_format(&legacy));
+        assert!(!SecretBox::is_legacy_format(&sbox.seal("x").unwrap()));
+        assert_eq!(sbox.open(&legacy).unwrap(), "postgres://legacy");
+    }
+
+    #[test]
+    fn rotation_opens_old_and_seals_new() {
+        let old_box = SecretBox::new("old-secret");
+        let legacy_blob = old_box.seal_legacy("a").unwrap();
+        let v1_blob = old_box.seal("b").unwrap();
+
+        let rotated = SecretBox::with_previous("new-secret", "old-secret");
+        // Old blobs (both formats) still decrypt via fallbacks…
+        assert_eq!(rotated.open(&legacy_blob).unwrap(), "a");
+        assert_eq!(rotated.open(&v1_blob).unwrap(), "b");
+        // …but fresh seals use the new primary and the old box cannot read them.
+        let fresh = rotated.seal("c").unwrap();
+        assert_eq!(rotated.open(&fresh).unwrap(), "c");
+        assert!(old_box.open(&fresh).is_err());
     }
 
     #[test]

@@ -176,8 +176,13 @@ users ──< memberships(role) >── organizations ──< applications ─�
 - **Auth**: GitHub OAuth authorization-code; only numeric ids on
   `allowed_github_ids` may sign in. Session is an HttpOnly, SameSite=Lax JWT
   cookie (Secure when the origin is https). Debug builds can run `AUTH_DISABLED=1`.
-- **Secrets at rest**: app env vars sealed with AES-256-GCM (key = SHA-256 of
-  `jwt_secret`); decrypted only in memory at deploy time.
+- **Secrets at rest**: app env vars (and sealed agent/SSH material) use
+  AES-256-GCM with a key derived from `jwt_secret` via HKDF-SHA256 under a
+  dedicated info string — independent of the JWT signing key. Blobs carry a
+  `v1$` prefix; unprefixed pre-HKDF blobs (key = SHA-256 of the secret) still
+  decrypt until `turaes secrets reseal` migrates them. Rotation: set the new
+  secret, keep the old one in `TURAES_SECRET_PREVIOUS`, reseal, verify, unset.
+  Release builds refuse the placeholder secret and an empty sign-in allowlist.
 - **Isolation**: systemd units run as a dedicated user with `ProtectSystem=strict`
   and a single writable path. This is *process* isolation, not container
   isolation — do not run untrusted code.
