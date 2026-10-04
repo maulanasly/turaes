@@ -10,6 +10,7 @@ const ROLES = ["viewer", "developer", "admin", "owner"];
 export function OrgView({ user }) {
   const [me, setMe] = useState(null);
   const [members, setMembers] = useState(null);
+  const [quota, setQuota] = useState(null);
   const active = getOrg();
   const mine = (me?.orgs || []).find((o) => o.slug === active || o.org_id === active);
   const isOwner = mine?.role === "owner";
@@ -31,7 +32,14 @@ export function OrgView({ user }) {
     }
   }, []);
 
-  useEffect(() => { loadMe(); loadMembers(); }, [loadMe, loadMembers]);
+  const loadQuota = useCallback(async () => {
+    try {
+      const r = await oapi("/quota");
+      setQuota(r);
+    } catch { setQuota(null); }
+  }, []);
+
+  useEffect(() => { loadMe(); loadMembers(); loadQuota(); }, [loadMe, loadMembers, loadQuota]);
 
   const switchOrg = (slug) => {
     try { localStorage.setItem("turaes-org", slug); } catch (e) {}
@@ -107,6 +115,15 @@ export function OrgView({ user }) {
           </select>
         </label>
       </div>
+      <h3>Quota usage</h3>
+      ${quota === null
+        ? html`<p class="muted">Loading…</p>`
+        : html`<div class="kpis">
+            <div class="kpi"><div class="kpi-label">Apps</div><div class="kpi-value">${quota.usage.apps}/${quota.quota.max_apps}</div></div>
+            <div class="kpi"><div class="kpi-label">Memory</div><div class="kpi-value">${quota.usage.mem_mb}/${quota.quota.max_mem_mb} MB</div></div>
+            <div class="kpi"><div class="kpi-label">CPU</div><div class="kpi-value">${quota.usage.cpu_pct}/${quota.quota.max_cpu_pct}%</div></div>
+            <div class="kpi"><div class="kpi-label">Domains</div><div class="kpi-value">${quota.usage.domains}/${quota.quota.max_domains}</div></div>
+          </div>`}
       <h3>Members</h3>
       ${members === null
         ? html`<p class="muted">Loading…</p>`

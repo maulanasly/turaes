@@ -1880,3 +1880,216 @@ async fn csrf_blocks_cookie_mutations_without_json() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::CREATED);
 }
+
+#[tokio::test]
+async fn limits_stored_and_validated() {
+    let dir = tempfile::tempdir().unwrap();
+    // systemd runtime accepts limits.
+    let router = test_router(dir.path()).await;
+    let payload = json!({
+        "name": "limited", "binary_path": "/bin/true", "port": 9500,
+        "runtime": "systemd", "mem_limit_mb": 256, "cpu_quota_pct": 50,
+    });
+    let body = body_json(
+        router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/orgs/default/apps")
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(body["application"]["mem_limit_mb"], 256);
+    assert_eq!(body["application"]["cpu_quota_pct"], 50);
+
+    // Out-of-range values are rejected.
+    for bad in [
+        json!({"name": "b1", "binary_path": "/bin/true", "port": 9501, "mem_limit_mb": 8}),
+        json!({"name": "b2", "binary_path": "/bin/true", "port": 9502, "cpu_quota_pct": 0}),
+    ] {
+        let router = test_router(dir.path()).await;
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/orgs/default/apps")
+                    .header("content-type", "application/json")
+                    .body(Body::from(bad.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    // The proc runtime cannot confine: limits with it are rejected, not
+    // silently ignored (tests default to the proc driver).
+    let router = test_router(dir.path()).await;
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/apps")
+                .header("content-type", "application/json")
+                .body(
+                    Body::from(
+                        json!({"name": "b3", "binary_path": "/bin/true", "port": 9503, "mem_limit_mb": 256})
+                            .to_string(),
+                    ),
+                )
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn quota_enforcement() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let mk = |name: &str, port: u16, extra: serde_json::Value| {
+        let mut payload = json!({"name": name, "binary_path": "/bin/true", "port": port});
+        for (k, v) in extra.as_object().unwrap() {
+            payload[k] = v.clone();
+        }
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/orgs/default/apps")
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap()
+    };
+
+    // Cap the org at one app.
+    let router = app::build_router(state.clone());
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/v1/orgs/default/quota")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"max_apps": 1}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let router = app::build_router(state.clone());
+    let resp = router.oneshot(mk("q1", 9510, json!({}))).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let router = app::build_router(state.clone());
+    let resp = router.oneshot(mk("q2", 9511, json!({}))).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+
+    // Memory budget: a 256MB app does not fit in 100MB, but an unlimited
+    // app consumes no budget (it still counts toward max_apps, raised first).
+    let router = app::build_router(state.clone());
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/v1/orgs/default/quota")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"max_apps": 20, "max_mem_mb": 100}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let router = app::build_router(state.clone());
+    let resp = router
+        .oneshot(mk(
+            "q3",
+            9512,
+            json!({"runtime": "systemd", "mem_limit_mb": 256}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+
+    // Hostname budget: zero means no new claims.
+    let router = app::build_router(state.clone());
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/v1/orgs/default/quota")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"max_domains": 0}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let app_id: String = sqlx::query_scalar("SELECT id FROM applications WHERE name = 'q1'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    let router = app::build_router(state.clone());
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/default/apps/{app_id}/domains"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"domain": "blocked.example.com"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn quota_get_reports_usage() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+    router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/apps")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "usageapp", "binary_path": "/bin/true", "port": 9520,
+                        "runtime": "systemd", "mem_limit_mb": 128,
+                        "domain": "usage.example.com",
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let router = app::build_router(state.clone());
+    let body = body_json(
+        router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/orgs/default/quota")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(body["usage"]["apps"], 1);
+    assert_eq!(body["usage"]["mem_mb"], 128);
+    assert_eq!(body["usage"]["domains"], 1);
+    assert!(body["quota"]["max_apps"].as_i64().unwrap() >= 1);
+}

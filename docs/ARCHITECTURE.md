@@ -140,7 +140,14 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ReadWritePaths=/var/lib/{app}
+MemoryMax={mem_limit_mb}M    # only when the app sets a limit
+CPUQuota={cpu_quota_pct}%    # only when the app sets a limit
+TasksMax=512
 ```
+
+Per-org quotas (`org_quotas`: apps, summed memory/CPU limits, hostnames) are
+enforced at the API on create/update/domain-claim; limits render into the unit
+on the next deploy/restart.
 
 **ProcRuntime** spawns `installed_path`, redirects stdout/stderr to
 `state_dir/{app}.log`, tracks the pid in `state_dir/{app}.pid`, and signals via

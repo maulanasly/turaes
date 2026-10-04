@@ -290,6 +290,8 @@ async fn reconcile(
         state_dir: format!("{}/{}", cfg.runtime.state_dir, app.name),
         env_file: Some(format!("{}/{}.env", cfg.runtime.env_dir, app.name)),
         user: None,
+        mem_limit_mb: None,
+        cpu_quota_pct: None,
     };
     let env: BTreeMap<String, String> = app.env.clone().into_iter().collect();
     let runtime = runtime_for(cfg, &app.runtime);

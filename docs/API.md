@@ -177,6 +177,24 @@ curl -X POST localhost:8787/api/v1/orgs/default/apps \
 | `domain` | no | primary hostname routed by the proxy |
 | `runtime` | no | `systemd` (default) or `proc` |
 | `auto_restart` | no | default `true` |
+| `mem_limit_mb` | no | memory ceiling 16–65536 (`systemd` only; takes effect on next deploy/restart) |
+| `cpu_quota_pct` | no | CPU ceiling 1–6400 (% of one core; `systemd` only) |
+
+`PATCH` accepts the same optional fields; `mem_limit_mb`/`cpu_quota_pct` are
+tri-state (absent keeps, `null` clears, a number sets). Limits with the `proc`
+runtime are rejected (`422`) rather than silently ignored.
+
+## Quotas
+
+Per-organization budgets. Quota accounting sums explicit limits only —
+unlimited apps count toward `max_apps` but not the memory/CPU budgets.
+
+| Method | Path | Role | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/orgs/{org}/quota` | viewer | Ceilings plus current usage |
+| `PUT` | `/api/v1/orgs/{org}/quota` | owner | Replace ceilings (omitted fields keep) |
+
+Exceeding a budget on create/update/domain-claim yields `409`.
 
 Response (`201`):
 

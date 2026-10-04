@@ -33,6 +33,10 @@ pub struct Application {
     pub server_id: String,
     /// Owning tenant (`default` until memberships move it).
     pub org_id: String,
+    /// Resident memory ceiling in MiB (systemd `MemoryMax=`); unset = unlimited.
+    pub mem_limit_mb: Option<i64>,
+    /// CPU ceiling in percent of one core (systemd `CPUQuota=`); unset = unlimited.
+    pub cpu_quota_pct: Option<i64>,
     /// `systemd` or `proc`.
     pub runtime: String,
     /// Restart on unhealthy.
@@ -213,6 +217,21 @@ pub struct Event {
     pub message: String,
     /// Event timestamp.
     pub created_at: String,
+}
+
+/// Resource quotas bounding what an organization may claim.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct OrgQuota {
+    /// Owning organization.
+    pub org_id: String,
+    /// Maximum applications.
+    pub max_apps: i64,
+    /// Maximum summed `mem_limit_mb` across the org's apps.
+    pub max_mem_mb: i64,
+    /// Maximum summed `cpu_quota_pct` across the org's apps.
+    pub max_cpu_pct: i64,
+    /// Maximum hostnames (primary domains + aliases).
+    pub max_domains: i64,
 }
 
 /// A tenant workspace.

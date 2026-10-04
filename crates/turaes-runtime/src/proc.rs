@@ -206,6 +206,8 @@ mod tests {
             state_dir: "/var/lib/demo".into(),
             env_file: None,
             user: None,
+            mem_limit_mb: None,
+            cpu_quota_pct: None,
         };
         assert!(rt.pid_path(&spec).ends_with("demo.pid"));
         assert!(rt.log_path(&spec).ends_with("demo.log"));

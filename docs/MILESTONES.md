@@ -237,7 +237,7 @@ org-scoped.
       release validation (reject placeholder secret + empty allowlist).
 - [x] **PR I** Perimeter: loopback control bind, security headers, CSRF,
       rate limiting, body/request timeouts, `turaes.service` sandboxing.
-- [ ] **PR J** Quotas & resource limits: per-org quotas, per-app
+- [x] **PR J** Quotas & resource limits: per-org quotas, per-app
       `MemoryMax`/`CPUQuota`/`TasksMax`, enforcement at create/deploy.
 - [ ] **PR K** Artifact GC: delete blobs unreferenced by any deployment.
 - [ ] **PR L** gRPC mTLS + per-node credentials (when the fleet activates;

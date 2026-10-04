@@ -11,6 +11,7 @@ use turaes_core::{Error, Result};
 use crate::audit;
 use crate::authz::{self, CurrentUser, Role};
 use crate::routes::apps::{fetch_org_app, refresh_proxy_routes};
+use crate::routes::quotas;
 use crate::state::AppState;
 
 /// Body for adding an alias.
@@ -62,6 +63,7 @@ pub async fn add(
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
     let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
     fetch_org_app(&state.pool, &org_id, &id).await?;
+    quotas::ensure_domain_capacity(&state.pool, &org_id).await?;
     let domain = validate_domain(&input.domain)?;
     let row = sqlx::query_as::<_, Domain>(
         "INSERT INTO domains (id, application_id, domain, is_primary) \

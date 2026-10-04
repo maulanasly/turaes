@@ -56,6 +56,12 @@ pub struct AppSpec {
     pub env_file: Option<String>,
     /// systemd `User=`/`Group=` (defaults to the app name).
     pub user: Option<String>,
+    /// Resident memory ceiling in MiB (`MemoryMax=`); unset = unlimited.
+    #[serde(default)]
+    pub mem_limit_mb: Option<u64>,
+    /// CPU ceiling in percent of one core (`CPUQuota=`); unset = unlimited.
+    #[serde(default)]
+    pub cpu_quota_pct: Option<u32>,
 }
 
 impl AppSpec {
