@@ -28,6 +28,18 @@ turaes_acme_webroot: "{{ turaes_state_dir }}/acme"
 turaes_cert_dir: /etc/letsencrypt/live
 turaes_cert_email: ops@rayakala.ink
 
+# --- control-plane fleet channel (multi-node) -----------------------------
+# The gRPC control channel + shared join token. `turaes_control_address` is the
+# private VPC address agents/edges dial (gRPC {addr}:{grpc_port}, artifacts
+# {addr}:{server_port}); set `turaes_host` (e.g. 0.0.0.0) so the API is
+# reachable by agents — keep the cloud SG scoped to the VPC.
+turaes_grpc_enabled: true
+turaes_grpc_port: 9443
+turaes_control_address: "10.0.0.2"
+turaes_host: ""
+# Fleet SSH keypair held on the control plane for `turaes server bootstrap`.
+turaes_fleet_ssh_key: /etc/turaes/ssh/fleet-key
+
 # --- firewall + SSH hardening (enabled by default) ------------------------
 turaes_firewall: true
 turaes_admin_user: ansible
@@ -39,6 +51,17 @@ turaes_admin_pubkey: ""
 turaes_ssh_allow_users_base:
   - "{{ turaes_admin_user }}"
   - root
+# Allow public HTTP/HTTPS on 80/443 (control + edge). Workers set false: apps
+# are reached by the edge over the VPC, not directly.
+turaes_allow_http_https: true
+# If set, UFW allows inbound from this subnet (same-VPC fleet traffic: agents,
+# edges and the control-plane bootstrap).
+turaes_vpc_subnet: "10.0.0.0/8"
+
+# --- edge node ------------------------------------------------------------
+# Public origin of the edge (must match the dashboard host you route to it).
+turaes_edge_public_url: "https://{{ turaes_domain }}"
+turaes_edge_reuse_port: true
 
 # --- first app (skip with --skip-tags first-app) --------------------------
 turaes_first_app_name: beruang

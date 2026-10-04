@@ -1,5 +1,6 @@
 .PHONY: help run dev test test-all lint fmt fmt-check build verify clean migrate proxy-check
-.PHONY: ansible-deps ansible-lint ansible-syntax ansible-check ansible-verify ansible-provision ansible-first-app ansible-vault-edit ansible-vault-view
+.PHONY: ansible-deps ansible-lint ansible-syntax ansible-check ansible-verify ansible-provision
+.PHONY: ansible-agent ansible-join ansible-edge ansible-first-app ansible-vault-edit ansible-vault-view
 
 CARGO ?= cargo
 ANSIBLE_DIR ?= deploy/ansible
@@ -69,8 +70,17 @@ ansible-check: ## Dry-run against the host (connects, changes nothing)
 
 ansible-verify: ansible-lint ansible-syntax ansible-check ## Lint + syntax + dry-run (the gate)
 
-ansible-provision: ## Provision the VPS end-to-end
+ansible-provision: ## Provision the control plane end-to-end
 	cd $(ANSIBLE_DIR) && ansible-playbook playbooks/provision.yml
+
+ansible-agent: ## Prep worker nodes for the agent (SSH key + hardening)
+	cd $(ANSIBLE_DIR) && ansible-playbook playbooks/agent.yml
+
+ansible-join: ## Register + bootstrap workers from the control plane
+	cd $(ANSIBLE_DIR) && ansible-playbook playbooks/join.yml
+
+ansible-edge: ## Provision edge nodes
+	cd $(ANSIBLE_DIR) && ansible-playbook playbooks/edge.yml
 
 ansible-first-app: ## Add + deploy the first app only
 	cd $(ANSIBLE_DIR) && ansible-playbook playbooks/provision.yml --tags first-app

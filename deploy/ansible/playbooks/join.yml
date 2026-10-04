@@ -1,0 +1,90 @@
+---
+# Register workers with the control plane and run the SSH bootstrap
+# (`turaes server add` + `turaes server bootstrap`). The control plane pushes
+# its own binary, writes /etc/turaes/agent.env + turaes-agent.service and
+# starts the agent, which then registers itself over gRPC.
+#
+# Prereqs: workers prepped via playbooks/agent.yml; control plane provisioned
+# with TURAES_GRPC_ENABLED=true, TURAES_AGENT_JOIN_TOKEN and
+# TURAES_PROXY_CONTROL_ADDRESS (see group_vars + templates/turaes.env.j2).
+
+- name: Join workers to the control plane
+  hosts: control
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Read the control-plane env for CLI invocations
+      ansible.builtin.slurp:
+        src: "{{ turaes_env_file }}"
+      register: turaes_cli_env_slurp
+
+    - name: Parse the env file into the CLI process environment
+      ansible.builtin.set_fact:
+        turaes_cli_env: >-
+          {{ dict(turaes_cli_env_slurp.content | b64decode
+             | regex_findall('^([A-Za-z_][A-Za-z0-9_]*)=(.*)$', multiline=True)) }}
+      no_log: true
+
+    - name: Ensure the fleet SSH key exists on the control plane
+      community.crypto.openssh_keypair:
+        path: "{{ turaes_fleet_ssh_key }}"
+        type: ed25519
+        comment: "turaes-fleet@{{ inventory_hostname }}"
+
+    - name: List registered servers
+      ansible.builtin.command: turaes server list --json
+      environment: "{{ turaes_cli_env }}"
+      register: turaes_server_list
+      changed_when: false
+      no_log: true
+
+    - name: Parse registered servers
+      ansible.builtin.set_fact:
+        turaes_servers: "{{ (turaes_server_list.stdout | from_json).servers }}"
+
+    - name: Register workers that are not present yet
+      ansible.builtin.command: >-
+        turaes server add
+        --name {{ worker_name }}
+        --address {{ worker_addr }}
+        --ssh-host {{ worker_addr }}
+        --ssh-user {{ worker_ssh_user }}
+        --ssh-key-file {{ turaes_fleet_ssh_key }}
+      environment: "{{ turaes_cli_env }}"
+      register: turaes_server_add
+      changed_when: "'created server' in turaes_server_add.stdout"
+      no_log: true
+      loop: "{{ groups['workers'] | default([]) }}"
+      loop_control:
+        loop_var: worker
+      vars:
+        worker_name: "{{ hostvars[worker].turaes_node_name | default(worker) }}"
+        worker_addr: "{{ hostvars[worker].turaes_node_address | default(hostvars[worker].ansible_host) }}"
+        worker_ssh_user: "{{ hostvars[worker].turaes_node_ssh_user | default('root') }}"
+      when: worker_name not in (turaes_servers | map(attribute='name') | list)
+
+    - name: Re-read registered servers
+      ansible.builtin.command: turaes server list --json
+      environment: "{{ turaes_cli_env }}"
+      register: turaes_server_list_after
+      changed_when: false
+      no_log: true
+
+    - name: Parse registered servers after adding
+      ansible.builtin.set_fact:
+        turaes_servers: "{{ (turaes_server_list_after.stdout | from_json).servers }}"
+
+    - name: Bootstrap workers that are not online yet
+      ansible.builtin.command: turaes server bootstrap "{{ worker_row.id }}"
+      environment: "{{ turaes_cli_env }}"
+      register: turaes_bootstrap
+      changed_when: "'active' in turaes_bootstrap.stdout"
+      no_log: true
+      loop: "{{ groups['workers'] | default([]) }}"
+      loop_control:
+        loop_var: worker
+      vars:
+        worker_name: "{{ hostvars[worker].turaes_node_name | default(worker) }}"
+        worker_row: "{{ turaes_servers | selectattr('name', 'equalto', worker_name) | first | default(none) }}"
+      when: worker_row is not none and worker_row.status != 'online'

@@ -8,3 +8,6 @@
 turaes_github_client_id: ""
 turaes_github_client_secret: ""
 turaes_allowed_github_ids: ""
+# Shared fleet secret: agents and edges present it to the control plane's gRPC
+# Register/EdgeRoutes (must match TURAES_AGENT_TOKEN on agents and edges).
+turaes_agent_join_token: ""

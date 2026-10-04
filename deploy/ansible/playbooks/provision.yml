@@ -14,8 +14,8 @@
 # (the challenge path only exists then), and the SSH firewall rules must be in
 # place before UFW is enabled (or the session drops).
 
-- name: Provision turaes VPS
-  hosts: all
+- name: Provision turaes control plane
+  hosts: control
   become: true
   gather_facts: true
   tags: always

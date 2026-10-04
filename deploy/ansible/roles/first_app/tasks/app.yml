@@ -1,4 +1,19 @@
 ---
+# The `turaes` CLI on the control plane reads config from `TURAES_*` env vars
+# only (the systemd unit's EnvironmentFile is not inherited by a shell). Source
+# /etc/turaes/turaes.env so apply/deploy hit the right DB and sealing key.
+- name: Read the control-plane env for CLI invocations
+  ansible.builtin.slurp:
+    src: "{{ turaes_env_file }}"
+  register: first_app_cli_env_slurp
+
+- name: Parse the env file into the CLI process environment
+  ansible.builtin.set_fact:
+    first_app_cli_env: >-
+      {{ dict(first_app_cli_env_slurp.content | b64decode
+         | regex_findall('^([A-Za-z_][A-Za-z0-9_]*)=(.*)$', multiline=True)) }}
+  no_log: true
+
 - name: Ensure the app binary exists
   ansible.builtin.assert:
     that:
@@ -46,8 +61,10 @@
 
 - name: Apply the manifest (idempotent create-or-update)
   ansible.builtin.command: turaes apply -f "{{ turaes_config_dir }}/apps/{{ turaes_first_app_name }}.yaml"
+  environment: "{{ first_app_cli_env }}"
   changed_when: false
   failed_when: false
+  no_log: true
 
 - name: Check whether any slot is already running
   ansible.builtin.command: systemctl is-active "{{ turaes_first_app_name }}-a" "{{ turaes_first_app_name }}-b"
@@ -58,6 +75,8 @@
 
 - name: Deploy the first app (blue/green, health-gated)
   ansible.builtin.command: turaes app deploy "{{ turaes_first_app_name }}"
+  environment: "{{ first_app_cli_env }}"
   register: first_app_deploy
   changed_when: "'deployed' in first_app_deploy.stdout"
+  no_log: true
   when: first_app_active.rc != 0
