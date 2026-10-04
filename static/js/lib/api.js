@@ -14,3 +14,17 @@ export async function api(path, options = {}) {
   }
   return body;
 }
+
+// Tenant-scoped API: apps and everything under them live at
+// `/api/v1/orgs/{org}/...`. Views call `oapi("/apps")` instead of building
+// the org prefix by hand; `setOrg` is fed from `GET /api/v1/me` at sign-in.
+let org = "default";
+export function setOrg(slug) {
+  if (slug) org = slug;
+}
+export function orgPath(path) {
+  return `/api/v1/orgs/${org}${path}`;
+}
+export function oapi(path, options = {}) {
+  return api(orgPath(path), options);
+}

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::Json;
+use axum::{Extension, Json};
 use serde::Deserialize;
 
 use turaes_core::config::Config;
@@ -18,6 +18,7 @@ use turaes_runtime::proc::ProcRuntime;
 use turaes_runtime::systemd::SystemdRuntime;
 use turaes_runtime::{AppSpec, DeployOutcome, Deployer, RunState, Runtime, Slot};
 
+use crate::authz::{self, CurrentUser, Role};
 use crate::state::AppState;
 
 /// Body for creating an application.
@@ -108,12 +109,41 @@ pub(crate) fn validate_name(name: &str) -> Result<()> {
     }
 }
 
-pub(crate) async fn fetch_app(pool: &Pool, id: &str) -> Result<Application> {
-    sqlx::query_as::<_, Application>("SELECT * FROM applications WHERE id = ?")
+/// Fetch an app scoped to an organization. Cross-org ids yield `NotFound` so
+/// one tenant can never probe another tenant's applications.
+pub(crate) async fn fetch_org_app(pool: &Pool, org_id: &str, id: &str) -> Result<Application> {
+    sqlx::query_as::<_, Application>("SELECT * FROM applications WHERE id = ? AND org_id = ?")
         .bind(id)
+        .bind(org_id)
         .fetch_optional(pool)
         .await?
         .ok_or_else(|| Error::NotFound(format!("application {id}")))
+}
+
+/// Reject a loopback port (and its blue/green slot pair) already claimed by
+/// another application. Ports are a host-global resource shared by all orgs.
+async fn ensure_port_free(pool: &Pool, port: i64, offset: i64, except_id: &str) -> Result<()> {
+    let paired = port + offset;
+    let clash: Option<String> = sqlx::query_scalar(
+        "SELECT name FROM applications \
+         WHERE id != ? AND (port = ? OR port = ? OR port + ? = ? OR port + ? = ?) \
+         LIMIT 1",
+    )
+    .bind(except_id)
+    .bind(port)
+    .bind(paired)
+    .bind(offset)
+    .bind(port)
+    .bind(offset)
+    .bind(paired)
+    .fetch_optional(pool)
+    .await?;
+    if let Some(name) = clash {
+        return Err(Error::Conflict(format!(
+            "port {port} (or its blue/green pair) is already claimed by '{name}'"
+        )));
+    }
+    Ok(())
 }
 
 /// Assemble the runtime spec for an app (unslotted).
@@ -251,20 +281,30 @@ pub(crate) async fn load_env(state: &AppState, app_id: &str) -> Result<BTreeMap<
     Ok(env)
 }
 
-/// `GET /api/v1/apps`
-pub async fn list(State(state): State<AppState>) -> Result<Json<serde_json::Value>> {
-    let apps =
-        sqlx::query_as::<_, Application>("SELECT * FROM applications ORDER BY created_at DESC")
-            .fetch_all(&state.pool)
-            .await?;
+/// `GET /api/v1/orgs/{org}/apps`
+pub async fn list(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    Path(org): Path<String>,
+) -> Result<Json<serde_json::Value>> {
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Viewer).await?;
+    let apps = sqlx::query_as::<_, Application>(
+        "SELECT * FROM applications WHERE org_id = ? ORDER BY created_at DESC",
+    )
+    .bind(&org_id)
+    .fetch_all(&state.pool)
+    .await?;
     Ok(Json(serde_json::json!({ "applications": apps })))
 }
 
-/// `POST /api/v1/apps`
+/// `POST /api/v1/orgs/{org}/apps`
 pub async fn create(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    Path(org): Path<String>,
     Json(input): Json<CreateApp>,
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Admin).await?;
     validate_name(&input.name)?;
     if input.binary_path.trim().is_empty() {
         return Err(Error::BadRequest("binary_path is required".into()));
@@ -287,14 +327,22 @@ pub async fn create(
     if server_exists == 0 {
         return Err(Error::BadRequest(format!("unknown server '{server_id}'")));
     }
+    ensure_port_free(
+        &state.pool,
+        input.port as i64,
+        state.cfg.runtime.slot_offset as i64,
+        "",
+    )
+    .await?;
     let inserted = sqlx::query_as::<_, Application>(
         "INSERT INTO applications \
-         (id, name, description, binary_path, args, port, health_path, metrics_path, domain, \
+         (id, org_id, name, description, binary_path, args, port, health_path, metrics_path, domain, \
           server_id, runtime, auto_restart, status, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', datetime('now'), datetime('now')) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', datetime('now'), datetime('now')) \
          RETURNING *",
     )
     .bind(&id)
+    .bind(&org_id)
     .bind(&input.name)
     .bind(&input.description)
     .bind(&input.binary_path)
@@ -337,18 +385,25 @@ fn map_unique_name(e: sqlx::Error) -> Error {
     Error::Db(e)
 }
 
-/// `GET /api/v1/apps/{id}`
+/// `GET /api/v1/orgs/{org}/apps/{id}`
 pub async fn get(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Extension(user): Extension<CurrentUser>,
+    Path((org, id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>> {
-    let app = fetch_app(&state.pool, &id).await?;
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Viewer).await?;
+    let app = fetch_org_app(&state.pool, &org_id, &id).await?;
     Ok(Json(serde_json::json!({ "application": app })))
 }
 
-/// `DELETE /api/v1/apps/{id}`
-pub async fn delete(State(state): State<AppState>, Path(id): Path<String>) -> Result<StatusCode> {
-    let app = fetch_app(&state.pool, &id).await?;
+/// `DELETE /api/v1/orgs/{org}/apps/{id}`
+pub async fn delete(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    Path((org, id)): Path<(String, String)>,
+) -> Result<StatusCode> {
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Admin).await?;
+    let app = fetch_org_app(&state.pool, &org_id, &id).await?;
     let runtime = runtime_for(&state.cfg, &app.runtime);
     let offset = state.cfg.runtime.slot_offset as i64;
     let _ = runtime.remove(&spec_for(&state.cfg, &app)).await;
@@ -364,12 +419,14 @@ pub async fn delete(State(state): State<AppState>, Path(id): Path<String>) -> Re
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /api/v1/apps/{id}/deploy`
+/// `POST /api/v1/orgs/{org}/apps/{id}/deploy`
 pub async fn deploy(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Extension(user): Extension<CurrentUser>,
+    Path((org, id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>> {
-    let app = fetch_app(&state.pool, &id).await?;
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
+    let app = fetch_org_app(&state.pool, &org_id, &id).await?;
     let (dep_id, out) = deploy_app(&state, &app).await?;
     Ok(Json(serde_json::json!({
         "deployment_id": dep_id,
@@ -588,13 +645,15 @@ pub(crate) fn select_previous_artifact(hashes: &[String]) -> Option<String> {
     hashes.iter().find(|h| *h != current).cloned()
 }
 
-/// `POST /api/v1/apps/{id}/rollback` — redeploy a build (previous by default).
+/// `POST /api/v1/orgs/{org}/apps/{id}/rollback` — redeploy a build (previous by default).
 pub async fn rollback(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Extension(user): Extension<CurrentUser>,
+    Path((org, id)): Path<(String, String)>,
     body: Option<Json<RollbackBody>>,
 ) -> Result<Json<serde_json::Value>> {
-    let app = fetch_app(&state.pool, &id).await?;
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
+    let app = fetch_org_app(&state.pool, &org_id, &id).await?;
     ensure_local(&app)?;
     let target = body.and_then(|Json(b)| b.artifact_hash);
     let previous = match target {
@@ -654,40 +713,48 @@ async fn lifecycle(
     Ok(Json(serde_json::json!({ "state": st })))
 }
 
-/// `POST /api/v1/apps/{id}/stop`
+/// `POST /api/v1/orgs/{org}/apps/{id}/stop`
 pub async fn stop(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Extension(user): Extension<CurrentUser>,
+    Path((org, id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>> {
-    let app = fetch_app(&state.pool, &id).await?;
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
+    let app = fetch_org_app(&state.pool, &org_id, &id).await?;
     lifecycle(&state, &app, "stop").await
 }
 
-/// `POST /api/v1/apps/{id}/start`
+/// `POST /api/v1/orgs/{org}/apps/{id}/start`
 pub async fn start(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Extension(user): Extension<CurrentUser>,
+    Path((org, id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>> {
-    let app = fetch_app(&state.pool, &id).await?;
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
+    let app = fetch_org_app(&state.pool, &org_id, &id).await?;
     lifecycle(&state, &app, "start").await
 }
 
-/// `POST /api/v1/apps/{id}/restart`
+/// `POST /api/v1/orgs/{org}/apps/{id}/restart`
 pub async fn restart(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Extension(user): Extension<CurrentUser>,
+    Path((org, id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>> {
-    let app = fetch_app(&state.pool, &id).await?;
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
+    let app = fetch_org_app(&state.pool, &org_id, &id).await?;
     lifecycle(&state, &app, "restart").await
 }
 
-/// `PATCH /api/v1/apps/{id}` — edit an application (and its placement).
+/// `PATCH /api/v1/orgs/{org}/apps/{id}` — edit an application (and its placement).
 pub async fn update(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Extension(user): Extension<CurrentUser>,
+    Path((org, id)): Path<(String, String)>,
     Json(input): Json<UpdateApp>,
 ) -> Result<Json<serde_json::Value>> {
-    let app = fetch_app(&state.pool, &id).await?;
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Admin).await?;
+    let app = fetch_org_app(&state.pool, &org_id, &id).await?;
 
     let runtime = input.runtime.unwrap_or_else(|| app.runtime.clone());
     if !matches!(runtime.as_str(), "systemd" | "proc") {
@@ -705,6 +772,9 @@ pub async fn update(
     }
 
     let port = input.port.map(|p| p as i64).unwrap_or(app.port);
+    if port != app.port {
+        ensure_port_free(&state.pool, port, state.cfg.runtime.slot_offset as i64, &id).await?;
+    }
     let updated = sqlx::query_as::<_, Application>(
         "UPDATE applications SET description = ?, args = ?, port = ?, health_path = ?, \
          metrics_path = ?, domain = ?, runtime = ?, auto_restart = ?, server_id = ?, \
@@ -735,13 +805,15 @@ pub async fn update(
     Ok(Json(serde_json::json!({ "application": updated })))
 }
 
-/// `GET /api/v1/apps/{id}/stats`
+/// `GET /api/v1/orgs/{org}/apps/{id}/stats`
 pub async fn stats(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Extension(user): Extension<CurrentUser>,
+    Path((org, id)): Path<(String, String)>,
     Query(q): Query<StatsQuery>,
 ) -> Result<Json<serde_json::Value>> {
-    fetch_app(&state.pool, &id).await?;
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Viewer).await?;
+    fetch_org_app(&state.pool, &org_id, &id).await?;
     let hours = q.hours.unwrap_or(1).clamp(1, 720);
     let rows: Vec<turaes_core::models::AppMetric> = sqlx::query_as(
         "SELECT * FROM app_metrics \
@@ -755,13 +827,15 @@ pub async fn stats(
     Ok(Json(serde_json::json!({ "metrics": rows })))
 }
 
-/// `GET /api/v1/apps/{id}/visitors`
+/// `GET /api/v1/orgs/{org}/apps/{id}/visitors`
 pub async fn visitors(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Extension(user): Extension<CurrentUser>,
+    Path((org, id)): Path<(String, String)>,
     Query(q): Query<StatsQuery>,
 ) -> Result<Json<serde_json::Value>> {
-    fetch_app(&state.pool, &id).await?;
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Viewer).await?;
+    fetch_org_app(&state.pool, &org_id, &id).await?;
     let hours = q.hours.unwrap_or(24).clamp(1, 720);
     let rows: Vec<turaes_core::models::VisitMetric> = sqlx::query_as(
         "SELECT * FROM visit_metrics \
@@ -775,13 +849,15 @@ pub async fn visitors(
     Ok(Json(serde_json::json!({ "visitors": rows })))
 }
 
-/// `GET /api/v1/apps/{id}/deployments` — recent deployments (log truncated).
+/// `GET /api/v1/orgs/{org}/apps/{id}/deployments` — recent deployments (log truncated).
 pub async fn deployments(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Extension(user): Extension<CurrentUser>,
+    Path((org, id)): Path<(String, String)>,
     Query(q): Query<DeploymentsQuery>,
 ) -> Result<Json<serde_json::Value>> {
-    fetch_app(&state.pool, &id).await?;
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Viewer).await?;
+    fetch_org_app(&state.pool, &org_id, &id).await?;
     let limit = q.limit.unwrap_or(20).clamp(1, 200);
     let rows = sqlx::query_as::<_, Deployment>(
         "SELECT id, application_id, status, artifact_hash, substr(log, 1, 2000) AS log, \

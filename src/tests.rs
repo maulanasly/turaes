@@ -122,7 +122,7 @@ async fn create_then_list_application() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/v1/apps")
+                .uri("/api/v1/orgs/default/apps")
                 .header("content-type", "application/json")
                 .body(Body::from(payload.to_string()))
                 .unwrap(),
@@ -137,7 +137,7 @@ async fn create_then_list_application() {
     let resp = router
         .oneshot(
             Request::builder()
-                .uri("/api/v1/apps")
+                .uri("/api/v1/orgs/default/apps")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -227,7 +227,7 @@ async fn create_app(router: &axum::Router, name: &str, binary: &str, port: u16) 
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/v1/apps")
+                .uri("/api/v1/orgs/default/apps")
                 .header("content-type", "application/json")
                 .body(Body::from(payload.to_string()))
                 .unwrap(),
@@ -277,7 +277,7 @@ async fn rollback_without_previous_is_rejected() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/v1/apps/{id}/rollback"))
+                .uri(format!("/api/v1/orgs/default/apps/{id}/rollback"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -298,7 +298,7 @@ async fn deploy_stores_and_serves_artifact() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/v1/apps/{id}/deploy"))
+                .uri(format!("/api/v1/orgs/default/apps/{id}/deploy"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -395,7 +395,7 @@ async fn agent_poll_and_report() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/v1/apps")
+                .uri("/api/v1/orgs/default/apps")
                 .header("content-type", "application/json")
                 .body(Body::from(payload.to_string()))
                 .unwrap(),
@@ -413,7 +413,7 @@ async fn agent_poll_and_report() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/v1/apps/{id}/deploy"))
+                .uri(format!("/api/v1/orgs/default/apps/{id}/deploy"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -487,7 +487,7 @@ async fn agent_push_metrics_rolls_up() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/v1/apps")
+                .uri("/api/v1/orgs/default/apps")
                 .header("content-type", "application/json")
                 .body(Body::from(payload.to_string()))
                 .unwrap(),
@@ -546,7 +546,7 @@ async fn deployment_history_endpoint() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/v1/apps/{id}/deploy"))
+                .uri(format!("/api/v1/orgs/default/apps/{id}/deploy"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -558,7 +558,7 @@ async fn deployment_history_endpoint() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/api/v1/apps/{id}/deployments"))
+                .uri(format!("/api/v1/orgs/default/apps/{id}/deployments"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -577,7 +577,7 @@ async fn deployment_history_endpoint() {
     let resp = router
         .oneshot(
             Request::builder()
-                .uri(format!("/api/v1/deployments/{dep_id}"))
+                .uri(format!("/api/v1/orgs/default/deployments/{dep_id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -600,7 +600,7 @@ async fn env_crud_does_not_leak_values() {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri(format!("/api/v1/apps/{id}/env/1BAD"))
+                .uri(format!("/api/v1/orgs/default/apps/{id}/env/1BAD"))
                 .header("content-type", "application/json")
                 .body(Body::from(json!({"value": "x"}).to_string()))
                 .unwrap(),
@@ -615,7 +615,7 @@ async fn env_crud_does_not_leak_values() {
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri(format!("/api/v1/apps/{id}/env/API_KEY"))
+                .uri(format!("/api/v1/orgs/default/apps/{id}/env/API_KEY"))
                 .header("content-type", "application/json")
                 .body(Body::from(json!({"value": "secret123"}).to_string()))
                 .unwrap(),
@@ -629,7 +629,7 @@ async fn env_crud_does_not_leak_values() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/api/v1/apps/{id}/env"))
+                .uri(format!("/api/v1/orgs/default/apps/{id}/env"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -646,7 +646,7 @@ async fn env_crud_does_not_leak_values() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(format!("/api/v1/apps/{id}/env/API_KEY"))
+                .uri(format!("/api/v1/orgs/default/apps/{id}/env/API_KEY"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -670,7 +670,7 @@ async fn edge_routes_lists_apps_and_rejects_bad_token() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/v1/apps")
+                .uri("/api/v1/orgs/default/apps")
                 .header("content-type", "application/json")
                 .body(Body::from(payload.to_string()))
                 .unwrap(),
@@ -717,7 +717,7 @@ async fn edge_certs_serves_cert_material() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/v1/apps")
+                .uri("/api/v1/orgs/default/apps")
                 .header("content-type", "application/json")
                 .body(Body::from(payload.to_string()))
                 .unwrap(),
@@ -763,7 +763,7 @@ async fn update_app_patches_fields() {
         .oneshot(
             Request::builder()
                 .method("PATCH")
-                .uri(format!("/api/v1/apps/{id}"))
+                .uri(format!("/api/v1/orgs/default/apps/{id}"))
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({"port": 9801, "domain": "u.test"}).to_string(),
@@ -787,7 +787,7 @@ async fn stop_reports_stopped() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/v1/apps/{id}/stop"))
+                .uri(format!("/api/v1/orgs/default/apps/{id}/stop"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -809,7 +809,7 @@ async fn rollback_to_explicit_build() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/v1/apps/{id}/deploy"))
+                .uri(format!("/api/v1/orgs/default/apps/{id}/deploy"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -824,7 +824,7 @@ async fn rollback_to_explicit_build() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/v1/apps/{id}/rollback"))
+                .uri(format!("/api/v1/orgs/default/apps/{id}/rollback"))
                 .header("content-type", "application/json")
                 .body(Body::from(json!({ "artifact_hash": hash }).to_string()))
                 .unwrap(),
@@ -847,7 +847,7 @@ async fn domains_crud() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/v1/apps/{id}/domains"))
+                .uri(format!("/api/v1/orgs/default/apps/{id}/domains"))
                 .header("content-type", "application/json")
                 .body(Body::from(json!({"domain": "bad"}).to_string()))
                 .unwrap(),
@@ -862,7 +862,7 @@ async fn domains_crud() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/v1/apps/{id}/domains"))
+                .uri(format!("/api/v1/orgs/default/apps/{id}/domains"))
                 .header("content-type", "application/json")
                 .body(Body::from(json!({"domain": "WWW.Example.COM"}).to_string()))
                 .unwrap(),
@@ -877,7 +877,7 @@ async fn domains_crud() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/api/v1/apps/{id}/domains"))
+                .uri(format!("/api/v1/orgs/default/apps/{id}/domains"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -893,7 +893,9 @@ async fn domains_crud() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(format!("/api/v1/apps/{id}/domains/www.example.com"))
+                .uri(format!(
+                    "/api/v1/orgs/default/apps/{id}/domains/www.example.com"
+                ))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -963,7 +965,7 @@ async fn deploy_uses_blue_green_slots() {
         router.clone().oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/v1/apps/{id}/deploy"))
+                .uri(format!("/api/v1/orgs/default/apps/{id}/deploy"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -977,7 +979,7 @@ async fn deploy_uses_blue_green_slots() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(format!("/api/v1/apps/{id}"))
+                    .uri(format!("/api/v1/orgs/default/apps/{id}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -994,7 +996,7 @@ async fn deploy_uses_blue_green_slots() {
         router
             .oneshot(
                 Request::builder()
-                    .uri(format!("/api/v1/apps/{id}"))
+                    .uri(format!("/api/v1/orgs/default/apps/{id}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1017,7 +1019,7 @@ async fn deploy_health_failure_keeps_previous() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/v1/apps/{id}/deploy"))
+                .uri(format!("/api/v1/orgs/default/apps/{id}/deploy"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1029,7 +1031,7 @@ async fn deploy_health_failure_keeps_previous() {
         router
             .oneshot(
                 Request::builder()
-                    .uri(format!("/api/v1/apps/{id}"))
+                    .uri(format!("/api/v1/orgs/default/apps/{id}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1050,7 +1052,7 @@ async fn invalid_name_is_rejected() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/v1/apps")
+                .uri("/api/v1/orgs/default/apps")
                 .header("content-type", "application/json")
                 .body(Body::from(payload.to_string()))
                 .unwrap(),
@@ -1157,4 +1159,129 @@ async fn me_returns_resolved_principal_with_org_role() {
     assert!(second
         .require("default", crate::authz::Role::Developer)
         .is_err());
+}
+
+#[tokio::test]
+async fn cross_org_apps_are_invisible() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+    sqlx::query("INSERT INTO organizations (id, slug, name) VALUES ('other', 'other', 'Other')")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO applications (id, org_id, name, binary_path, port) \
+         VALUES ('x1', 'other', 'otherapp', '/bin/true', 9500)",
+    )
+    .execute(&state.pool)
+    .await
+    .unwrap();
+
+    // Another org's app is not listed and not fetchable (404, not 403).
+    let body = body_json(
+        router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/orgs/default/apps")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(body["applications"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|a| a["id"] != "x1"));
+
+    let router = app::build_router(state.clone());
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/orgs/default/apps/x1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // An org the caller is not a member of is forbidden...
+    let router = app::build_router(state.clone());
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/orgs/other/apps")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // ...while an unknown org is not found.
+    let router = app::build_router(state.clone());
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/orgs/nope/apps")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn duplicate_and_paired_ports_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let mk = |name: &str, port: u16| {
+        let payload = json!({"name": name, "binary_path": "/bin/true", "port": port});
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/orgs/default/apps")
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap()
+    };
+    let resp = router.oneshot(mk("papp", 9100)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // Same port clashes.
+    let router = test_router(dir.path()).await;
+    let resp = router.oneshot(mk("qapp", 9100)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+
+    // The blue/green pair port (slot_offset is 1000 in tests) clashes too.
+    let router = test_router(dir.path()).await;
+    let resp = router.oneshot(mk("rapp", 10100)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn role_floors_gate_org_access() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    // Bootstrap the owner first so the subject below lands as viewer.
+    crate::authz::resolve(&state, 0, "dev", Some("Dev mode"))
+        .await
+        .unwrap();
+    let viewer = crate::authz::resolve(&state, 777001, "floored", None)
+        .await
+        .unwrap();
+    assert_eq!(viewer.role_in("default"), Some(crate::authz::Role::Viewer));
+    // Viewers may read but not administer or operate the fleet.
+    crate::authz::authorize_org(&state, &viewer, "default", crate::authz::Role::Viewer)
+        .await
+        .unwrap();
+    let err = crate::authz::authorize_org(&state, &viewer, "default", crate::authz::Role::Admin)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("forbidden"));
+    assert!(crate::authz::require_operator(&viewer).is_err());
 }

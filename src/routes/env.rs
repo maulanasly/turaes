@@ -2,12 +2,13 @@
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::Json;
+use axum::{Extension, Json};
 use serde::Deserialize;
 
 use turaes_core::{Error, Result};
 
-use crate::routes::apps::fetch_app;
+use crate::authz::{self, CurrentUser, Role};
+use crate::routes::apps::fetch_org_app;
 use crate::state::AppState;
 
 /// Body for setting a variable.
@@ -33,12 +34,14 @@ fn validate_key(key: &str) -> Result<()> {
     }
 }
 
-/// `GET /api/v1/apps/{id}/env` — list keys only (values are never returned).
+/// `GET /api/v1/orgs/{org}/apps/{id}/env` — list keys only (values are never returned).
 pub async fn list(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Extension(user): Extension<CurrentUser>,
+    Path((org, id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>> {
-    fetch_app(&state.pool, &id).await?;
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
+    fetch_org_app(&state.pool, &org_id, &id).await?;
     let rows: Vec<(String, String)> = sqlx::query_as(
         "SELECT key, created_at FROM env_vars WHERE application_id = ? ORDER BY key ASC",
     )
@@ -52,14 +55,16 @@ pub async fn list(
     Ok(Json(serde_json::json!({ "env": keys })))
 }
 
-/// `PUT /api/v1/apps/{id}/env/{key}` — create or replace a variable.
+/// `PUT /api/v1/orgs/{org}/apps/{id}/env/{key}` — create or replace a variable.
 pub async fn put(
     State(state): State<AppState>,
-    Path((id, key)): Path<(String, String)>,
+    Extension(user): Extension<CurrentUser>,
+    Path((org, id, key)): Path<(String, String, String)>,
     Json(body): Json<PutEnv>,
 ) -> Result<StatusCode> {
     validate_key(&key)?;
-    fetch_app(&state.pool, &id).await?;
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
+    fetch_org_app(&state.pool, &org_id, &id).await?;
     let sealed = state.secrets.seal(&body.value)?;
     sqlx::query(
         "INSERT INTO env_vars (id, application_id, key, value_enc) VALUES (?, ?, ?, ?) \
@@ -74,12 +79,14 @@ pub async fn put(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `DELETE /api/v1/apps/{id}/env/{key}`
+/// `DELETE /api/v1/orgs/{org}/apps/{id}/env/{key}`
 pub async fn delete(
     State(state): State<AppState>,
-    Path((id, key)): Path<(String, String)>,
+    Extension(user): Extension<CurrentUser>,
+    Path((org, id, key)): Path<(String, String, String)>,
 ) -> Result<StatusCode> {
-    fetch_app(&state.pool, &id).await?;
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
+    fetch_org_app(&state.pool, &org_id, &id).await?;
     let affected = sqlx::query("DELETE FROM env_vars WHERE application_id = ? AND key = ?")
         .bind(&id)
         .bind(&key)

@@ -2,7 +2,7 @@
 import { render } from "preact";
 import { useEffect, useState, useCallback } from "preact/hooks";
 import { html } from "./lib/html.js";
-import { api } from "./lib/api.js";
+import { api, setOrg } from "./lib/api.js";
 import { toast } from "./lib/toast.js";
 import { useRoute, pathFor } from "./lib/router.js";
 import { Toasts } from "./components/Toasts.js";
@@ -38,7 +38,16 @@ function Shell() {
   const [theme, toggleTheme] = useTheme();
 
   const loadUser = useCallback(async () => {
-    try { setUser(await api("/auth/me")); } catch { setUser(null); }
+    try {
+      setUser(await api("/auth/me"));
+      // Resolve the tenant principal and pin API calls to an org.
+      try {
+        const me = await api("/api/v1/me");
+        const orgs = me.orgs || [];
+        const pick = orgs.find((o) => o.slug === "default") || orgs[0];
+        if (pick) setOrg(pick.slug);
+      } catch (e) {}
+    } catch { setUser(null); }
   }, []);
   const loadServers = useCallback(async () => {
     try { const r = await api("/api/v1/servers"); setServers(r.servers || []); } catch (e) {}

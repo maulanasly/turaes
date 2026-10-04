@@ -100,8 +100,6 @@ impl CurrentUser {
 
     /// Enforce a minimum role in `org_id`. Non-members get `Forbidden` (never
     /// leak the org's existence through a different status).
-    // Exercised by tests and the scoped routes landing in T1b.
-    #[allow(dead_code)]
     pub fn require(&self, org_id: &str, floor: Role) -> Result<Role> {
         match self.role_in(org_id) {
             Some(role) if role >= floor => Ok(role),
@@ -190,6 +188,39 @@ async fn ensure_bootstrap_membership(state: &AppState, user_id: &str) -> Result<
     .execute(&state.pool)
     .await?;
     Ok(())
+}
+
+/// Resolve an org path segment (id or slug) and enforce a role floor.
+/// Unknown orgs yield `NotFound`; insufficient roles yield `Forbidden`.
+pub async fn authorize_org(
+    state: &AppState,
+    user: &CurrentUser,
+    org_ref: &str,
+    floor: Role,
+) -> Result<String> {
+    let org_id: Option<String> =
+        sqlx::query_scalar("SELECT id FROM organizations WHERE id = ? OR slug = ?")
+            .bind(org_ref)
+            .bind(org_ref)
+            .fetch_optional(&state.pool)
+            .await?;
+    match org_id {
+        Some(id) => {
+            user.require(&id, floor)?;
+            Ok(id)
+        }
+        None => Err(Error::NotFound(format!("organization {org_ref}"))),
+    }
+}
+
+/// Fleet management (servers) is platform-global: it needs an operator, i.e.
+/// `admin` or above in any organization. Node-level RBAC is a later step.
+pub fn require_operator(user: &CurrentUser) -> Result<()> {
+    if user.orgs.iter().any(|o| o.role >= Role::Admin) {
+        Ok(())
+    } else {
+        Err(Error::Forbidden("operator role required".into()))
+    }
 }
 
 /// Load a user's memberships with organization details.

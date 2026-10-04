@@ -64,27 +64,36 @@ start as `viewer`.
 
 ## Applications
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/api/v1/apps` | List applications |
-| `POST` | `/api/v1/apps` | Create an application (`201`) |
-| `GET` | `/api/v1/apps/{id}` | Fetch one |
-| `PATCH` | `/api/v1/apps/{id}` | Edit fields + placement |
-| `DELETE` | `/api/v1/apps/{id}` | Remove app + stop it (`204`) |
-| `POST` | `/api/v1/apps/{id}/deploy` | Install + restart the prebuilt binary |
-| `POST` | `/api/v1/apps/{id}/rollback` | Redeploy the previous build, or `{artifact_hash}` target |
-| `POST` | `/api/v1/apps/{id}/{stop,start,restart}` | Lifecycle (local apps) |
-| `GET/POST` | `/api/v1/apps/{id}/domains` | List / add domain aliases |
-| `DELETE` | `/api/v1/apps/{id}/domains/{domain}` | Remove an alias |
-| `GET` | `/api/v1/apps/{id}/stats?hours=1` | CPU/memory samples (max 720h) |
-| `GET` | `/api/v1/apps/{id}/visitors?hours=24` | Visitor rows per region (max 720h) |
-| `GET` | `/api/v1/apps/{id}/deployments?limit=20` | Recent deployments (log truncated to 2000 chars) |
-| `GET` | `/api/v1/deployments/{id}` | Full deployment record incl. log |
-| `GET` | `/api/v1/apps/{id}/logs` | **WebSocket** live logs (`journalctl -f` / `tail -f`; local apps only) |
-| `GET` | `/api/v1/apps/{id}/env` | List env var **keys** (values are never returned) |
-| `PUT` | `/api/v1/apps/{id}/env/{key}` | Create/replace an env var (AES-256-GCM sealed) |
-| `DELETE` | `/api/v1/apps/{id}/env/{key}` | Remove an env var |
-| `GET` | `/api/v1/artifacts/{hash}` | Download a stored artifact by `sha256:<hex>` |
+All app routes are nested under `/api/v1/orgs/{org}/…`, where `{org}` is an
+organization id or slug. Unknown orgs yield `404`; apps outside the caller's
+org yield `404` (never `403`, so tenants cannot probe each other); insufficient
+roles yield `403`.
+
+| Method | Path | Role | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/orgs/{org}/apps` | viewer | List the org's applications |
+| `POST` | `/api/v1/orgs/{org}/apps` | admin | Create an application (`201`) |
+| `GET` | `/api/v1/orgs/{org}/apps/{id}` | viewer | Fetch one |
+| `PATCH` | `/api/v1/orgs/{org}/apps/{id}` | admin | Edit fields + placement |
+| `DELETE` | `/api/v1/orgs/{org}/apps/{id}` | admin | Remove app + stop it (`204`) |
+| `POST` | `/api/v1/orgs/{org}/apps/{id}/deploy` | developer | Install + restart the prebuilt binary |
+| `POST` | `/api/v1/orgs/{org}/apps/{id}/rollback` | developer | Redeploy the previous build, or `{artifact_hash}` target |
+| `POST` | `/api/v1/orgs/{org}/apps/{id}/{stop,start,restart}` | developer | Lifecycle (local apps) |
+| `GET/POST` | `/api/v1/orgs/{org}/apps/{id}/domains` | viewer / developer | List / add domain aliases |
+| `DELETE` | `/api/v1/orgs/{org}/apps/{id}/domains/{domain}` | developer | Remove an alias |
+| `GET` | `/api/v1/orgs/{org}/apps/{id}/stats?hours=1` | viewer | CPU/memory samples (max 720h) |
+| `GET` | `/api/v1/orgs/{org}/apps/{id}/visitors?hours=24` | viewer | Visitor rows per region (max 720h) |
+| `GET` | `/api/v1/orgs/{org}/apps/{id}/deployments?limit=20` | viewer | Recent deployments (log truncated to 2000 chars) |
+| `GET` | `/api/v1/orgs/{org}/deployments/{id}` | viewer | Full deployment record incl. log |
+| `GET` | `/api/v1/orgs/{org}/apps/{id}/logs` | developer | **WebSocket** live logs (`journalctl -f` / `tail -f`; local apps only) |
+| `GET` | `/api/v1/orgs/{org}/apps/{id}/env` | developer | List env var **keys** (values are never returned) |
+| `PUT` | `/api/v1/orgs/{org}/apps/{id}/env/{key}` | developer | Create/replace an env var (AES-256-GCM sealed) |
+| `DELETE` | `/api/v1/orgs/{org}/apps/{id}/env/{key}` | developer | Remove an env var |
+| `GET` | `/api/v1/artifacts/{hash}` | developer | Download a stored artifact by `sha256:<hex>` — only when the hash backs a deployment of an app in one of the caller's orgs (`404` otherwise) |
+
+Loopback ports are a host-global resource: creating or re-porting an app to a
+port (or its blue/green pair) already claimed by *any* application yields
+`409`. App names stay globally unique because they become systemd unit names.
 
 Deploys first store the binary in the content-addressed artifact store
 (`{artifact_dir}/sha256/{hex}`, mode preserved) and install from that copy, so
@@ -97,7 +106,7 @@ the most recent **different** artifact; `422` if there is no previous one.
 ### Create
 
 ```bash
-curl -X POST localhost:8787/api/v1/apps \
+curl -X POST localhost:8787/api/v1/orgs/default/apps \
   -H 'content-type: application/json' \
   -d '{
     "name": "beruang",
@@ -148,7 +157,7 @@ Response (`201`):
 ### Deploy
 
 ```bash
-curl -X POST localhost:8787/api/v1/apps/5cffb37d-…/deploy
+curl -X POST localhost:8787/api/v1/orgs/default/apps/5cffb37d-…/deploy
 ```
 
 ```json
@@ -165,13 +174,13 @@ The deploy is idempotent. On failure the app is marked `failed` and the error is
 
 ### Stats / visitors
 
-`GET /api/v1/apps/{id}/stats?hours=1` →
+`GET /api/v1/orgs/{org}/apps/{id}/stats?hours=1` →
 
 ```json
 { "metrics": [ { "id": "…", "application_id": "…", "cpu_pct": 12.4, "mem_bytes": 15728640, "recorded_at": "…" } ] }
 ```
 
-`GET /api/v1/apps/{id}/visitors?hours=24` →
+`GET /api/v1/orgs/{org}/apps/{id}/visitors?hours=24` →
 
 ```json
 { "visitors": [ { "id": "…", "application_id": "…", "region": "ID", "visits": 128, "uniques": 41, "recorded_at": "…" } ] }
@@ -181,6 +190,9 @@ The deploy is idempotent. On failure the app is marked `failed` and the error is
 > empty until that loop lands.
 
 ## Servers
+
+Nodes are platform-global infrastructure, so these routes stay outside the org
+nest and require an operator (`admin` or above in any organization).
 
 | Method | Path | Description |
 |---|---|---|
