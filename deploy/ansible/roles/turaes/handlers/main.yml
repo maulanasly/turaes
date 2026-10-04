@@ -1,0 +1,9 @@
+---
+- name: Reload systemd
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+- name: Restart turaes
+  ansible.builtin.systemd_service:
+    name: turaes
+    state: restarted

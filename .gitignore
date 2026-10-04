@@ -8,3 +8,11 @@
 /data/
 /dist/
 .DS_Store
+# Ansible secrets and scratch files (deploy/ansible)
+/deploy/ansible/group_vars/vault.yml
+/deploy/ansible/inventory/hosts.yml
+/deploy/ansible/host_vars/
+*.retry
+.ansible/
+# Ops-only notes (live host details never committed)
+/docs/ops/

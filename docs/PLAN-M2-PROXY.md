@@ -25,7 +25,7 @@ and deployed to the VPS.
 
 ## Phase 0 — Network access ✅ VERIFIED (2026-10-01)
 
-The box `43.173.9.225` is a Tencent Cloud VM with **no host firewall** (`iptables`,
+The box `<vps-ip>` is a Tencent Cloud VM with **no host firewall** (`iptables`,
 `nft`, `ufw` all empty). Reachability is controlled only by the **cloud security
 group**.
 
@@ -38,7 +38,7 @@ public internet:
 | 80 | Let's Encrypt HTTP-01 **and** HTTP→HTTPS redirect | ✅ **open** (raw payload received) |
 | 443 | HTTPS dashboard | ✅ **open** (raw payload received) |
 | 8787 | direct dashboard access (dev only) | blocked (control test) |
-| DNS | `turaes.rayakala.ink` → `43.173.9.225`, 80/443 reachable | ✅ |
+| DNS | `turaes.rayakala.ink` → `<vps-ip>`, 80/443 reachable | ✅ |
 
 - [x] Inbound **TCP 80** confirmed from the internet (HTTP-01 will work).
 - [x] Inbound **TCP 443** confirmed from the internet.
@@ -68,7 +68,7 @@ Required repository secrets (Settings → Secrets → Actions, or `gh secret set
 
 | Secret | Value |
 |---|---|
-| `DEPLOY_HOST` | `43.173.9.225` |
+| `DEPLOY_HOST` | `<vps-ip>` |
 | `DEPLOY_USER` | `root` |
 | `DEPLOY_SSH_KEY` | private key whose public key is in `/root/.ssh/authorized_keys` |
 
@@ -96,7 +96,7 @@ sudo systemctl stop turaes
 sudo apt-get install -y certbot
 sudo certbot certonly --standalone \
   -d turaes.rayakala.ink \
-  --agree-tos -m ops@rayakala.ink --non-interactive
+  --agree-tos -m <ops-email> --non-interactive
 ```
 
 Result: `/etc/letsencrypt/live/turaes.rayakala.ink/{fullchain.pem,privkey.pem}`

@@ -1,0 +1,39 @@
+---
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Upgrade installed packages
+  ansible.builtin.apt:
+    upgrade: safe
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name:
+      - curl
+      - openssl
+      - ca-certificates
+      - gnupg
+      - ufw
+      - fail2ban
+    state: present
+
+- name: Set timezone
+  community.general.timezone:
+    name: "{{ turaes_timezone }}"
+
+- name: Create admin user
+  ansible.builtin.user:
+    name: "{{ turaes_admin_user }}"
+    groups: sudo
+    append: true
+    shell: /bin/bash
+    create_home: true
+
+- name: Grant passwordless sudo to the admin user
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/{{ turaes_admin_user }}"
+    content: "{{ turaes_admin_user }} ALL=(ALL) NOPASSWD:ALL\n"
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s

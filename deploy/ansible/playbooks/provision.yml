@@ -1,0 +1,42 @@
+---
+# Provision a new VPS with the turaes deployment platform, from bare box to a
+# usable dashboard (TLS + optional first app).
+#
+#   make ansible-provision                # full run
+#   ansible-playbook playbooks/provision.yml --skip-tags first-app
+#
+# Manual prerequisites (the playbook cannot do these):
+#   * DNS for {turaes_domain} (and the first-app domain) pointing at the host
+#   * a GitHub OAuth app with callback https://{turaes_domain}/auth/callback
+#   * a tagged GitHub release with the turaes-linux-x86_64 asset
+#
+# Order matters: turaes must be running with the proxy enabled before certbot
+# (the challenge path only exists then), and the SSH firewall rules must be in
+# place before UFW is enabled (or the session drops).
+
+- name: Provision turaes control plane
+  hosts: control
+  become: true
+  gather_facts: true
+  tags: always
+
+  pre_tasks:
+    - name: Assert required variables are set
+      ansible.builtin.assert:
+        that:
+          - turaes_domain is defined and turaes_domain | length > 0
+          - turaes_release_tag is defined and turaes_release_tag | length > 0
+          - turaes_release_url is defined and turaes_release_url | length > 0
+          - turaes_github_client_id is defined and turaes_github_client_id | length > 0
+          - turaes_github_client_secret is defined and turaes_github_client_secret | length > 0
+          - turaes_allowed_github_ids is defined and turaes_allowed_github_ids | length > 0
+        msg: >-
+          Missing required variable. Check group_vars/all.yml and the encrypted
+          group_vars/vault.yml (ansible-vault edit). Release boots refuse an
+          empty JWT allowlist and placeholder secrets.
+
+  roles:
+    - base
+    - turaes
+    - tls
+    - first_app

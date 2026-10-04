@@ -1,0 +1,9 @@
+---
+- name: Reload systemd
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+- name: Restart edge
+  ansible.builtin.systemd_service:
+    name: turaes-edge@a
+    state: restarted

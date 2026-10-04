@@ -1,0 +1,14 @@
+---
+# Provision an edge node: standalone Pingora that pulls routes + certs from
+# the control plane over gRPC. Binds :80/:443 and serves the fleet.
+#
+# Run after the control plane is up (gRPC + join token configured).
+
+- name: Provision edge nodes
+  hosts: edges
+  become: true
+  gather_facts: true
+
+  roles:
+    - base
+    - edge

@@ -1,6 +1,6 @@
 # turaes — SRE review
 
-Principal-SRE review of turaes as deployed on `43.173.9.225`. Grounded in the
+Principal-SRE review of turaes as deployed on `<vps-ip>`. Grounded in the
 repo and the live box. Scope: reliability, security, operability, data
 durability, change management, observability, capacity.
 

@@ -1,0 +1,12 @@
+---
+- name: Include users, firewall and SSH hardening tasks
+  ansible.builtin.import_tasks: users.yml
+  tags: base
+
+- name: Firewall
+  ansible.builtin.import_tasks: firewall.yml
+  tags: base
+
+- name: SSH hardening
+  ansible.builtin.import_tasks: ssh.yml
+  tags: base

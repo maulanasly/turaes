@@ -1,0 +1,13 @@
+---
+- name: Apply pending systemd / service changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for the control plane health endpoint
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8787/health
+    status_code: 200
+  register: turaes_health
+  retries: 12
+  delay: 5
+  until: turaes_health.status == 200
+  check_mode: false

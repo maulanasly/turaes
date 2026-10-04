@@ -10,9 +10,14 @@ turaes itself is a single binary with an embedded UI.
 
 ## Live instance
 
+> The repo never carries identifying host details. The current production
+> host's IP, sizing and layout live in the **gitignored** ops sheet
+> `docs/ops/live.md` (create it from the template below). Replace `<vps-ip>`
+> below with that value.
+
 | | |
 |---|---|
-| Host | `43.173.9.225` (Debian 13, systemd, 2 vCPU / 3.6 GB) |
+| Host | `<vps-ip>` (Debian, systemd) — see `docs/ops/live.md` |
 | Dashboard | **https://turaes.rayakala.ink** (Pingora :80/:443, certbot TLS) |
 | API (localhost) | `http://127.0.0.1:8787` (external 8787 blocked by the cloud SG) |
 | Binary | `/usr/local/bin/turaes` — built in GitHub Actions (no Rust on the box) |
@@ -20,6 +25,16 @@ turaes itself is a single binary with an embedded UI.
 | Data | `/var/lib/turaes/turaes.db` |
 | Cert | `/etc/letsencrypt/live/turaes.rayakala.ink/` (webroot renewals; proxy reloads on change) |
 | App | `beruang` → `beruang.service`, loopback `:8000` |
+
+Ops sheet template (`docs/ops/live.md`, not committed):
+
+```markdown
+# Live instance (ops-only — do not commit)
+
+- Host: <vps-ip> (Debian 13, systemd, 2 vCPU / 3.6 GB)
+- Dashboard: https://turaes.rayakala.ink
+- SSH: <user>@<vps-ip> (key-only)
+```
 
 ```bash
 sudo systemctl status turaes beruang
@@ -88,6 +103,12 @@ cargo build --release --features proxy      # or: make proxy-build
 ```
 
 ## 2. Install
+
+> **Automated option:** `deploy/ansible/` provisions a fresh VPS end-to-end
+> (base hardening + UFW/SSH, binary install, env seed, systemd units/timers,
+> certbot TLS, optional first app). See `deploy/ansible/README.md` — manual
+> prerequisites are DNS pointing at the host, a GitHub OAuth app, and a tagged
+> release with the `turaes-linux-x86_64` asset. Run with `make ansible-provision`.
 
 Prefer `deploy/install.sh` — it installs the binary, generates the JWT secret,
 seeds the env file, and enables the service **and** the backup/GC timers:
@@ -179,7 +200,7 @@ freed:
 ```bash
 sudo mkdir -p /var/lib/turaes/acme
 sudo certbot certonly --webroot -w /var/lib/turaes/acme \
-  -d turaes.rayakala.ink --agree-tos -m ops@rayakala.ink --non-interactive
+  -d turaes.rayakala.ink --agree-tos -m <ops-email> --non-interactive
 ```
 
 Renewal (`systemctl enable --now certbot.timer`) rewrites the files; the proxy

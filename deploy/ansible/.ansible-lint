@@ -1,0 +1,8 @@
+---
+# ansible-lint configuration for deploy/ansible.
+profile: production
+exclude_paths:
+  - .git/
+skip_list:
+  # openssl/certbot/getent have no dedicated modules.
+  - command-instead-of-module

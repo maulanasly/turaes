@@ -1,0 +1,7 @@
+# Phase A — installed by the turaes ansible base role. Tightens access without
+# disabling password auth (that happens in 20-turaes-hardening.conf only after
+# key-based login is proven).
+AllowUsers {{ base_ssh_allow_users | join(' ') }}
+PubkeyAuthentication yes
+PermitRootLogin prohibit-password
+ChallengeResponseAuthentication no

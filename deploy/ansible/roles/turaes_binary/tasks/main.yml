@@ -1,0 +1,32 @@
+---
+# Shared: install the pinned turaes release binary (proxy feature build) to
+# {turaes_bin_dir}. Used by the control plane and edge roles. The worker agent
+# binary is pushed by the control-plane SSH bootstrap instead, so the agent
+# role does not depend on this.
+
+- name: Check for an existing binary
+  ansible.builtin.stat:
+    path: "{{ turaes_bin_dir }}/turaes"
+  register: turaes_binary_bin_exists
+
+- name: Download the turaes release binary
+  ansible.builtin.get_url:
+    url: "{{ turaes_release_url }}"
+    dest: /tmp/turaes-linux-x86_64
+    mode: "0755"
+    checksum: "{{ 'sha256:' + turaes_release_sha256 if turaes_release_sha256 else omit }}"
+
+- name: Keep the previous binary for auto-rollback
+  ansible.builtin.copy:
+    src: "{{ turaes_bin_dir }}/turaes"
+    dest: "{{ turaes_bin_dir }}/turaes.previous"
+    remote_src: true
+    mode: "0755"
+  when: turaes_binary_bin_exists.stat.exists
+
+- name: Install the turaes binary
+  ansible.builtin.copy:
+    src: /tmp/turaes-linux-x86_64
+    dest: "{{ turaes_bin_dir }}/turaes"
+    remote_src: true
+    mode: "0755"

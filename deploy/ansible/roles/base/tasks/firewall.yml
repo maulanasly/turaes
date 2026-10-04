@@ -1,0 +1,54 @@
+---
+# Firewall. Order matters: every rule is in place before UFW is enabled, so the
+# SSH session is never dropped mid-run. The cloud security group is the outer
+# layer; UFW is defense-in-depth and defaults to deny-incoming.
+
+- name: Install admin public key (fail-closed prerequisite for SSH hardening)
+  ansible.posix.authorized_key:
+    user: "{{ turaes_admin_user }}"
+    key: "{{ turaes_admin_pubkey }}"
+    state: present
+  when: turaes_ssh_hardening
+
+- name: Default deny incoming
+  community.general.ufw:
+    rule: default
+    direction: incoming
+    policy: deny
+
+- name: Default allow outgoing
+  community.general.ufw:
+    rule: default
+    direction: outgoing
+    policy: allow
+
+- name: Allow SSH
+  community.general.ufw:
+    rule: allow
+    port: "{{ turaes_ssh_port }}"
+    proto: tcp
+
+- name: Allow HTTP
+  community.general.ufw:
+    rule: allow
+    port: "80"
+    proto: tcp
+  when: turaes_allow_http_https
+
+- name: Allow HTTPS
+  community.general.ufw:
+    rule: allow
+    port: "443"
+    proto: tcp
+  when: turaes_allow_http_https
+
+- name: Allow fleet traffic from the VPC subnet
+  community.general.ufw:
+    rule: allow
+    src: "{{ turaes_vpc_subnet }}"
+  when: turaes_vpc_subnet is defined and turaes_vpc_subnet | length > 0
+
+- name: Enable UFW
+  community.general.ufw:
+    state: enabled
+  when: turaes_firewall

@@ -1,0 +1,25 @@
+---
+# Control-plane fleet channel: the gRPC + artifact listeners agents/edges dial,
+# and the ssh/scp clients the SSH bootstrap uses to reach workers.
+
+- name: Install SSH clients for the node bootstrap
+  ansible.builtin.apt:
+    name: openssh-client
+    state: present
+  when: turaes_grpc_enabled
+
+- name: Allow the gRPC control channel from the VPC
+  community.general.ufw:
+    rule: allow
+    port: "{{ turaes_grpc_port }}"
+    proto: tcp
+    src: "{{ turaes_vpc_subnet }}"
+  when: turaes_grpc_enabled and turaes_vpc_subnet is defined and turaes_vpc_subnet | length > 0
+
+- name: Allow artifact HTTP from the VPC
+  community.general.ufw:
+    rule: allow
+    port: "8787"
+    proto: tcp
+    src: "{{ turaes_vpc_subnet }}"
+  when: turaes_grpc_enabled and turaes_vpc_subnet is defined and turaes_vpc_subnet | length > 0

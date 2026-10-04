@@ -1,0 +1,39 @@
+name: Ansible
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "deploy/ansible/**"
+      - "Makefile"
+  pull_request:
+    paths:
+      - "deploy/ansible/**"
+      - "Makefile"
+
+jobs:
+  lint:
+    name: lint + syntax
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy/ansible
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: deploy/ansible/requirements.txt
+      - name: Install controller tools
+        run: python3 -m pip install -r requirements.txt
+      - name: Install collections
+        run: ansible-galaxy collection install -r requirements.yml
+      - name: ansible-lint
+        run: ansible-lint .
+      - name: Syntax check all playbooks (example inventory)
+        run: |
+          set -e
+          for pb in provision agent join edge; do
+            ansible-playbook --syntax-check -i inventory/hosts.example.yml "playbooks/$pb.yml"
+          done

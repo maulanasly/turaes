@@ -1,0 +1,81 @@
+---
+# turaes provisioning variables. Edit before the first run; never commit
+# secrets here — those live in vault.yml (ansible-vault).
+
+# --- target ---------------------------------------------------------------
+# Public example values only. Deployment-specific overrides (real domains,
+# cert email, control-plane private IP, admin pubkey) go in the gitignored
+# inventory/hosts.yml host_vars (see inventory/hosts.example.yml).
+turaes_domain: turaes.rayakala.ink
+turaes_base_domain: rayakala.ink
+turaes_app_origin: "https://{{ turaes_domain }}"
+turaes_timezone: Asia/Makassar
+
+# --- GitHub release (pinned tag, never "latest") --------------------------
+# The asset is the `turaes-linux-x86_64` binary built by CI with
+# --features proxy. Set sha256 from the release notes.
+turaes_release_tag: v0.1.0
+turaes_release_url: >-
+  https://github.com/maulanasly/turaes/releases/download/{{ turaes_release_tag }}/turaes-linux-x86_64
+turaes_release_sha256: ""
+
+# --- binary layout (matches deploy/turaes.service + runtime defaults) -----
+turaes_bin_dir: /usr/local/bin
+turaes_config_dir: /etc/turaes
+turaes_state_dir: /var/lib/turaes
+turaes_env_file: "{{ turaes_config_dir }}/turaes.env"
+
+# --- proxy / TLS ----------------------------------------------------------
+turaes_proxy_enabled: true
+turaes_acme_webroot: "{{ turaes_state_dir }}/acme"
+turaes_cert_dir: /etc/letsencrypt/live
+# Placeholder only — set the real certbot notification address in the
+# gitignored inventory host_vars.
+turaes_cert_email: ops@example.com
+
+# --- control-plane fleet channel (multi-node) -----------------------------
+# The gRPC control channel + shared join token. `turaes_control_address` is the
+# private VPC address agents/edges dial (gRPC {addr}:{grpc_port}, artifacts
+# {addr}:{server_port}); set `turaes_host` (e.g. 0.0.0.0) so the API is
+# reachable by agents — keep the cloud SG scoped to the VPC.
+turaes_grpc_enabled: true
+turaes_grpc_port: 9443
+# Example only — set the control plane's real private VPC IP in the gitignored
+# inventory host_vars.
+turaes_control_address: "10.0.0.2"
+turaes_host: ""
+# Fleet SSH keypair held on the control plane for `turaes server bootstrap`.
+turaes_fleet_ssh_key: /etc/turaes/ssh/fleet-key
+
+# --- firewall + SSH hardening (enabled by default) ------------------------
+turaes_firewall: true
+turaes_admin_user: ansible
+turaes_ssh_port: 22
+turaes_ssh_hardening: true
+# Controller public key installed on the box before password auth is disabled.
+# Required when turaes_ssh_hardening is true — the playbook fails closed.
+turaes_admin_pubkey: ""
+turaes_ssh_allow_users_base:
+  - "{{ turaes_admin_user }}"
+  - root
+# Allow public HTTP/HTTPS on 80/443 (control + edge). Workers set false: apps
+# are reached by the edge over the VPC, not directly.
+turaes_allow_http_https: true
+# If set, UFW allows inbound from this subnet (same-VPC fleet traffic: agents,
+# edges and the control-plane bootstrap).
+turaes_vpc_subnet: "10.0.0.0/8"
+
+# --- edge node ------------------------------------------------------------
+# Public origin of the edge (must match the dashboard host you route to it).
+turaes_edge_public_url: "https://{{ turaes_domain }}"
+turaes_edge_reuse_port: true
+
+# --- first app (skip with --skip-tags first-app) --------------------------
+turaes_first_app_name: beruang
+turaes_first_app_binary: /srv/{{ turaes_first_app_name }}/target/release/{{ turaes_first_app_name }}-gateway
+turaes_first_app_port: 8000
+turaes_first_app_domain: "{{ turaes_first_app_name }}.{{ turaes_domain }}"
+turaes_first_app_health_path: /health
+turaes_first_app_metrics_path: /metrics
+# Optional: a local path on the controller to upload as the app binary.
+turaes_first_app_upload_src: ""

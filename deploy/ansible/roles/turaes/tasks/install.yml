@@ -1,0 +1,71 @@
+---
+- name: Create turaes directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ turaes_config_dir }}"
+    - "{{ turaes_state_dir }}"
+    - "{{ turaes_acme_webroot }}"
+
+- name: Check for an existing env file
+  ansible.builtin.stat:
+    path: "{{ turaes_env_file }}"
+  register: turaes_env_stat
+
+- name: Generate a fresh JWT secret
+  ansible.builtin.command: openssl rand -hex 32
+  register: turaes_jwt_rand
+  changed_when: false
+  no_log: true
+  when: not turaes_env_stat.stat.exists
+
+- name: Record the generated JWT secret
+  ansible.builtin.set_fact:
+    turaes_jwt_secret: "{{ turaes_jwt_rand.stdout }}"
+  no_log: true
+  when: not turaes_env_stat.stat.exists
+
+- name: Seed the env file (kept on re-runs so live config is never clobbered)
+  ansible.builtin.template:
+    src: turaes.env.j2
+    dest: "{{ turaes_env_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  when: not turaes_env_stat.stat.exists
+  notify: Restart turaes
+
+- name: Install systemd units and timers
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../{{ item }}"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - turaes.service
+    - turaes-backup.service
+    - turaes-backup.timer
+    - turaes-gc.service
+    - turaes-gc.timer
+  notify: Reload systemd
+
+- name: Enable and start turaes
+  ansible.builtin.systemd_service:
+    name: turaes
+    enabled: true
+    state: started
+  notify: Restart turaes
+
+- name: Enable backup and GC timers
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - turaes-backup.timer
+    - turaes-gc.timer

@@ -1,0 +1,4 @@
+---
+- name: First app deployment
+  ansible.builtin.import_tasks: app.yml
+  tags: first-app

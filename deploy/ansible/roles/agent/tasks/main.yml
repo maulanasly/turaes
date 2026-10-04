@@ -1,0 +1,34 @@
+---
+# Worker prep for the control-plane SSH bootstrap. The agent binary, env file
+# and systemd unit are installed by `turaes server bootstrap` (see
+# playbooks/join.yml), which SSHes from the control plane to this node as
+# {turaes_node_ssh_user} (root by default — the bootstrap script needs root
+# writes and never uses sudo). This role ensures that SSH key is authorized.
+
+- name: Resolve the control-plane host
+  ansible.builtin.set_fact:
+    agent_control_host: "{{ groups['control'] | default([]) | first | default('') }}"
+
+- name: Assert a control-plane host is in the inventory
+  ansible.builtin.assert:
+    that:
+      - agent_control_host | length > 0
+    msg: >-
+      No host in the 'control' inventory group. The agent role generates the
+      fleet SSH key on the control plane, which must be listed in the inventory.
+
+- name: Generate the fleet SSH key on the control plane (idempotent)
+  community.crypto.openssh_keypair:
+    path: "{{ turaes_fleet_ssh_key }}"
+    type: ed25519
+    comment: "turaes-fleet@{{ agent_control_host }}"
+  register: agent_fleet_keygen
+  delegate_to: "{{ agent_control_host }}"
+  run_once: true
+
+- name: Authorize the control-plane key for the bootstrap user
+  ansible.posix.authorized_key:
+    user: "{{ turaes_node_ssh_user | default('root') }}"
+    key: "{{ agent_fleet_keygen.public_key }}"
+    state: present
+  when: agent_fleet_keygen is defined and agent_fleet_keygen.public_key is defined

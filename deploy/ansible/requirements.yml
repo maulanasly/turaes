@@ -1,0 +1,10 @@
+---
+collections:
+  # `community.general.ufw` is used by the base role to manage the firewall.
+  - name: community.general
+    version: ">=8.0.0"
+  - name: ansible.posix
+    version: ">=1.5.0"
+  # `community.crypto.openssh_keypair` generates the control-plane fleet key.
+  - name: community.crypto
+    version: ">=2.0.0"

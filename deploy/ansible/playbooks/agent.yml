@@ -1,0 +1,15 @@
+---
+# Prep worker nodes for the control-plane SSH bootstrap.
+#
+# Run this first, then `ansible-playbook playbooks/join.yml` from the control
+# plane to register + bootstrap each worker. The agent role generates the
+# control-plane fleet SSH key and authorizes it for the bootstrap user (root).
+
+- name: Prep worker nodes for the turaes agent
+  hosts: workers
+  become: true
+  gather_facts: true
+
+  roles:
+    - base
+    - agent

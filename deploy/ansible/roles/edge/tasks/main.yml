@@ -1,0 +1,53 @@
+---
+# Edge node: standalone Pingora that pulls routes + certs from the control
+# plane over gRPC. Binds :80/:443, so the base role must allow http/https
+# (turaes_allow_http_https defaults to true for edges).
+
+- name: Create edge directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ turaes_config_dir }}"
+    - "{{ turaes_acme_webroot }}"
+    - "{{ turaes_cert_dir }}"
+
+- name: Write the edge env file
+  ansible.builtin.template:
+    src: edge.env.j2
+    dest: "{{ turaes_config_dir }}/edge.env"
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Restart edge
+
+- name: Install the edge systemd unit
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../turaes-edge@.service"
+    dest: /etc/systemd/system/turaes-edge@.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Enable and start the edge
+  ansible.builtin.systemd_service:
+    name: turaes-edge@a
+    enabled: true
+    state: started
+
+- name: Apply pending edge changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for the edge proxy to listen
+  ansible.builtin.wait_for:
+    port: "{{ item }}"
+    state: started
+    timeout: 30
+  loop:
+    - 80
+    - 443
+  check_mode: false
