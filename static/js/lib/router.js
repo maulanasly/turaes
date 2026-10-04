@@ -2,7 +2,7 @@
 import { useState, useEffect } from "preact/hooks";
 import { parseRoute } from "./route.js";
 
-export { APP_TABS, parseRoute, pathFor } from "./route.js";
+export { APP_TABS, RANGES, DEFAULT_RANGE, RANGE_HOURS, normalizeRange, rangeToHours, parseRoute, pathFor } from "./route.js";
 
 export function navigate(path) {
   if (location.hash !== path) location.hash = path;
