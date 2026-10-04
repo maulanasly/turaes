@@ -1059,3 +1059,67 @@ async fn invalid_name_is_rejected() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
+
+#[tokio::test]
+async fn tenancy_schema_backfills_default_org() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let pool = state.pool.clone();
+
+    // The seeded organization exists and is the backfill target.
+    let slug: String = sqlx::query_scalar("SELECT slug FROM organizations WHERE id = 'default'")
+        .fetch_one(&pool)
+        .await
+        .expect("default org seeded");
+    assert_eq!(slug, "default");
+
+    // New applications are tenant-scoped to the default org.
+    sqlx::query(
+        "INSERT INTO applications (id, name, binary_path, port) VALUES ('a1', 'demo', '/bin/true', 9000)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let org_id: String = sqlx::query_scalar("SELECT org_id FROM applications WHERE id = 'a1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(org_id, "default");
+
+    // The tenancy tables accept the expected shapes.
+    sqlx::query("INSERT INTO users (id, github_id, login) VALUES ('u1', 5284227, 'maulanasly')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO memberships (id, org_id, user_id, role) VALUES ('m1', 'default', 'u1', 'owner')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO api_tokens (id, org_id, user_id, name, token_hash, scopes) \
+         VALUES ('t1', 'default', 'u1', 'ci', 'hash1', 'deploy')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO audit_log (id, org_id, actor_user_id, application_id, action) \
+         VALUES ('l1', 'default', 'u1', 'a1', 'app.deploy')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let role: String = sqlx::query_scalar("SELECT role FROM memberships WHERE id = 'm1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(role, "owner");
+    let action: String = sqlx::query_scalar("SELECT action FROM audit_log WHERE id = 'l1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(action, "app.deploy");
+}

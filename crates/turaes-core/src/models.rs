@@ -31,6 +31,8 @@ pub struct Application {
     pub domain: Option<String>,
     /// Node this app is placed on (`local` by default).
     pub server_id: String,
+    /// Owning tenant (`default` until memberships move it).
+    pub org_id: String,
     /// `systemd` or `proc`.
     pub runtime: String,
     /// Restart on unhealthy.
@@ -209,6 +211,98 @@ pub struct Event {
     pub kind: String,
     /// Human-readable message.
     pub message: String,
+    /// Event timestamp.
+    pub created_at: String,
+}
+
+/// A tenant workspace.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct Organization {
+    /// UUID (the seeded default org is `default`).
+    pub id: String,
+    /// URL-safe unique slug.
+    pub slug: String,
+    /// Display name.
+    pub name: String,
+    /// Creation timestamp.
+    pub created_at: String,
+}
+
+/// A signed-in principal (persisted on first OAuth login).
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct User {
+    /// UUID.
+    pub id: String,
+    /// Numeric GitHub user id (unique).
+    pub github_id: i64,
+    /// GitHub login.
+    pub login: String,
+    /// Display name from GitHub, when present.
+    pub name: Option<String>,
+    /// Creation timestamp.
+    pub created_at: String,
+    /// Last seen timestamp.
+    pub last_seen_at: Option<String>,
+}
+
+/// A user's role within an organization.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct Membership {
+    /// UUID.
+    pub id: String,
+    /// Owning organization.
+    pub org_id: String,
+    /// Member user.
+    pub user_id: String,
+    /// `owner`, `admin`, `developer` or `viewer`.
+    pub role: String,
+    /// Creation timestamp.
+    pub created_at: String,
+}
+
+/// A hashed, scoped token for programmatic/CI access.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ApiToken {
+    /// UUID.
+    pub id: String,
+    /// Owning organization.
+    pub org_id: String,
+    /// Creating user, when still present.
+    pub user_id: Option<String>,
+    /// Human name for the token.
+    pub name: String,
+    /// SHA-256 hash of the plaintext token (plaintext is never stored).
+    #[serde(skip_serializing)]
+    pub token_hash: String,
+    /// Comma-separated scopes (`read`, `deploy`, `admin`).
+    pub scopes: String,
+    /// Last use timestamp.
+    pub last_used_at: Option<String>,
+    /// Creation timestamp.
+    pub created_at: String,
+    /// Revocation timestamp, when revoked.
+    pub revoked_at: Option<String>,
+}
+
+/// One durable audit record of a mutating action.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct AuditLog {
+    /// UUID.
+    pub id: String,
+    /// Owning organization, when known.
+    pub org_id: Option<String>,
+    /// Acting user, when known (absent for system actions).
+    pub actor_user_id: Option<String>,
+    /// Related application, when any.
+    pub application_id: Option<String>,
+    /// Verb, e.g. `app.deploy`, `env.set`, `token.create`.
+    pub action: String,
+    /// Target kind, e.g. `application`, `domain`, `token`.
+    pub target_type: Option<String>,
+    /// Target identifier.
+    pub target_id: Option<String>,
+    /// Optional JSON metadata (never secrets).
+    pub metadata: Option<String>,
     /// Event timestamp.
     pub created_at: String,
 }

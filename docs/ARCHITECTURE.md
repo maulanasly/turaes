@@ -146,6 +146,31 @@ ReadWritePaths=/var/lib/{app}
 `state_dir/{app}.log`, tracks the pid in `state_dir/{app}.pid`, and signals via
 `kill`. It needs no root — used for development and as a fallback.
 
+## Tenancy model
+
+turaes is multi-tenant. Every application is owned by an **organization**;
+users join organizations with a **role**. Infrastructure (`servers`) stays
+platform-global — operators own the fleet, tenants own apps.
+
+```
+users ──< memberships(role) >── organizations ──< applications ──< deployments
+                                      │                              └─ env_vars, domains
+                                      ├──< api_tokens (scoped)
+                                      └──< audit_log
+```
+
+- Roles, highest first: `owner` (org settings + members) › `admin` (apps,
+  servers, tokens) › `developer` (deploy, lifecycle, env, domains) › `viewer`
+  (read-only).
+- `api_tokens` are hashed (SHA-256), scoped (`read`/`deploy`/`admin`) and
+  org-bound, for CI/programmatic access without SSH.
+- `audit_log` records every mutating action with actor, org and target.
+- Migration `007_tenancy.sql` seeds a `default` organization and assigns all
+  pre-existing applications to it.
+
+> Status: schema + models land first (migration 007); authorization middleware,
+> scoped routes and the audit API follow. See `ROADMAP.md`.
+
 ## Security posture
 
 - **Auth**: GitHub OAuth authorization-code; only numeric ids on

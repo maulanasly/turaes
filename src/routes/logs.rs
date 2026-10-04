@@ -128,6 +128,7 @@ mod tests {
             metrics_path: None,
             domain: None,
             server_id: "local".into(),
+            org_id: "default".into(),
             runtime: runtime.into(),
             auto_restart: true,
             status: "running".into(),

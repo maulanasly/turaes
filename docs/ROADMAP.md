@@ -18,6 +18,7 @@ Status legend: ✅ done · 🔄 in progress · ⏳ planned
 | **M5** | Auto-deploy | ⏳ | 2026-11-29 → 12-12 | GitHub/GitLab webhooks, git-based build |
 | **N0–N4** | Multi-node fleet | 🔄 | after M5 | Control plane + agents + edge — [PLAN-MULTINODE.md](./PLAN-MULTINODE.md) |
 | **UX-P0–P3** | Dashboard IA redesign | 🔄 | now | [UX-REVIEW.md](./UX-REVIEW.md) — router, shell, toasts, tabs, light mode, servers |
+| **T0–T1** | Multi-tenancy | 🔄 | now | orgs + role-based memberships, scoped API tokens, audit log, then quotas/isolation |
 
 > **Live instance (2026-10-01):** turaes is deployed on `43.173.9.225`
 > (Debian 13, systemd) and beruang is running under it with live health, CPU,
@@ -32,6 +33,13 @@ Status legend: ✅ done · 🔄 in progress · ⏳ planned
 > shipped; N1+ pending a second node).
 >
 > **Backlog:** ACME webroot route — done (proxy serves `/.well-known/acme-challenge/`).
+>
+> **Multi-tenancy (T0–T1, in progress):** turaes is moving to org/project
+> tenancy with role-based memberships (`owner`/`admin`/`developer`/`viewer`),
+> scoped hashed API tokens, and a durable audit log. T0 lands the schema
+> (migration `007_tenancy.sql` — users, organizations, memberships, api_tokens,
+> audit_log, `applications.org_id`); T1 adds authorization middleware, scoped
+> routes, tokens and audit APIs. Infrastructure (`servers`) stays platform-global.
 >
 > **SRE reliability work:** [SRE-REVIEW.md](./SRE-REVIEW.md) ·
 > [PLAN-ZERO-DOWNTIME.md](./PLAN-ZERO-DOWNTIME.md). Done: control/edge
