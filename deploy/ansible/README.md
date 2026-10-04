@@ -56,17 +56,29 @@ Target VPS (manual, one-time):
 
 ## Configure
 
+The repository carries **no real host data or secrets** — the inventory and
+vault are gitignored. Copy both examples and fill them in:
+
 ```bash
 cd deploy/ansible
 cp group_vars/vault.yml.example group_vars/vault.yml
+cp inventory/hosts.example.yml inventory/hosts.yml
 ansible-vault edit group_vars/vault.yml   # OAuth client id/secret, allowed ids, join token
-$EDITOR group_vars/all.yml                # domain, release tag, admin pubkey, first app
-$EDITOR inventory/hosts.yml               # control / workers / edges with private VPC IPs
+$EDITOR inventory/hosts.yml               # real IPs, users, key paths; per-deployment
+                                          # overrides (domain, cert email, control-plane
+                                          # address, admin pubkey) go in host_vars here
+$EDITOR group_vars/all.yml                # only if you must change shared defaults
 ```
 
 Secrets flow only through `group_vars/vault.yml` (gitignored, ansible-vault).
-Never commit real OAuth values. The JWT secret is generated on the host at first
-seed and stored only in the 0600 `/etc/turaes/turaes.env`.
+Deployment-specific values (real domains, email, private IPs) go in the
+gitignored `inventory/hosts.yml` host_vars or `host_vars/<host>.yml` — they
+override the committed `group_vars/all.yml` defaults. Never commit real values.
+The JWT secret is generated on the host at first seed and stored only in the
+0600 `/etc/turaes/turaes.env`.
+
+CI also runs a **gitleaks** secret scan (`.github/workflows/secrets.yml`) as a
+backstop on every push/PR.
 
 ## Run
 

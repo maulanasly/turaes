@@ -31,9 +31,9 @@ jobs:
         run: ansible-galaxy collection install -r requirements.yml
       - name: ansible-lint
         run: ansible-lint .
-      - name: Syntax check all playbooks
+      - name: Syntax check all playbooks (example inventory)
         run: |
           set -e
           for pb in provision agent join edge; do
-            ansible-playbook --syntax-check "playbooks/$pb.yml"
+            ansible-playbook --syntax-check -i inventory/hosts.example.yml "playbooks/$pb.yml"
           done

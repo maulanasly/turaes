@@ -62,8 +62,8 @@ ansible-deps: ## Install ansible-core + collections (controller)
 ansible-lint: ## Lint the playbooks/roles
 	cd $(ANSIBLE_DIR) && ansible-lint .
 
-ansible-syntax: ## Syntax-check the provision playbook
-	cd $(ANSIBLE_DIR) && ansible-playbook --syntax-check playbooks/provision.yml
+ansible-syntax: ## Syntax-check all playbooks (against the example inventory)
+	cd $(ANSIBLE_DIR) && for pb in provision agent join edge; do ansible-playbook --syntax-check -i inventory/hosts.example.yml "playbooks/$$pb.yml"; done
 
 ansible-check: ## Dry-run against the host (connects, changes nothing)
 	cd $(ANSIBLE_DIR) && ansible-playbook --check playbooks/provision.yml

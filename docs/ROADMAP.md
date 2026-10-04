@@ -20,7 +20,7 @@ Status legend: ✅ done · 🔄 in progress · ⏳ planned
 | **UX-P0–P3** | Dashboard IA redesign | 🔄 | now | [UX-REVIEW.md](./UX-REVIEW.md) — router, shell, toasts, tabs, light mode, servers |
 | **T0–T1** | Multi-tenancy (Phase 0) | ✅ | now | orgs + role-based memberships, scoped API tokens, audit log — all live; quotas/isolation move to Phase 1 |
 
-> **Live instance (2026-10-01):** turaes is deployed on `43.173.9.225`
+> **Live instance (2026-10-01):** turaes is deployed on `<vps-ip>`
 > (Debian 13, systemd) and beruang is running under it with live health, CPU,
 > memory and visitor monitoring. See [DEPLOY.md](./DEPLOY.md#live-instance).
 >

@@ -1,0 +1,47 @@
+---
+# Fleet inventory — EXAMPLE. The repository never carries real host data.
+#
+#   cp inventory/hosts.example.yml inventory/hosts.yml
+#   $EDITOR inventory/hosts.yml          # real IPs, usernames, key paths
+#
+# `inventory/hosts.yml` is gitignored; only this example is committed. Put any
+# per-deployment overrides (domain, cert email, control-plane address, admin
+# pubkey) in the real inventory's host_vars or in `host_vars/<host>.yml`
+# (also gitignored) — host/group vars override group_vars/all.yml defaults.
+#
+# Placeholder addresses use TEST-NET ranges (RFC 5737) — never reachable.
+#
+# Workers need two extra host_vars used by the control-plane SSH bootstrap:
+#   turaes_node_name       unique node name (agent identity / server row)
+#   turaes_node_address    private VPC IP; advertised to control and used as
+#                          the SSH host unless turaes_node_ssh_host is set
+#   turaes_node_ssh_user   default root (the bootstrap script needs root)
+
+all:
+  children:
+    control:
+      hosts:
+        turaes-vps:
+          ansible_host: 203.0.113.10
+          ansible_user: ansible
+          ansible_ssh_private_key_file: ~/.ssh/turaes-control
+          # Override deployment-specific defaults here, e.g.:
+          # turaes_domain: turaes.example.com
+          # turaes_cert_email: ops@example.com
+          # turaes_control_address: 10.0.0.2
+          # turaes_admin_pubkey: ssh-ed25519 AAAA...
+    workers:
+      hosts:
+        worker-1:
+          ansible_host: 203.0.113.11
+          ansible_user: ansible
+          ansible_ssh_private_key_file: ~/.ssh/turaes-worker-1
+          turaes_node_name: worker-1
+          turaes_node_address: 10.0.0.11
+          turaes_node_ssh_user: root
+    edges:
+      hosts:
+        edge-1:
+          ansible_host: 203.0.113.12
+          ansible_user: ansible
+          ansible_ssh_private_key_file: ~/.ssh/turaes-edge-1
