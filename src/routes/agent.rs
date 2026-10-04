@@ -25,7 +25,9 @@ pub async fn download(
         .unwrap_or("")
         .trim();
     if token.is_empty() {
-        return Err(Error::Unauthorized("missing agent token".into()));
+        return Err(Error::Unauthorized(
+            "missing agent token (set TURAES_AGENT_TOKEN to the join token)".into(),
+        ));
     }
 
     let server: Option<Server> =
@@ -34,7 +36,9 @@ pub async fn download(
             .fetch_optional(&state.pool)
             .await?;
     let Some(server) = server else {
-        return Err(Error::Unauthorized("unknown agent token".into()));
+        return Err(Error::Unauthorized(
+            "unknown agent token (re-register the agent to mint a fresh one)".into(),
+        ));
     };
     let _ = sqlx::query(
         "UPDATE servers SET status = 'online', last_seen_at = datetime('now') WHERE id = ?",

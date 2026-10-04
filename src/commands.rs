@@ -7,12 +7,30 @@ use turaes_core::db::Pool;
 use turaes_core::models::{Application, Server};
 use turaes_core::{Error, Result};
 
+use crate::audit;
 use crate::cli::{AppCommand, ServerCommand};
 use crate::routes::apps;
+use crate::routes::quotas;
 use crate::state::AppState;
 
+/// Resolve an `--org` reference (id or slug) to an organization id.
+async fn resolve_org(pool: &Pool, org: Option<&str>) -> Result<String> {
+    let org_ref = org.unwrap_or("default");
+    sqlx::query_scalar::<_, String>("SELECT id FROM organizations WHERE id = ? OR slug = ?")
+        .bind(org_ref)
+        .bind(org_ref)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| {
+            Error::NotFound(format!(
+                "unknown organization '{org_ref}' (create it on the Organization page)"
+            ))
+        })
+}
+
 /// Dispatch a `turaes app ...` subcommand.
-pub async fn run(state: &AppState, cmd: AppCommand) -> Result<()> {
+pub async fn run(state: &AppState, cmd: AppCommand, org: Option<&str>, json: bool) -> Result<()> {
+    let org_id = resolve_org(&state.pool, org).await?;
     match cmd {
         AppCommand::Add {
             name,
@@ -26,6 +44,7 @@ pub async fn run(state: &AppState, cmd: AppCommand) -> Result<()> {
         } => {
             add(
                 state,
+                &org_id,
                 &name,
                 &binary,
                 port,
@@ -37,15 +56,16 @@ pub async fn run(state: &AppState, cmd: AppCommand) -> Result<()> {
             )
             .await
         }
-        AppCommand::Deploy { name } => deploy(state, &name).await,
-        AppCommand::Rollback { name } => rollback(state, &name).await,
-        AppCommand::List => list(&state.pool).await,
-        AppCommand::Show { name } => show(state, &name).await,
+        AppCommand::Deploy { name } => deploy(state, &org_id, &name).await,
+        AppCommand::Rollback { name } => rollback(state, &org_id, &name).await,
+        AppCommand::Remove { name } => remove(state, &org_id, &name).await,
+        AppCommand::List => list(&state.pool, &org_id, json).await,
+        AppCommand::Show { name } => show(state, &org_id, &name, json).await,
     }
 }
 
-/// Dispatch a `turaes server ...` subcommand.
-pub async fn run_server(state: &AppState, cmd: ServerCommand) -> Result<()> {
+/// Dispatch a `turaes server ...` subcommand (nodes are platform-global).
+pub async fn run_server(state: &AppState, cmd: ServerCommand, json: bool) -> Result<()> {
     match cmd {
         ServerCommand::Add {
             name,
@@ -66,7 +86,7 @@ pub async fn run_server(state: &AppState, cmd: ServerCommand) -> Result<()> {
             )
             .await
         }
-        ServerCommand::List => server_list(&state.pool).await,
+        ServerCommand::List => server_list(&state.pool, json).await,
         ServerCommand::Remove { id } => server_remove(state, &id).await,
         ServerCommand::Bootstrap { id } => {
             let output = crate::routes::servers::run_bootstrap(state, &id).await?;
@@ -86,7 +106,9 @@ async fn server_add(
     ssh_key_file: Option<String>,
 ) -> Result<()> {
     if name.trim().is_empty() || address.trim().is_empty() {
-        return Err(Error::BadRequest("name and address are required".into()));
+        return Err(Error::BadRequest(
+            "server --name and --address are required".into(),
+        ));
     }
     let ssh_key_enc = match ssh_key_file {
         Some(path) => {
@@ -127,11 +149,15 @@ async fn server_add(
     Ok(())
 }
 
-async fn server_list(pool: &Pool) -> Result<()> {
+async fn server_list(pool: &Pool, json: bool) -> Result<()> {
     let servers =
         sqlx::query_as::<_, Server>("SELECT * FROM servers ORDER BY is_local DESC, name ASC")
             .fetch_all(pool)
             .await?;
+    if json {
+        println!("{}", serde_json::json!({ "servers": servers }));
+        return Ok(());
+    }
     println!("NAME             STATUS     ADDRESS                  LOCAL  ID");
     for s in servers {
         println!(
@@ -155,7 +181,7 @@ async fn server_remove(state: &AppState, id: &str) -> Result<()> {
         .ok_or_else(|| Error::NotFound(format!("server '{id}'")))?;
     if server.is_local {
         return Err(Error::BadRequest(
-            "the local server cannot be removed".into(),
+            "the local server cannot be removed (it represents this host)".into(),
         ));
     }
     let in_use: i64 = sqlx::query_scalar("SELECT count(*) FROM applications WHERE server_id = ?")
@@ -175,9 +201,16 @@ async fn server_remove(state: &AppState, id: &str) -> Result<()> {
     Ok(())
 }
 
+fn scoped_not_found(name: &str, org_id: &str) -> Error {
+    Error::NotFound(format!(
+        "no application named '{name}' in organization '{org_id}'"
+    ))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn add(
     state: &AppState,
+    org_id: &str,
     name: &str,
     binary: &str,
     port: u16,
@@ -189,21 +222,35 @@ async fn add(
 ) -> Result<()> {
     apps::validate_name(name)?;
     if binary.trim().is_empty() {
-        return Err(Error::BadRequest("binary path is required".into()));
+        return Err(Error::BadRequest(
+            "app --binary is required (absolute path to a prebuilt binary)".into(),
+        ));
     }
     if !matches!(runtime, "systemd" | "proc") {
         return Err(Error::BadRequest(
             "runtime must be 'systemd' or 'proc'".into(),
         ));
     }
+    apps::ensure_port_free(
+        &state.pool,
+        port as i64,
+        state.cfg.runtime.slot_offset as i64,
+        "",
+    )
+    .await?;
+    quotas::ensure_capacity(&state.pool, org_id, "", None, None).await?;
+    if domain.as_ref().is_some_and(|d| !d.is_empty()) {
+        quotas::ensure_domain_capacity(&state.pool, org_id).await?;
+    }
     let id = uuid::Uuid::new_v4().to_string();
     let app = sqlx::query_as::<_, Application>(
         "INSERT INTO applications \
-         (id, name, binary_path, args, port, health_path, metrics_path, domain, runtime, \
+         (id, org_id, name, binary_path, args, port, health_path, metrics_path, domain, runtime, \
           auto_restart, status) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'stopped') RETURNING *",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'stopped') RETURNING *",
     )
     .bind(&id)
+    .bind(org_id)
     .bind(name)
     .bind(binary)
     .bind(args)
@@ -222,17 +269,52 @@ async fn add(
         }
         Error::Db(e)
     })?;
+    // Seed the first placement, mirroring the API.
+    sqlx::query(
+        "INSERT OR IGNORE INTO app_servers (id, application_id, server_id, port) \
+         VALUES (?, ?, 'local', ?)",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(&app.id)
+    .bind(app.port)
+    .execute(&state.pool)
+    .await?;
+    audit::record(
+        state,
+        Some(org_id),
+        None,
+        Some(&app.id),
+        "app.create",
+        Some("application"),
+        Some(&app.id),
+        Some(&serde_json::json!({"name": app.name, "port": app.port, "via": "cli"}).to_string()),
+    )
+    .await?;
     println!("created {} ({})", app.name, app.id);
     Ok(())
 }
 
-async fn deploy(state: &AppState, name: &str) -> Result<()> {
-    let app = sqlx::query_as::<_, Application>("SELECT * FROM applications WHERE name = ?")
-        .bind(name)
-        .fetch_optional(&state.pool)
-        .await?
-        .ok_or_else(|| Error::NotFound(format!("application '{name}'")))?;
-    let (_dep_id, out) = apps::deploy_app(state, &app).await?;
+async fn deploy(state: &AppState, org_id: &str, name: &str) -> Result<()> {
+    let app = sqlx::query_as::<_, Application>(
+        "SELECT * FROM applications WHERE name = ? AND org_id = ?",
+    )
+    .bind(name)
+    .bind(org_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| scoped_not_found(name, org_id))?;
+    let (dep_id, out) = apps::deploy_app(state, &app).await?;
+    audit::record(
+        state,
+        Some(org_id),
+        None,
+        Some(&app.id),
+        "app.deploy",
+        Some("deployment"),
+        Some(&dep_id),
+        Some(&serde_json::json!({"artifact": out.artifact_hash, "via": "cli"}).to_string()),
+    )
+    .await?;
     println!(
         "deployed {} -> {} ({})",
         app.name,
@@ -242,12 +324,15 @@ async fn deploy(state: &AppState, name: &str) -> Result<()> {
     Ok(())
 }
 
-async fn rollback(state: &AppState, name: &str) -> Result<()> {
-    let app = sqlx::query_as::<_, Application>("SELECT * FROM applications WHERE name = ?")
-        .bind(name)
-        .fetch_optional(&state.pool)
-        .await?
-        .ok_or_else(|| Error::NotFound(format!("application '{name}'")))?;
+async fn rollback(state: &AppState, org_id: &str, name: &str) -> Result<()> {
+    let app = sqlx::query_as::<_, Application>(
+        "SELECT * FROM applications WHERE name = ? AND org_id = ?",
+    )
+    .bind(name)
+    .bind(org_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| scoped_not_found(name, org_id))?;
     let hashes: Vec<String> = sqlx::query_scalar(
         "SELECT artifact_hash FROM deployments \
          WHERE application_id = ? AND artifact_hash IS NOT NULL ORDER BY rowid DESC",
@@ -255,11 +340,12 @@ async fn rollback(state: &AppState, name: &str) -> Result<()> {
     .bind(&app.id)
     .fetch_all(&state.pool)
     .await?;
-    let previous = apps::select_previous_artifact(&hashes)
-        .ok_or_else(|| Error::BadRequest("no previous artifact to roll back to".into()))?;
+    let previous = apps::select_previous_artifact(&hashes).ok_or_else(|| {
+        Error::BadRequest("no previous build to roll back to (deploy at least twice first)".into())
+    })?;
     if !state.artifacts.has(&previous) {
         return Err(Error::NotFound(format!(
-            "artifact {previous} is no longer in the store"
+            "build {previous} is no longer in the store"
         )));
     }
     let source = state
@@ -267,7 +353,18 @@ async fn rollback(state: &AppState, name: &str) -> Result<()> {
         .path_for(&previous)?
         .to_string_lossy()
         .to_string();
-    let (_dep_id, out) = apps::deploy_app_source(state, &app, source).await?;
+    let (dep_id, out) = apps::deploy_app_source(state, &app, source).await?;
+    audit::record(
+        state,
+        Some(org_id),
+        None,
+        Some(&app.id),
+        "app.rollback",
+        Some("deployment"),
+        Some(&dep_id),
+        Some(&serde_json::json!({"rolled_back_to": previous, "via": "cli"}).to_string()),
+    )
+    .await?;
     println!(
         "rolled back {} -> {} ({})",
         app.name,
@@ -277,11 +374,58 @@ async fn rollback(state: &AppState, name: &str) -> Result<()> {
     Ok(())
 }
 
-async fn list(pool: &Pool) -> Result<()> {
-    let apps =
-        sqlx::query_as::<_, Application>("SELECT * FROM applications ORDER BY created_at DESC")
-            .fetch_all(pool)
-            .await?;
+/// Remove an application: stop its runtime units (legacy + both slots) and
+/// delete it. Placements and deployments cascade in the database.
+async fn remove(state: &AppState, org_id: &str, name: &str) -> Result<()> {
+    let app = sqlx::query_as::<_, Application>(
+        "SELECT * FROM applications WHERE name = ? AND org_id = ?",
+    )
+    .bind(name)
+    .bind(org_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| scoped_not_found(name, org_id))?;
+    audit::record(
+        state,
+        Some(org_id),
+        None,
+        Some(&app.id),
+        "app.delete",
+        Some("application"),
+        Some(&app.id),
+        Some(&serde_json::json!({"name": app.name, "via": "cli"}).to_string()),
+    )
+    .await?;
+    let runtime = apps::runtime_for(&state.cfg, &app.runtime);
+    let offset = state.cfg.runtime.slot_offset as i64;
+    let _ = runtime.remove(&apps::spec_for(&state.cfg, &app)).await;
+    for (slot, port) in [
+        (turaes_runtime::Slot::A, app.port),
+        (turaes_runtime::Slot::B, app.port + offset),
+    ] {
+        let spec = apps::spec_for_slot(&state.cfg, &app, Some(slot), port as u16);
+        let _ = runtime.remove(&spec).await;
+    }
+    sqlx::query("DELETE FROM applications WHERE id = ?")
+        .bind(&app.id)
+        .execute(&state.pool)
+        .await?;
+    let _ = apps::refresh_proxy_routes(state).await;
+    println!("removed {}", app.name);
+    Ok(())
+}
+
+async fn list(pool: &Pool, org_id: &str, json: bool) -> Result<()> {
+    let apps = sqlx::query_as::<_, Application>(
+        "SELECT * FROM applications WHERE org_id = ? ORDER BY created_at DESC",
+    )
+    .bind(org_id)
+    .fetch_all(pool)
+    .await?;
+    if json {
+        println!("{}", serde_json::json!({ "applications": apps }));
+        return Ok(());
+    }
     if apps.is_empty() {
         println!("no applications");
         return Ok(());
@@ -300,14 +444,21 @@ async fn list(pool: &Pool) -> Result<()> {
     Ok(())
 }
 
-async fn show(state: &AppState, name: &str) -> Result<()> {
+async fn show(state: &AppState, org_id: &str, name: &str, json: bool) -> Result<()> {
     use sqlx::Row;
 
-    let app = sqlx::query_as::<_, Application>("SELECT * FROM applications WHERE name = ?")
-        .bind(name)
-        .fetch_optional(&state.pool)
-        .await?
-        .ok_or_else(|| Error::NotFound(format!("application '{name}'")))?;
+    let app = sqlx::query_as::<_, Application>(
+        "SELECT * FROM applications WHERE name = ? AND org_id = ?",
+    )
+    .bind(name)
+    .bind(org_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| scoped_not_found(name, org_id))?;
+    if json {
+        println!("{}", serde_json::json!({ "application": app }));
+        return Ok(());
+    }
 
     println!("app        {}", app.name);
     println!("status     {}", app.status);

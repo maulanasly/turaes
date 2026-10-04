@@ -124,7 +124,11 @@ pub(crate) fn validate_name(name: &str) -> Result<()> {
 /// one tenant can never probe another tenant's applications.
 /// Validate per-app resource limits. The `proc` runtime cannot confine, so
 /// limits with it are rejected instead of silently ignored.
-fn validate_limits(mem_mb: Option<i64>, cpu_pct: Option<i64>, runtime: &str) -> Result<()> {
+pub(crate) fn validate_limits(
+    mem_mb: Option<i64>,
+    cpu_pct: Option<i64>,
+    runtime: &str,
+) -> Result<()> {
     if let Some(m) = mem_mb {
         if !(16..=65536).contains(&m) {
             return Err(Error::BadRequest(
@@ -158,7 +162,12 @@ pub(crate) async fn fetch_org_app(pool: &Pool, org_id: &str, id: &str) -> Result
 
 /// Reject a loopback port (and its blue/green slot pair) already claimed by
 /// another application. Ports are a host-global resource shared by all orgs.
-async fn ensure_port_free(pool: &Pool, port: i64, offset: i64, except_id: &str) -> Result<()> {
+pub(crate) async fn ensure_port_free(
+    pool: &Pool,
+    port: i64,
+    offset: i64,
+    except_id: &str,
+) -> Result<()> {
     let paired = port + offset;
     let clash: Option<String> = sqlx::query_scalar(
         "SELECT name FROM applications \
@@ -753,8 +762,11 @@ pub async fn rollback(
             .bind(&app.id)
             .fetch_all(&state.pool)
             .await?;
-            select_previous_artifact(&hashes)
-                .ok_or_else(|| Error::BadRequest("no previous build to roll back to".into()))?
+            select_previous_artifact(&hashes).ok_or_else(|| {
+                Error::BadRequest(
+                    "no previous build to roll back to (deploy at least twice first)".into(),
+                )
+            })?
         }
     };
     if !state.artifacts.has(&previous) {

@@ -122,7 +122,7 @@ pub async fn delete(
     authz::require_operator(&user)?;
     if id == "local" {
         return Err(Error::BadRequest(
-            "the local server cannot be removed".into(),
+            "the local server cannot be removed (it represents this host)".into(),
         ));
     }
     let in_use: i64 = sqlx::query_scalar("SELECT count(*) FROM applications WHERE server_id = ?")

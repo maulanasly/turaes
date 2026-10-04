@@ -53,24 +53,24 @@ async fn main() {
             db::migrate(&pool).await.unwrap_or_else(|e| fatal(e));
             println!("migrations applied");
         }
-        Command::Doctor => doctor(&cfg),
-        Command::App { cmd } => {
+        Command::Doctor { json } => doctor(&cfg, json).await.unwrap_or_else(|e| fatal(e)),
+        Command::App { cmd, org, json } => {
             let pool = db::connect(&cfg.database.url)
                 .await
                 .unwrap_or_else(|e| fatal(e));
             db::migrate(&pool).await.unwrap_or_else(|e| fatal(e));
             let state = AppState::new(cfg.clone(), pool);
-            commands::run(&state, cmd)
+            commands::run(&state, cmd, org.as_deref(), json)
                 .await
                 .unwrap_or_else(|e| fatal(e));
         }
-        Command::Server { cmd } => {
+        Command::Server { cmd, json } => {
             let pool = db::connect(&cfg.database.url)
                 .await
                 .unwrap_or_else(|e| fatal(e));
             db::migrate(&pool).await.unwrap_or_else(|e| fatal(e));
             let state = AppState::new(cfg.clone(), pool);
-            commands::run_server(&state, cmd)
+            commands::run_server(&state, cmd, json)
                 .await
                 .unwrap_or_else(|e| fatal(e));
         }
@@ -194,7 +194,42 @@ fn fatal<E: std::fmt::Display>(err: E) -> ! {
     std::process::exit(1);
 }
 
-fn doctor(cfg: &Config) {
+/// One capability check result for `doctor`.
+struct Check {
+    name: &'static str,
+    ok: bool,
+    detail: String,
+}
+
+fn check_ok(name: &'static str, detail: impl Into<String>) -> Check {
+    Check {
+        name,
+        ok: true,
+        detail: detail.into(),
+    }
+}
+
+fn check_fail(name: &'static str, detail: impl Into<String>) -> Check {
+    Check {
+        name,
+        ok: false,
+        detail: detail.into(),
+    }
+}
+
+/// A directory turaes must be able to create and write.
+fn check_writable_dir(name: &'static str, dir: &str) -> Check {
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        return check_fail(name, format!("cannot create {dir}: {e}"));
+    }
+    let probe = std::path::Path::new(dir).join(".turaes-writetest");
+    match std::fs::write(&probe, b"ok").and_then(|_| std::fs::remove_file(&probe)) {
+        Ok(()) => check_ok(name, dir.to_string()),
+        Err(e) => check_fail(name, format!("{dir} is not writable: {e}")),
+    }
+}
+
+async fn doctor(cfg: &Config, json: bool) -> turaes_core::Result<()> {
     println!("turaes {}", env!("CARGO_PKG_VERSION"));
     println!(
         "  listen            {}:{}",
@@ -263,6 +298,82 @@ fn doctor(cfg: &Config) {
     );
     println!("  proxy.pingora     {}", turaes_proxy::pingora_enabled());
     println!("  secure_cookies    {}", cfg.secure_cookies());
+
+    // Capability checks. Anything failing here fails boot or first use, so
+    // doctor exits non-zero when a check fails.
+    let mut checks: Vec<Check> = Vec::new();
+    match db::connect(&cfg.database.url).await {
+        Ok(pool) => {
+            match sqlx::query_scalar::<_, i64>("SELECT 1")
+                .fetch_one(&pool)
+                .await
+            {
+                Ok(_) => checks.push(check_ok("database", "opens and answers")),
+                Err(e) => checks.push(check_fail("database", format!("query failed: {e}"))),
+            }
+        }
+        Err(e) => checks.push(check_fail("database", format!("cannot open: {e}"))),
+    }
+    for (name, dir) in [
+        ("dir.backup", cfg.backup.dir.as_str()),
+        ("dir.artifacts", cfg.runtime.artifact_dir.as_str()),
+        ("dir.units", cfg.runtime.unit_dir.as_str()),
+        ("dir.bin", cfg.runtime.bin_dir.as_str()),
+        ("dir.state", cfg.runtime.state_dir.as_str()),
+        ("dir.env", cfg.runtime.env_dir.as_str()),
+        ("dir.acme", cfg.proxy.acme_webroot.as_str()),
+    ] {
+        checks.push(check_writable_dir(name, dir));
+    }
+    if cfg.proxy.enabled {
+        match cfg.dashboard_host() {
+            Some(host) => {
+                let cert = format!("{}/{host}/fullchain.pem", cfg.proxy.cert_dir);
+                if std::path::Path::new(&cert).is_file() {
+                    checks.push(check_ok("tls.cert", format!("{cert} present")));
+                } else {
+                    checks.push(check_fail(
+                        "tls.cert",
+                        format!("{cert} missing (certbot has not issued for {host})"),
+                    ));
+                }
+            }
+            None => checks.push(check_fail(
+                "tls.cert",
+                "no dashboard hostname derivable from server.public_url".to_string(),
+            )),
+        }
+    }
+
+    let failed = checks.iter().filter(|c| !c.ok).count();
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "ok": failed == 0,
+                "checks": checks
+                    .iter()
+                    .map(|c| serde_json::json!({"name": c.name, "ok": c.ok, "detail": c.detail}))
+                    .collect::<Vec<_>>(),
+            })
+        );
+    } else {
+        for c in &checks {
+            println!(
+                "  check.{:<12} {} {}",
+                c.name,
+                if c.ok { "ok  " } else { "FAIL" },
+                c.detail
+            );
+        }
+    }
+    if failed > 0 {
+        return Err(turaes_core::Error::Internal(format!(
+            "doctor: {failed} check(s) failed"
+        )));
+    }
+    Ok(())
 }
 
 /// Human-readable backup freshness for `doctor`: newest snapshot + age, or
