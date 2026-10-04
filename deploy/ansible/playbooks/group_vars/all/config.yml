@@ -17,7 +17,7 @@ turaes_timezone: Asia/Makassar
 turaes_release_tag: v0.1.0
 turaes_release_url: >-
   https://github.com/maulanasly/turaes/releases/download/{{ turaes_release_tag }}/turaes-linux-x86_64
-turaes_release_sha256: ""
+turaes_release_sha256: "6a6ef788d20fdb8b56b6b618744fcbbbe21c0c9795afaa72efeb1dfc2f301c26"
 
 # --- binary layout (matches deploy/turaes.service + runtime defaults) -----
 turaes_bin_dir: /usr/local/bin

@@ -13,18 +13,23 @@ creating the GitHub OAuth app, pointing DNS, and tagging a release with the
 ## Layout
 
 ```
-ansible.cfg                  # inventory, ssh settings, yaml stdout
+ansible.cfg                  # inventory, ssh settings, default stdout callback
 requirements.yml             # galaxy collections (community.general, community.crypto, ansible.posix)
 requirements.txt             # controller python packages (ansible-core, ansible-lint)
 .ansible-lint                # lint profile + skips
 inventory/hosts.yml          # groups: control / workers / edges
-group_vars/                  # all.yml + per-group workers.yml/edges.yml
-group_vars/vault.yml.example # OAuth + join-token template (copy → encrypt as vault.yml)
 playbooks/
   provision.yml              # control plane: base → turaes → tls → first-app (tags)
   agent.yml                  # worker prep: base (hardening) + agent (fleet key)
   join.yml                   # control: `turaes server add` + `bootstrap` workers
   edge.yml                   # edge node: base + turaes_binary + edge
+  group_vars/                # ansible-playbook loads group vars next to the playbook:
+    workers.yml              #   per-group files (workers, edges)
+    edges.yml
+    vault.yml.example        #   OAuth + join-token template
+    all/                     #   the `all` group uses the subdirectory form:
+      config.yml             #     shared configuration
+      vault.yml              #     encrypted secrets (gitignored)
 templates/turaes.env.j2      # /etc/turaes/turaes.env (0600)
 roles/
   base/                      # apt, admin user, UFW (gated 80/443, VPC subnet), SSH hardening
@@ -61,21 +66,22 @@ vault are gitignored. Copy both examples and fill them in:
 
 ```bash
 cd deploy/ansible
-cp group_vars/vault.yml.example group_vars/vault.yml
+mkdir -p playbooks/group_vars/all
+cp playbooks/group_vars/vault.yml.example playbooks/group_vars/all/vault.yml
 cp inventory/hosts.example.yml inventory/hosts.yml
-ansible-vault edit group_vars/vault.yml   # OAuth client id/secret, allowed ids, join token
+ansible-vault edit playbooks/group_vars/all/vault.yml  # OAuth id/secret, allowed ids, join token
 $EDITOR inventory/hosts.yml               # real IPs, users, key paths; per-deployment
                                           # overrides (domain, cert email, control-plane
                                           # address, admin pubkey) go in host_vars here
-$EDITOR group_vars/all.yml                # only if you must change shared defaults
+$EDITOR playbooks/group_vars/all/config.yml  # only if you must change shared defaults
 ```
 
-Secrets flow only through `group_vars/vault.yml` (gitignored, ansible-vault).
-Deployment-specific values (real domains, email, private IPs) go in the
-gitignored `inventory/hosts.yml` host_vars or `host_vars/<host>.yml` — they
-override the committed `group_vars/all.yml` defaults. Never commit real values.
-The JWT secret is generated on the host at first seed and stored only in the
-0600 `/etc/turaes/turaes.env`.
+Secrets flow only through `playbooks/group_vars/all/vault.yml` (gitignored,
+ansible-vault). Deployment-specific values (real domains, email, private IPs)
+go in the gitignored `inventory/hosts.yml` host_vars or `host_vars/<host>.yml`
+— they override the committed `playbooks/group_vars/all/config.yml` defaults.
+Never commit real values. The JWT secret is generated on the host at first
+seed and stored only in the 0600 `/etc/turaes/turaes.env`.
 
 CI also runs a **gitleaks** secret scan (`.github/workflows/secrets.yml`) as a
 backstop on every push/PR.
