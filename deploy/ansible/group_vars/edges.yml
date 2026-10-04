@@ -1,3 +1,0 @@
----
-# The edge is the public ingress, so it binds :80/:443.
-turaes_allow_http_https: true

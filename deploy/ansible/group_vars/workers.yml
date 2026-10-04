@@ -1,5 +1,0 @@
----
-# Workers serve apps over the VPC (the edge routes to them); they don't bind
-# public :80/:443. SSH is still open for the operator and the control-plane
-# bootstrap; fleet traffic from the VPC subnet is allowed by the base role.
-turaes_allow_http_https: false

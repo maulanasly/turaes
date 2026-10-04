@@ -2,8 +2,13 @@
 # GitHub OAuth — create the OAuth App at
 # https://github.com/settings/developers with callback
 #   https://{turaes_domain}/auth/callback
-# and set the values below, then encrypt with:
-#   ansible-vault edit deploy/ansible/group_vars/vault.yml
+# and set the values below, then encrypt as a group var subdirectory member:
+#   cp deploy/ansible/playbooks/group_vars/vault.yml.example \
+#      deploy/ansible/playbooks/group_vars/all/vault.yml
+#   ansible-vault edit deploy/ansible/playbooks/group_vars/all/vault.yml
+# (ansible-playbook loads group_vars/*.yml plus the files under
+#  group_vars/<group>/; group vars for the `all` group live in the
+#  playbooks/group_vars/all/ directory.)
 # Get your numeric id with `gh api user -q .id`.
 turaes_github_client_id: ""
 turaes_github_client_secret: ""
