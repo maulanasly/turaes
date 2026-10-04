@@ -1,7 +1,7 @@
 import { html } from "../lib/html.js";
 import { useState, useEffect, useCallback } from "preact/hooks";
 import { api } from "../lib/api.js";
-import { toast } from "../lib/toast.js";
+import { dismiss, toast } from "../lib/toast.js";
 import { confirmAction } from "../lib/confirm.js";
 import { fmtTime } from "../lib/format.js";
 
@@ -11,26 +11,32 @@ function statusClass(s) {
 
 export function ServersView({ user, onChanged }) {
   const [servers, setServers] = useState(null);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(null);
 
   const load = useCallback(async () => {
     try {
       const r = await api("/api/v1/servers");
       setServers(r.servers || []);
+      setError(null);
     } catch (e) {
-      if (e.status === 401) setServers([]);
-      else toast.error(e.message);
+      if (e.status === 401) { setServers([]); setError(null); }
+      else { setError(e.message); toast.error(e.message); }
     }
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
+  const retry = () => { setError(null); load(); };
+
   const validate = async (s) => {
+    setBusy(`validate:${s.id}`);
     try {
       const r = await api(`/api/v1/servers/${s.id}/validate`, { method: "POST" });
       toast[r.reachable ? "success" : "error"](`${s.name}: ${r.status}`);
       load();
       onChanged?.();
-    } catch (e) { toast.error(e.message); }
+    } catch (e) { toast.error(e.message); } finally { setBusy(null); }
   };
 
   const bootstrap = async (s) => {
@@ -40,25 +46,28 @@ export function ServersView({ user, onChanged }) {
       confirmLabel: "Bootstrap",
     }))) return;
     const id = toast.info(`Bootstrapping ${s.name}…`, 0);
+    setBusy(`bootstrap:${s.id}`);
     try {
       await api(`/api/v1/servers/${s.id}/bootstrap`, { method: "POST" });
       toast.success(`${s.name} bootstrapped`);
     } catch (e) {
       toast.error(e.message);
     } finally {
-      void id;
+      dismiss(id);
+      setBusy(null);
       load();
     }
   };
 
   const remove = async (s) => {
     if (!(await confirmAction({ title: `Remove ${s.name}?`, danger: true, confirmLabel: "Remove" }))) return;
+    setBusy(`remove:${s.id}`);
     try {
       await api(`/api/v1/servers/${s.id}`, { method: "DELETE" });
       toast.success(`Removed ${s.name}`);
       load();
       onChanged?.();
-    } catch (e) { toast.error(e.message); }
+    } catch (e) { toast.error(e.message); } finally { setBusy(null); }
   };
 
   const add = async (e) => {
@@ -66,21 +75,32 @@ export function ServersView({ user, onChanged }) {
     const fd = new FormData(e.target);
     const payload = Object.fromEntries([...fd.entries()].filter(([, v]) => v !== ""));
     if (payload.ssh_port) payload.ssh_port = Number(payload.ssh_port);
+    setBusy("add");
     try {
       await api("/api/v1/servers", { method: "POST", body: JSON.stringify(payload) });
       toast.success(`Added ${payload.name}`);
       e.target.reset();
       load();
       onChanged?.();
-    } catch (err) { toast.error(err.message); }
+    } catch (err) { toast.error(err.message); } finally { setBusy(null); }
   };
+
+  if (error) {
+    return html`<section class="panel">
+      <div class="panel-head"><h1>Servers</h1></div>
+      <p class="muted">Could not load servers: ${error}</p>
+      <div><button class="btn" onClick=${retry}>Retry</button></div>
+    </section>`;
+  }
 
   return html`
     <section class="panel">
       <div class="panel-head"><h1>Servers</h1></div>
       ${servers === null
         ? html`<p class="muted">Loading…</p>`
-        : html`<div class="table-wrap"><table>
+        : servers.length === 0
+          ? html`<p class="muted">No servers yet.</p>`
+          : html`<div class="table-wrap"><table>
             <thead><tr><th>Name</th><th>Address</th><th>Status</th><th>Last seen</th><th>Agent</th><th></th></tr></thead>
             <tbody>
               ${servers.map((s) => html`
@@ -91,9 +111,11 @@ export function ServersView({ user, onChanged }) {
                   <td class="muted">${s.last_seen_at ? fmtTime(s.last_seen_at) : "—"}</td>
                   <td class="muted mono">${s.agent_version || "—"}</td>
                   <td class="controls">
-                    ${user && html`<button class="btn small ghost" onClick=${() => validate(s)}>Validate</button>`}
-                    ${user && !s.is_local && html`<button class="btn small" onClick=${() => bootstrap(s)}>Bootstrap</button>`}
-                    ${user && !s.is_local && html`<button class="btn small ghost" onClick=${() => remove(s)}>Remove</button>`}
+                    ${user && html`<button class="btn small ghost" disabled=${busy !== null} onClick=${() => validate(s)}>
+                      ${busy === `validate:${s.id}` ? "Validating…" : "Validate"}</button>`}
+                    ${user && !s.is_local && html`<button class="btn small" disabled=${busy !== null} onClick=${() => bootstrap(s)}>
+                      ${busy === `bootstrap:${s.id}` ? "Bootstrapping…" : "Bootstrap"}</button>`}
+                    ${user && !s.is_local && html`<button class="btn small ghost" disabled=${busy !== null} onClick=${() => remove(s)}>Remove</button>`}
                   </td>
                 </tr>`)}
             </tbody>
@@ -108,7 +130,7 @@ export function ServersView({ user, onChanged }) {
           <label>SSH host <input name="ssh_host" placeholder="10.0.0.12" /></label>
           <label>SSH user <input name="ssh_user" placeholder="root" /></label>
         </div>
-        <div><button class="btn" type="submit">Add server</button></div>
+        <div><button class="btn" type="submit" disabled=${busy === "add"}>${busy === "add" ? "Adding…" : "Add server"}</button></div>
       </form>`}
     </section>`;
 }

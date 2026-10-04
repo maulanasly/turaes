@@ -135,6 +135,14 @@ function Shell() {
       ${route.view === "server" && html`<${ServerDetailView} id=${route.id} />`}
       ${route.view === "tokens" && html`<${TokensView} user=${user} />`}
       ${route.view === "org" && html`<${OrgView} user=${user} />`}
+      ${route.view === "notfound" && html`<section class="panel">
+        <h1>Not found</h1>
+        <p class="muted">No view matches <span class="mono">${route.path || ""}</span>.</p>
+        <div class="controls">
+          <a class="btn ghost" href="#/apps">Applications</a>
+          <a class="btn ghost" href="#/servers">Servers</a>
+        </div>
+      </section>`}
     </main>
 
     <${Toasts} />

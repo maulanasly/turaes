@@ -74,14 +74,14 @@ function Overview({ data }) {
       <div class="kpis">
         <${Kpi} label="CPU now" value=${last ? `${last.cpu_pct.toFixed(1)}%` : "—"} />
         <${Kpi} label="Memory now" value=${last ? fmtBytes(last.mem_bytes) : "—"} />
-        <${Kpi} label="Requests observed" value=${totalVisits} />
+        <${Kpi} label="Visits observed" value=${totalVisits} />
         <${Kpi} label="Unique visitors" value=${maxUniques} />
       </div>
       <div class="charts">
         <${Chart} title="CPU %" points=${cpu} color="var(--cpu)" formatY=${(v) => v.toFixed(1)} />
         <${Chart} title="Memory" points=${mem} color="var(--mem)" formatY=${fmtBytes} />
       </div>
-      <${Chart} title="Requests observed" points=${visitSeries} color="var(--visits)" formatY=${(v) => Math.round(v)} />
+      <${Chart} title="Visits observed" points=${visitSeries} color="var(--visits)" formatY=${(v) => Math.round(v)} />
       <div>
         <h2>Visitors by region</h2>
         ${regions.length === 0
@@ -107,8 +107,13 @@ function Deployments({ deployments, onRollbackTo }) {
             <td><${StatusBadge} status=${d.status} /></td>
             <td>
               <span class="mono">${shortHash(d.artifact_hash)}</span>
-              ${d.artifact_hash && html`<button class="btn small ghost" onClick=${() => {
-                navigator.clipboard?.writeText(d.artifact_hash); toast.success("Build id copied");
+              ${d.artifact_hash && html`<button class="btn small ghost" onClick=${async () => {
+                try {
+                  await navigator.clipboard.writeText(d.artifact_hash);
+                  toast.success("Build id copied");
+                } catch {
+                  toast.error("Copy failed — select the id manually");
+                }
               }}>Copy</button>`}
               ${d.artifact_hash && html`<details><summary class="muted small">full id</summary>
                 <div class="mono small break">${d.artifact_hash}</div></details>`}
@@ -129,11 +134,13 @@ function Deployments({ deployments, onRollbackTo }) {
 
 function Environment({ env, appId, reload }) {
   const [reveal, setReveal] = useState(false);
+  const [busy, setBusy] = useState(false);
   const save = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
     const key = fd.get("key");
     const value = fd.get("value");
+    setBusy(true);
     try {
       await oapi(`/apps/${appId}/env/${encodeURIComponent(key)}`, {
         method: "PUT",
@@ -144,26 +151,31 @@ function Environment({ env, appId, reload }) {
       reload();
     } catch (err) {
       toast.error(err.message);
+    } finally {
+      setBusy(false);
     }
   };
   const remove = async (key) => {
     if (!(await confirmAction({ title: `Remove ${key}?`, danger: true, confirmLabel: "Remove" }))) return;
+    setBusy(true);
     try {
       await oapi(`/apps/${appId}/env/${encodeURIComponent(key)}`, { method: "DELETE" });
       toast.success(`Removed ${key}`);
       reload();
     } catch (err) {
       toast.error(err.message);
+    } finally {
+      setBusy(false);
     }
   };
   return html`
     <div>
       ${!env || env.length === 0
         ? html`<p class="muted">No variables.</p>`
-        : html`<table><thead><tr><th>Key</th><th>Updated</th><th></th></tr></thead>
+        : html`<table><thead><tr><th>Key</th><th>Created</th><th></th></tr></thead>
             <tbody>${env.map((e) => html`
               <tr><td class="mono">${e.key}</td><td class="muted">${fmtTime(e.created_at)}</td>
-              <td><button class="btn small ghost" onClick=${() => remove(e.key)}>Remove</button></td></tr>`)}
+              <td><button class="btn small ghost" disabled=${busy} onClick=${() => remove(e.key)}>Remove</button></td></tr>`)}
             </tbody></table>`}
       <form class="form" style="margin-top:12px" onSubmit=${save}>
         <div class="row">
@@ -177,13 +189,14 @@ function Environment({ env, appId, reload }) {
             </span>
           </label>
         </div>
-        <div><button class="btn" type="submit">Add</button> <span class="muted">redeploy to apply</span></div>
+        <div><button class="btn" type="submit" disabled=${busy}>${busy ? "Saving…" : "Add"}</button> <span class="muted">redeploy to apply</span></div>
       </form>
     </div>`;
 }
 
 function Domains({ appId }) {
   const [domains, setDomains] = useState(null);
+  const [busy, setBusy] = useState(false);
   const load = useCallback(async () => {
     try {
       const r = await oapi(`/apps/${appId}/domains`);
@@ -195,6 +208,7 @@ function Domains({ appId }) {
   const add = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
+    setBusy(true);
     try {
       await oapi(`/apps/${appId}/domains`, {
         method: "POST",
@@ -203,15 +217,16 @@ function Domains({ appId }) {
       toast.success("Domain added");
       e.target.reset();
       load();
-    } catch (err) { toast.error(err.message); }
+    } catch (err) { toast.error(err.message); } finally { setBusy(false); }
   };
   const remove = async (d) => {
     if (!(await confirmAction({ title: `Remove ${d}?`, danger: true, confirmLabel: "Remove" }))) return;
+    setBusy(true);
     try {
       await oapi(`/apps/${appId}/domains/${encodeURIComponent(d)}`, { method: "DELETE" });
       toast.success("Removed");
       load();
-    } catch (err) { toast.error(err.message); }
+    } catch (err) { toast.error(err.message); } finally { setBusy(false); }
   };
 
   return html`
@@ -221,18 +236,19 @@ function Domains({ appId }) {
         ? html`<p class="muted">No aliases.</p>`
         : html`<table><tbody>${domains.map((d) => html`
             <tr><td class="mono">${d.domain}</td>
-            <td><button class="btn small ghost" onClick=${() => remove(d.domain)}>Remove</button></td></tr>`)}
+            <td><button class="btn small ghost" disabled=${busy} onClick=${() => remove(d.domain)}>Remove</button></td></tr>`)}
           </tbody></table>`}
       <form class="form" style="margin-top:10px" onSubmit=${add}>
         <div class="row">
           <label>Alias domain <input name="domain" placeholder="www.example.com" required /></label>
         </div>
-        <div><button class="btn" type="submit">Add alias</button></div>
+        <div><button class="btn" type="submit" disabled=${busy}>${busy ? "Saving…" : "Add alias"}</button></div>
       </form>
     </div>`;
 }
 
 function EditForm({ app, servers, onSaved }) {
+  const [busy, setBusy] = useState(false);
   const submit = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -249,11 +265,12 @@ function EditForm({ app, servers, onSaved }) {
       mem_limit_mb: mem === "" ? null : Number(mem),
       cpu_quota_pct: cpu === "" ? null : Number(cpu),
     };
+    setBusy(true);
     try {
       await oapi(`/apps/${app.id}`, { method: "PATCH", body: JSON.stringify(payload) });
       toast.success("Saved");
       onSaved();
-    } catch (err) { toast.error(err.message); }
+    } catch (err) { toast.error(err.message); } finally { setBusy(false); }
   };
   return html`
     <form class="form" onSubmit=${submit}>
@@ -285,7 +302,7 @@ function EditForm({ app, servers, onSaved }) {
         <label>CPU limit (% of one core) <input name="cpu_quota_pct" type="number" min="1" max="6400" value=${app.cpu_quota_pct ?? ""} placeholder="unlimited" /></label>
       </div>
       <p class="muted small">Limits need the systemd runtime and take effect on the next deploy or restart.</p>
-      <div><button class="btn" type="submit">Save settings</button></div>
+      <div><button class="btn" type="submit" disabled=${busy}>${busy ? "Saving…" : "Save settings"}</button></div>
     </form>`;
 }
 
@@ -323,6 +340,7 @@ function Settings({ app, servers, user, onSaved }) {
 export function AppDetailView({ id, tab, user, servers }) {
   const [app, setApp] = useState(null);
   const [notFound, setNotFound] = useState(false);
+  const [error, setError] = useState(null);
   const [data, setData] = useState({});
   const [deployments, setDeployments] = useState(null);
   const [activity, setActivity] = useState(null);
@@ -333,11 +351,14 @@ export function AppDetailView({ id, tab, user, servers }) {
     try {
       const r = await oapi(`/apps/${id}`);
       setApp(r.application);
+      setError(null);
     } catch (e) {
       if (e.status === 404) setNotFound(true);
-      else toast.error(e.message);
+      else { setError(e.message); toast.error(e.message); }
     }
   }, [id]);
+
+  const retry = () => { setError(null); loadApp(); };
 
   const loadMetrics = useCallback(async () => {
     try {
@@ -403,6 +424,7 @@ export function AppDetailView({ id, tab, user, servers }) {
       body: "Redeploys the previous build.",
       confirmLabel: "Roll back",
     }))) return;
+    setBusy(true);
     try {
       await oapi(`/apps/${id}/rollback`, { method: "POST" });
       toast.success("Rolled back");
@@ -410,6 +432,8 @@ export function AppDetailView({ id, tab, user, servers }) {
       loadDeployments();
     } catch (e) {
       toast.error(e.message);
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -419,6 +443,7 @@ export function AppDetailView({ id, tab, user, servers }) {
       body: `Redeploy build ${shortHash(hash)}.`,
       confirmLabel: "Roll back",
     }))) return;
+    setBusy(true);
     try {
       await oapi(`/apps/${id}/rollback`, {
         method: "POST",
@@ -429,22 +454,44 @@ export function AppDetailView({ id, tab, user, servers }) {
       loadDeployments();
     } catch (e) {
       toast.error(e.message);
+    } finally {
+      setBusy(false);
     }
   };
 
   const action = async (a) => {
+    if ((a === "stop" || a === "restart") && !(await confirmAction({
+      title: `${a === "stop" ? "Stop" : "Restart"} ${app.name}?`,
+      body: a === "stop"
+        ? "Traffic to this app will drop until it starts again."
+        : "The active slot restarts; expect a brief interruption.",
+      confirmLabel: a === "stop" ? "Stop" : "Restart",
+      danger: a === "stop",
+    }))) return;
+    setBusy(true);
     try {
       await oapi(`/apps/${id}/${a}`, { method: "POST" });
       toast.success(`${a[0].toUpperCase()}${a.slice(1)} requested`);
       loadApp();
     } catch (e) {
       toast.error(e.message);
+    } finally {
+      setBusy(false);
     }
   };
 
   if (notFound) {
     return html`<section class="panel"><p class="muted">Application not found.</p>
       <a href="#/apps">← Back to applications</a></section>`;
+  }
+  if (error) {
+    return html`<section class="panel"><p class="muted">Could not load application: ${error}</p>
+      <div class="controls"><button class="btn" onClick=${retry}>Retry</button>
+      <a href="#/apps">← Back to applications</a></div></section>`;
+  }
+  if (!APP_TABS.includes(tab)) {
+    return html`<section class="panel"><p class="muted">Unknown tab “${tab}”.</p>
+      <div><a class="btn ghost" href=${`#/apps/${id}/overview`}>Go to overview</a></div></section>`;
   }
   if (!app) return html`<section class="panel"><${Skeleton} lines={4} height=${28} /></section>`;
 
@@ -462,13 +509,13 @@ export function AppDetailView({ id, tab, user, servers }) {
         <div class="controls">
           ${user && html`
             <button class="btn" disabled=${busy} onClick=${deploy}>${busy ? "Deploying…" : "Deploy"}</button>
-            <button class="btn ghost" onClick=${rollback}>Rollback</button>
+            <button class="btn ghost" disabled=${busy} onClick=${rollback}>Rollback</button>
             <details class="menu">
               <summary class="btn small ghost" aria-label="More actions">More</summary>
               <div class="menu-list">
-                <button class="btn small ghost" onClick=${() => action("stop")}>Stop</button>
-                <button class="btn small ghost" onClick=${() => action("start")}>Start</button>
-                <button class="btn small ghost" onClick=${() => action("restart")}>Restart</button>
+                <button class="btn small ghost" disabled=${busy} onClick=${() => action("stop")}>Stop</button>
+                <button class="btn small ghost" disabled=${busy} onClick=${() => action("start")}>Start</button>
+                <button class="btn small ghost" disabled=${busy} onClick=${() => action("restart")}>Restart</button>
               </div>
             </details>`}
         </div>
