@@ -38,6 +38,10 @@ curl -s localhost:8787/health
 # {"proxy":false,"runtime":"systemd","status":"ok","version":"0.1.0"}
 ```
 
+The above is local development (proxy disabled). For production — VPS install,
+TLS, OAuth, first app, backups — follow [docs/DEPLOY.md](./docs/DEPLOY.md)
+start to finish.
+
 ## How it works
 
 ```
