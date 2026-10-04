@@ -1,6 +1,6 @@
 import { html } from "../lib/html.js";
 import { useEffect, useState, useCallback, useMemo } from "preact/hooks";
-import { api } from "../lib/api.js";
+import { oapi } from "../lib/api.js";
 import { toast } from "../lib/toast.js";
 import { confirmAction } from "../lib/confirm.js";
 import { fmtBytes, parseTs, fmtTime, shortHash, serverName, runtimeLabel } from "../lib/format.js";
@@ -116,7 +116,7 @@ function Environment({ env, appId, reload }) {
     const key = fd.get("key");
     const value = fd.get("value");
     try {
-      await api(`/api/v1/apps/${appId}/env/${encodeURIComponent(key)}`, {
+      await oapi(`/apps/${appId}/env/${encodeURIComponent(key)}`, {
         method: "PUT",
         body: JSON.stringify({ value }),
       });
@@ -130,7 +130,7 @@ function Environment({ env, appId, reload }) {
   const remove = async (key) => {
     if (!(await confirmAction({ title: `Remove ${key}?`, danger: true, confirmLabel: "Remove" }))) return;
     try {
-      await api(`/api/v1/apps/${appId}/env/${encodeURIComponent(key)}`, { method: "DELETE" });
+      await oapi(`/apps/${appId}/env/${encodeURIComponent(key)}`, { method: "DELETE" });
       toast.success(`Removed ${key}`);
       reload();
     } catch (err) {
@@ -167,7 +167,7 @@ function Domains({ appId }) {
   const [domains, setDomains] = useState(null);
   const load = useCallback(async () => {
     try {
-      const r = await api(`/api/v1/apps/${appId}/domains`);
+      const r = await oapi(`/apps/${appId}/domains`);
       setDomains(r.domains || []);
     } catch { setDomains([]); }
   }, [appId]);
@@ -177,7 +177,7 @@ function Domains({ appId }) {
     e.preventDefault();
     const fd = new FormData(e.target);
     try {
-      await api(`/api/v1/apps/${appId}/domains`, {
+      await oapi(`/apps/${appId}/domains`, {
         method: "POST",
         body: JSON.stringify({ domain: fd.get("domain") }),
       });
@@ -189,7 +189,7 @@ function Domains({ appId }) {
   const remove = async (d) => {
     if (!(await confirmAction({ title: `Remove ${d}?`, danger: true, confirmLabel: "Remove" }))) return;
     try {
-      await api(`/api/v1/apps/${appId}/domains/${encodeURIComponent(d)}`, { method: "DELETE" });
+      await oapi(`/apps/${appId}/domains/${encodeURIComponent(d)}`, { method: "DELETE" });
       toast.success("Removed");
       load();
     } catch (err) { toast.error(err.message); }
@@ -227,7 +227,7 @@ function EditForm({ app, servers, onSaved }) {
       auto_restart: fd.get("auto_restart") === "on",
     };
     try {
-      await api(`/api/v1/apps/${app.id}`, { method: "PATCH", body: JSON.stringify(payload) });
+      await oapi(`/apps/${app.id}`, { method: "PATCH", body: JSON.stringify(payload) });
       toast.success("Saved");
       onSaved();
     } catch (err) { toast.error(err.message); }
@@ -270,7 +270,7 @@ function Settings({ app, servers, user, onSaved }) {
       confirmLabel: "Delete",
     }))) return;
     try {
-      await api(`/api/v1/apps/${app.id}`, { method: "DELETE" });
+      await oapi(`/apps/${app.id}`, { method: "DELETE" });
       toast.success(`Deleted ${app.name}`);
       navigate("#/apps");
     } catch (err) {
@@ -302,7 +302,7 @@ export function AppDetailView({ id, tab, user, servers }) {
 
   const loadApp = useCallback(async () => {
     try {
-      const r = await api(`/api/v1/apps/${id}`);
+      const r = await oapi(`/apps/${id}`);
       setApp(r.application);
     } catch (e) {
       if (e.status === 404) setNotFound(true);
@@ -313,8 +313,8 @@ export function AppDetailView({ id, tab, user, servers }) {
   const loadMetrics = useCallback(async () => {
     try {
       const [m, v] = await Promise.all([
-        api(`/api/v1/apps/${id}/stats?hours=1`),
-        api(`/api/v1/apps/${id}/visitors?hours=24`),
+        oapi(`/apps/${id}/stats?hours=1`),
+        oapi(`/apps/${id}/visitors?hours=24`),
       ]);
       setData({ metrics: m.metrics || [], visitors: v.visitors || [] });
     } catch { /* ignore */ }
@@ -322,14 +322,14 @@ export function AppDetailView({ id, tab, user, servers }) {
 
   const loadDeployments = useCallback(async () => {
     try {
-      const r = await api(`/api/v1/apps/${id}/deployments?limit=15`);
+      const r = await oapi(`/apps/${id}/deployments?limit=15`);
       setDeployments(r.deployments || []);
     } catch { setDeployments([]); }
   }, [id]);
 
   const loadEnv = useCallback(async () => {
     try {
-      const r = await api(`/api/v1/apps/${id}/env`);
+      const r = await oapi(`/apps/${id}/env`);
       setEnv(r.env || []);
     } catch { setEnv([]); }
   }, [id]);
@@ -349,7 +349,7 @@ export function AppDetailView({ id, tab, user, servers }) {
   const deploy = async () => {
     setBusy(true);
     try {
-      await api(`/api/v1/apps/${id}/deploy`, { method: "POST" });
+      await oapi(`/apps/${id}/deploy`, { method: "POST" });
       toast.success("Deploy started");
       loadApp();
       loadDeployments();
@@ -367,7 +367,7 @@ export function AppDetailView({ id, tab, user, servers }) {
       confirmLabel: "Roll back",
     }))) return;
     try {
-      await api(`/api/v1/apps/${id}/rollback`, { method: "POST" });
+      await oapi(`/apps/${id}/rollback`, { method: "POST" });
       toast.success("Rolled back");
       loadApp();
       loadDeployments();
@@ -383,7 +383,7 @@ export function AppDetailView({ id, tab, user, servers }) {
       confirmLabel: "Roll back",
     }))) return;
     try {
-      await api(`/api/v1/apps/${id}/rollback`, {
+      await oapi(`/apps/${id}/rollback`, {
         method: "POST",
         body: JSON.stringify({ artifact_hash: hash }),
       });
@@ -397,7 +397,7 @@ export function AppDetailView({ id, tab, user, servers }) {
 
   const action = async (a) => {
     try {
-      await api(`/api/v1/apps/${id}/${a}`, { method: "POST" });
+      await oapi(`/apps/${id}/${a}`, { method: "POST" });
       toast.success(`${a[0].toUpperCase()}${a.slice(1)} requested`);
       loadApp();
     } catch (e) {

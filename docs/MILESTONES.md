@@ -201,8 +201,9 @@ org-scoped.
       `007_tenancy.sql`; core models.
 - [x] **T1a** Authz core: persist users on login, `Role` lattice, membership
       checks, `GET /api/v1/me`.
-- [ ] **T1b** Scope every route under `/api/v1/orgs/{org}/…` with per-action
-      role checks; cross-org isolation tests.
+- [x] **T1b** Scope every route under `/api/v1/orgs/{org}/…` with per-action
+      role checks; cross-org isolation tests. Servers stay global and require
+      an operator; loopback ports conflict-checked across orgs.
 - [ ] **T1c** Audit log writes on all mutations + read API + UI timeline.
 - [ ] **T1d** Scoped API tokens (hash-only, `read`/`deploy`/`admin`) + bearer
       auth + UI.

@@ -10,9 +10,10 @@ use crate::state::AppState;
 
 /// Build the full Axum router.
 pub fn build_router(state: AppState) -> Router {
-    // Authenticated API surface.
-    let api = Router::new()
-        .route("/me", get(routes::me::me))
+    // Tenant-scoped surface, nested under `/api/v1/orgs/{org}`. The `{org}`
+    // capture accepts an organization id or slug; every handler enforces a
+    // role floor for it (see `authz::authorize_org`).
+    let org_api = Router::new()
         .route("/apps", get(routes::apps::list).post(routes::apps::create))
         .route(
             "/apps/{id}",
@@ -42,7 +43,13 @@ pub fn build_router(state: AppState) -> Router {
             "/apps/{id}/env/{key}",
             axum::routing::put(routes::env::put).delete(routes::env::delete),
         )
-        .route("/deployments/{id}", get(routes::deployments::get))
+        .route("/deployments/{id}", get(routes::deployments::get));
+
+    // Authenticated API surface: tenant-scoped routes plus the global
+    // identity (`/me`), tenant-gated artifacts and operator-gated servers.
+    let api = Router::new()
+        .nest("/orgs/{org}", org_api)
+        .route("/me", get(routes::me::me))
         .route("/artifacts/{hash}", get(routes::artifacts::download))
         .route(
             "/servers",

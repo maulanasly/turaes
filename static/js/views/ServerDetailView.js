@@ -1,6 +1,6 @@
 import { html } from "../lib/html.js";
 import { useEffect, useState } from "preact/hooks";
-import { api } from "../lib/api.js";
+import { api, oapi } from "../lib/api.js";
 import { toast } from "../lib/toast.js";
 import { fmtTime, serverName } from "../lib/format.js";
 import { StatusBadge } from "../components/StatusBadge.js";
@@ -13,7 +13,7 @@ export function ServerDetailView({ id }) {
   useEffect(() => {
     (async () => {
       try {
-        const [s, a] = await Promise.all([api(`/api/v1/servers/${id}`), api("/api/v1/apps")]);
+        const [s, a] = await Promise.all([api(`/api/v1/servers/${id}`), oapi("/apps")]);
         setServer(s.server);
         setApps((a.applications || []).filter((x) => x.server_id === id));
       } catch (e) {

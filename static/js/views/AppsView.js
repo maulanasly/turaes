@@ -1,6 +1,6 @@
 import { html } from "../lib/html.js";
 import { useEffect, useState, useCallback } from "preact/hooks";
-import { api } from "../lib/api.js";
+import { oapi } from "../lib/api.js";
 import { toast } from "../lib/toast.js";
 import { serverName, runtimeLabel } from "../lib/format.js";
 import { sortApps } from "../lib/sort.js";
@@ -30,7 +30,7 @@ function NewAppForm({ servers, onCreated }) {
     if (payload.port) payload.port = Number(payload.port);
     setBusy(true);
     try {
-      const r = await api("/api/v1/apps", { method: "POST", body: JSON.stringify(payload) });
+      const r = await oapi("/apps", { method: "POST", body: JSON.stringify(payload) });
       toast.success(`Created ${r.application.name}`);
       e.target.reset();
       onCreated();
@@ -77,7 +77,7 @@ export function AppsView({ user, servers }) {
 
   const load = useCallback(async () => {
     try {
-      const r = await api("/api/v1/apps");
+      const r = await oapi("/apps");
       setApps(r.applications || []);
     } catch (e) {
       if (e.status === 401) setApps([]);

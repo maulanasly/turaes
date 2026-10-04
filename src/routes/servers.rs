@@ -5,12 +5,13 @@ use std::time::Duration;
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::Json;
+use axum::{Extension, Json};
 use serde::Deserialize;
 
 use turaes_core::models::Server;
 use turaes_core::{Error, Result};
 
+use crate::authz::{self, CurrentUser};
 use crate::state::AppState;
 
 /// Body for registering a server.
@@ -30,8 +31,12 @@ pub struct CreateServer {
     pub ssh_key: Option<String>,
 }
 
-/// `GET /api/v1/servers`
-pub async fn list(State(state): State<AppState>) -> Result<Json<serde_json::Value>> {
+/// `GET /api/v1/servers` — fleet nodes (operator only; nodes are platform-global).
+pub async fn list(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+) -> Result<Json<serde_json::Value>> {
+    authz::require_operator(&user)?;
     let servers =
         sqlx::query_as::<_, Server>("SELECT * FROM servers ORDER BY is_local DESC, name ASC")
             .fetch_all(&state.pool)
@@ -42,8 +47,10 @@ pub async fn list(State(state): State<AppState>) -> Result<Json<serde_json::Valu
 /// `POST /api/v1/servers`
 pub async fn create(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     Json(input): Json<CreateServer>,
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
+    authz::require_operator(&user)?;
     if input.name.trim().is_empty() || input.address.trim().is_empty() {
         return Err(Error::BadRequest("name and address are required".into()));
     }
@@ -85,14 +92,21 @@ fn map_unique_name(e: sqlx::Error) -> Error {
 /// `GET /api/v1/servers/{id}`
 pub async fn get(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>> {
+    authz::require_operator(&user)?;
     let server = fetch_server(&state, &id).await?;
     Ok(Json(serde_json::json!({ "server": server })))
 }
 
 /// `DELETE /api/v1/servers/{id}`
-pub async fn delete(State(state): State<AppState>, Path(id): Path<String>) -> Result<StatusCode> {
+pub async fn delete(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    Path(id): Path<String>,
+) -> Result<StatusCode> {
+    authz::require_operator(&user)?;
     if id == "local" {
         return Err(Error::BadRequest(
             "the local server cannot be removed".into(),
@@ -122,8 +136,10 @@ pub async fn delete(State(state): State<AppState>, Path(id): Path<String>) -> Re
 /// checks TCP connectivity to the SSH endpoint.
 pub async fn validate(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>> {
+    authz::require_operator(&user)?;
     let server = fetch_server(&state, &id).await?;
     if server.is_local {
         return Ok(Json(
@@ -156,8 +172,10 @@ pub async fn validate(
 /// `POST /api/v1/servers/{id}/bootstrap` — install + start the agent over SSH.
 pub async fn bootstrap(
     State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>> {
+    authz::require_operator(&user)?;
     let output = run_bootstrap(&state, &id).await?;
     Ok(Json(serde_json::json!({ "ok": true, "output": output })))
 }

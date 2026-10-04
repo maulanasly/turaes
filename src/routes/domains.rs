@@ -2,13 +2,14 @@
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::Json;
+use axum::{Extension, Json};
 use serde::Deserialize;
 
 use turaes_core::models::Domain;
 use turaes_core::{Error, Result};
 
-use crate::routes::apps::{fetch_app, refresh_proxy_routes};
+use crate::authz::{self, CurrentUser, Role};
+use crate::routes::apps::{fetch_org_app, refresh_proxy_routes};
 use crate::state::AppState;
 
 /// Body for adding an alias.
@@ -34,12 +35,14 @@ fn validate_domain(domain: &str) -> Result<String> {
     }
 }
 
-/// `GET /api/v1/apps/{id}/domains`
+/// `GET /api/v1/orgs/{org}/apps/{id}/domains`
 pub async fn list(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Extension(user): Extension<CurrentUser>,
+    Path((org, id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>> {
-    fetch_app(&state.pool, &id).await?;
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Viewer).await?;
+    fetch_org_app(&state.pool, &org_id, &id).await?;
     let domains = sqlx::query_as::<_, Domain>(
         "SELECT * FROM domains WHERE application_id = ? ORDER BY domain ASC",
     )
@@ -49,13 +52,15 @@ pub async fn list(
     Ok(Json(serde_json::json!({ "domains": domains })))
 }
 
-/// `POST /api/v1/apps/{id}/domains`
+/// `POST /api/v1/orgs/{org}/apps/{id}/domains`
 pub async fn add(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Extension(user): Extension<CurrentUser>,
+    Path((org, id)): Path<(String, String)>,
     Json(input): Json<AddDomain>,
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
-    fetch_app(&state.pool, &id).await?;
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
+    fetch_org_app(&state.pool, &org_id, &id).await?;
     let domain = validate_domain(&input.domain)?;
     let row = sqlx::query_as::<_, Domain>(
         "INSERT INTO domains (id, application_id, domain, is_primary) \
@@ -81,12 +86,14 @@ pub async fn add(
     ))
 }
 
-/// `DELETE /api/v1/apps/{id}/domains/{domain}`
+/// `DELETE /api/v1/orgs/{org}/apps/{id}/domains/{domain}`
 pub async fn delete(
     State(state): State<AppState>,
-    Path((id, domain)): Path<(String, String)>,
+    Extension(user): Extension<CurrentUser>,
+    Path((org, id, domain)): Path<(String, String, String)>,
 ) -> Result<StatusCode> {
-    fetch_app(&state.pool, &id).await?;
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
+    fetch_org_app(&state.pool, &org_id, &id).await?;
     let affected = sqlx::query("DELETE FROM domains WHERE application_id = ? AND domain = ?")
         .bind(&id)
         .bind(domain.to_ascii_lowercase())

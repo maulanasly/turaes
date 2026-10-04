@@ -6,6 +6,7 @@
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
 use axum::response::Response;
+use axum::Extension;
 use futures::{SinkExt, StreamExt};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
@@ -14,7 +15,8 @@ use turaes_core::config::Config;
 use turaes_core::models::Application;
 use turaes_core::Result;
 
-use crate::routes::apps::fetch_app;
+use crate::authz::{self, CurrentUser, Role};
+use crate::routes::apps::fetch_org_app;
 use crate::state::AppState;
 
 /// Program + args used to follow an app's logs.
@@ -43,13 +45,15 @@ pub fn log_argv(cfg: &Config, app: &Application) -> (String, Vec<String>) {
     }
 }
 
-/// `GET /api/v1/apps/{id}/logs` — upgrade to a WebSocket log stream.
+/// `GET /api/v1/orgs/{org}/apps/{id}/logs` — upgrade to a WebSocket log stream.
 pub async fn stream(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Extension(user): Extension<CurrentUser>,
+    Path((org, id)): Path<(String, String)>,
     ws: WebSocketUpgrade,
 ) -> Result<Response> {
-    let app = fetch_app(&state.pool, &id).await?;
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
+    let app = fetch_org_app(&state.pool, &org_id, &id).await?;
     let cfg = state.cfg.clone();
     Ok(ws.on_upgrade(move |socket| pump(cfg, app, socket)))
 }

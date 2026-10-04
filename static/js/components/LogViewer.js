@@ -1,5 +1,6 @@
 import { html } from "../lib/html.js";
 import { useEffect, useRef, useState } from "preact/hooks";
+import { orgPath } from "../lib/api.js";
 
 const MAX_LINES = 500;
 
@@ -16,7 +17,7 @@ export function LogViewer({ appId, height = 300 }) {
 
     const connect = () => {
       const proto = location.protocol === "https:" ? "wss" : "ws";
-      ws = new WebSocket(`${proto}://${location.host}/api/v1/apps/${appId}/logs`);
+      ws = new WebSocket(`${proto}://${location.host}${orgPath(`/apps/${appId}/logs`)}`);
       setStatus("connecting…");
       ws.onopen = () => setStatus("live");
       ws.onmessage = (ev) => {
