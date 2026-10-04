@@ -188,6 +188,35 @@ Full review/plan: [UX-REVIEW.md](./UX-REVIEW.md).
 
 ---
 
+## T0–T1 — Multi-tenancy 🔄 (now)
+
+**Goal**: host multiple trusted tenants with role-based access and an audit
+trail. Infrastructure (`servers`) stays platform-global; applications are
+org-scoped.
+
+### Deliverables
+
+- [x] **T0** Schema: `users`, `organizations`, `memberships`, `api_tokens`,
+      `audit_log`; `applications.org_id` (default `default`) — migration
+      `007_tenancy.sql`; core models.
+- [ ] **T1a** Authz core: persist users on login, `Role` lattice, membership
+      checks, `GET /api/v1/me`.
+- [ ] **T1b** Scope every route under `/api/v1/orgs/{org}/…` with per-action
+      role checks; cross-org isolation tests.
+- [ ] **T1c** Audit log writes on all mutations + read API + UI timeline.
+- [ ] **T1d** Scoped API tokens (hash-only, `read`/`deploy`/`admin`) + bearer
+      auth + UI.
+- [ ] **T1e** Org switcher, members/invites, org settings UI.
+
+### Exit criteria
+
+- [ ] A user cannot read, deploy to, or delete another org's app (403/404).
+- [ ] A `deploy`-scoped token can deploy but cannot manage members or tokens.
+- [ ] Every mutating action writes an audit row with actor, org and target.
+- [ ] Tokens and env values are never returned in plaintext after creation.
+
+---
+
 ## Cross-milestone definition of done
 
 1. `make verify` green.
