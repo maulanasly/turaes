@@ -35,16 +35,25 @@ gh workflow run release.yml -f deploy=true     # CI builds --features proxy + de
 ```
 
 **GitHub OAuth:** configured. Credentials live as repo secrets
-(`TURAES_GITHUB_CLIENT_ID`, `SECRET`, `ALLOWED_GITHUB_IDS`) and are applied to
-`/etc/turaes/turaes.env` by the `Configure` workflow (`.github/workflows/configure.yml`):
+(`TURAES_GITHUB_CLIENT_ID`, `TURAES_GITHUB_CLIENT_SECRET`,
+`TURAES_ALLOWED_GITHUB_IDS`) and are applied to `/etc/turaes/turaes.env` by
+the `Configure` workflow (`.github/workflows/configure.yml`):
 
 ```bash
 gh workflow run configure.yml      # writes env from secrets + restarts turaes
 ```
 
+(The workflow also accepts the legacy aliases `SECRET` and
+`ALLOWED_GITHUB_IDS`; prefer the `TURAES_*` names for new setups, or run
+`sudo bash deploy/set-github-oauth.sh --client-id … --client-secret … --allowed-ids …`
+directly on the box.)
+
 The OAuth App's **Authorization callback URL must be exactly**
 `https://turaes.rayakala.ink/auth/callback`. Allowed ids are numeric GitHub
-user ids (`gh api user -q .id`).
+user ids (`gh api user -q .id`). Set `TURAES_APP_ORIGIN` to the dashboard
+origin **before** signing in — the callback URL is derived from it, and
+session cookies are bound to it (mismatches fail boot in release, or silently
+drop cookies).
 
 **Outstanding on this host**
 
@@ -67,7 +76,10 @@ gh run watch
 pkg-config libssl-dev cmake`, uploads the `turaes-linux-x86_64` artifact,
 attaches it to a GitHub Release on tags, and (when `deploy: true`) installs it
 on the VPS over SSH and restarts the service. Required secrets:
-`DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`.
+`DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`. The deploy job only runs for
+the `production` environment. Its post-deploy gate checks
+`http://127.0.0.1:8787/health` only — confirm the proxy route and app health
+separately (see §5).
 
 Local build (optional, Linux; needs the same deps):
 
@@ -76,6 +88,15 @@ cargo build --release --features proxy      # or: make proxy-build
 ```
 
 ## 2. Install
+
+Prefer `deploy/install.sh` — it installs the binary, generates the JWT secret,
+seeds the env file, and enables the service **and** the backup/GC timers:
+
+```bash
+sudo bash deploy/install.sh            # from the repo root (builds if needed)
+```
+
+Manual equivalent (the script does all of this, plus the timers):
 
 ```bash
 sudo install -m 0755 target/release/turaes /usr/local/bin/turaes
@@ -87,13 +108,17 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now turaes
 ```
 
-`deploy/install.sh` automates the above (download-or-build, generate JWT secret,
-write the env file, enable the service).
+`install.sh` does not cover OAuth, DNS or TLS — continue below. Never copy
+the example env verbatim in production: its placeholder secret fails the
+release boot gates (the script generates a real one).
 
 ## 3. Configuration
 
 Layering, lowest → highest precedence: embedded defaults → file
-(`TURAES_CONFIG`, default `/etc/turaes/turaes.toml`) → `TURAES_*` env vars.
+(`--config` / `TURAES_CONFIG` when set; no path is probed by default, so pass
+one explicitly or rely on env) → `TURAES_*` env vars. In production the env
+file (`/etc/turaes/turaes.env`, loaded via the unit's `EnvironmentFile`) is
+the configuration.
 
 ### Required secrets (`/etc/turaes/turaes.env`)
 
@@ -107,9 +132,9 @@ TURAES_DATABASE_URL=sqlite:///var/lib/turaes/turaes.db?mode=rwc
 ```
 
 Register the GitHub OAuth app with callback
-`https://<your-host>/auth/callback` (plus `http://localhost:8787/auth/callback`
-for dev). Find your numeric id with
-`curl -H "Authorization: Bearer <token>" https://api.github.com/user`.
+`https://<your-host>/auth/callback` (GitHub allows several callback URLs, so
+also add `http://localhost:8787/auth/callback` for dev). Find your numeric id
+with `gh api user -q .id`.
 
 ### Proxy
 
@@ -141,6 +166,11 @@ Use `proc` to run turaes as a non-root user (no systemd unit generation).
 turaes does **not** do ACME itself; it loads certs issued by certbot into the
 standard layout `{CERT_DIR}/{domain}/{fullchain.pem,privkey.pem}`.
 
+Order matters, because the proxy is **off** by default (`TURAES_PROXY_ENABLED`
+ships `false`): point DNS at the host first, then enable the proxy and restart
+turaes, *then* issue the cert — the challenge path only exists once the proxy
+serves it.
+
 Use the **webroot** plugin — the proxy serves
 `/.well-known/acme-challenge/<token>` from `proxy.acme_webroot`
 (`TURAES_ACME_WEBROOT`, default `/var/lib/turaes/acme`), so no port needs to be
@@ -163,24 +193,62 @@ cert.)
 ```bash
 # 1) build the app (on the server or upload the artifact)
 cd /srv/beruang && cargo build --release
+```
 
-# 2) register + deploy via the API (session cookie required)
-curl -X POST https://turaes.rayakala.ink/api/v1/apps \
+Pick one of two ways to register and deploy. **No OAuth needed:** the CLI talks
+to the local database directly (fastest for bootstrap):
+
+```bash
+turaes app add --name beruang \
+  --binary /srv/beruang/target/release/beruang-gateway \
+  --port 8000 --domain beruang.turaes.rayakala.ink
+turaes app deploy beruang
+```
+
+**Via the API** (session cookie or API token required). Sign in to the
+dashboard once in a browser first — the first user to sign in becomes `owner`
+of the seeded `default` organization. Then either export the session cookie
+from your browser's devtools as `$SESSION`, or mint a token headlessly:
+
+```bash
+# headless auth: mint a deploy-scoped token (paste a session cookie once,
+# or do this in the Tokens dashboard page and skip the cookie entirely)
+curl -X POST https://turaes.rayakala.ink/api/v1/orgs/default/tokens \
   -H 'content-type: application/json' --cookie "$SESSION" \
+  -d '{"name":"bootstrap","scopes":"deploy"}'
+# → { "plaintext": "turaes_…" } — shown once, store it as $TOKEN
+```
+
+```bash
+curl -X POST https://turaes.rayakala.ink/api/v1/orgs/default/apps \
+  -H 'content-type: application/json' -H "Authorization: Bearer $TOKEN" \
   -d '{"name":"beruang",
        "binary_path":"/srv/beruang/target/release/beruang-gateway",
-       "port":8000,"domain":"kalkulator.rayakala.ink",
+       "port":8000,"domain":"beruang.turaes.rayakala.ink",
        "health_path":"/health","metrics_path":"/metrics"}'
 
-curl -X POST https://turaes.rayakala.ink/api/v1/apps/<id>/deploy --cookie "$SESSION"
+curl -X POST https://turaes.rayakala.ink/api/v1/orgs/default/apps/<id>/deploy \
+  -H "Authorization: Bearer $TOKEN"
 ```
+
+Notes:
+
+- Loopback ports are host-global: a port (or its blue/green pair) claimed by
+  any app yields `409`. Point the domain's DNS at this host *before* adding
+  it, or the proxy returns `404` for unknown hosts.
+- Optional fields: `server_id` (default `local`), `runtime` (`systemd` default,
+  `proc` fallback), `mem_limit_mb` / `cpu_quota_pct` (systemd only), `args`,
+  `description`, `auto_restart`.
+- Deploys are blue/green with a health gate: the new slot must answer its
+  health path before traffic cuts over.
 
 Verify:
 
 ```bash
-systemctl status beruang
-curl -s 127.0.0.1:8000/health
-curl -s 127.0.0.1:8000/metrics | head
+systemctl status beruang-a beruang-b   # slots; one is active
+turaes app show beruang                # status + cpu/mem/visitors/health
+curl -s 127.0.0.1:8000/health         # base port (slot A when active)
+curl -sk https://beruang.turaes.rayakala.ink/health
 ```
 
 The generated unit matches the fleet's hardened shape (`ProtectSystem=strict`,
@@ -274,16 +342,31 @@ sudo systemctl restart turaes      # migrations run on boot
 
 ### Rollback an app
 
-Until M4 ships one-click rollback, restore the previous binary path recorded in
-the `deployments.previous_artifact` column and re-deploy.
+```bash
+turaes app rollback beruang                    # previous build
+curl -X POST https://turaes.rayakala.ink/api/v1/orgs/default/apps/<id>/rollback \
+  -H "Authorization: Bearer $TOKEN"            # previous build
+curl -X POST https://turaes.rayakala.ink/api/v1/orgs/default/apps/<id>/rollback \
+  -H 'content-type: application/json' -H "Authorization: Bearer $TOKEN" \
+  -d '{"artifact_hash":"sha256:<hex>"}'        # a specific build (see Deployments tab)
+```
+
+Rollback replays the stored artifact through the same blue/green,
+health-gated path as a deploy. It needs at least two distinct builds in
+history, otherwise it answers `422`.
 
 ## 7. Troubleshooting
 
 | Symptom | Check |
 |---|---|
 | Dashboard 401 | GitHub id missing from the allowlist, or `APP_ORIGIN`/callback mismatch |
-| Cookies not set | https origin required unless `TURAES_ALLOW_INSECURE_COOKIES=true` |
-| Proxy not listening | built without `--features pingora` (`turaes doctor` shows `proxy.pingora`) |
+| Refuses to boot: placeholder secret | release builds reject the shipped default — set a real `TURAES_JWT_SECRET` (`openssl rand -hex 32`) |
+| Refuses to boot: empty allowlist | release builds require `TURAES_ALLOWED_GITHUB_IDS`, or explicitly opt into open sign-in with `TURAES_ALLOW_OPEN_SIGNIN=true` |
+| Cookies not set | https origin required unless `TURAES_ALLOW_INSECURE_COOKIES=true`; `TURAES_APP_ORIGIN` must match the URL in the browser |
+| Proxy not listening | built without `--features proxy` (`turaes doctor` shows `proxy.pingora`); proxy off by default — set `TURAES_PROXY_ENABLED=true` and restart before certbot |
 | App won't start | `journalctl -u <app>`; verify `ExecStart` path and `PORT` |
+| API `409` on create | port (or its blue/green pair) already claimed by another app; pick a free loopback port |
+| API `422` on rollback | needs at least two distinct builds in history |
 | Visitors all `unknown` | proxy not forwarding a CDN country header |
 | `database is locked` | another process holds the DB; SQLite WAL expects a single writer |
+| Config change ignored | unparseable `TURAES_*` values are only a startup warning, never fatal — check `journalctl -u turaes` for `ignoring unparseable` |
