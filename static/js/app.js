@@ -145,7 +145,7 @@ function Shell() {
 
     <main>
       ${route.view === "apps" && html`<${AppsView} user=${user} servers=${servers} />`}
-      ${route.view === "app" && html`<${AppDetailView} id=${route.id} tab=${route.tab} user=${user} servers=${servers} />`}
+      ${route.view === "app" && html`<${AppDetailView} id=${route.id} tab=${route.tab} range=${route.range} user=${user} servers=${servers} />`}
       ${route.view === "servers" && html`<${ServersView} user=${user} onChanged=${loadServers} />`}
       ${route.view === "server" && html`<${ServerDetailView} id=${route.id} />`}
       ${route.view === "tokens" && html`<${TokensView} user=${user} />`}

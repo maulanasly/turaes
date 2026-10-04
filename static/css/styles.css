@@ -112,6 +112,14 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .pw input { flex: 1; }
 
 .detail { display: grid; gap: 14px; }
+.range-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.seg { display: inline-flex; gap: 2px; border: 1px solid var(--border); border-radius: 8px; padding: 2px; background: var(--panel-2); }
+.seg button { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12px; font-weight: 600;
+  padding: 4px 10px; border-radius: 6px; cursor: pointer; }
+.seg button:hover { color: var(--text); }
+.seg button.active { background: var(--accent); color: #fff; }
+[data-theme="light"] .seg button.active { color: #fff; }
+.seg button:disabled { opacity: .6; cursor: default; }
 .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
 .kpi { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel-2); padding: 10px 12px; }
 .kpi-label { color: var(--muted); font-size: 12px; }
@@ -161,6 +169,11 @@ summary { cursor: pointer; color: var(--muted); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+
+/* Chart accessibility data table: visually compact <details>, but the table
+   itself stays visible to screen readers without layout impact. */
+.sr-details { margin-top: 6px; }
+.sr-details .sr-only-table { max-height: 160px; overflow: auto; }
 
 .login { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
 .login-card { position: relative; width: 100%; max-width: 360px; text-align: center;
