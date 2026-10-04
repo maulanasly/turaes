@@ -35,12 +35,13 @@ systemd services on the same host. Multi-node is built but dormant
 - Not zero-downtime (`systemctl restart` drops :80/:443 + API).
 - Artifact store unbounded (no GC).
 - ~~Shared secret for JWT signing **and** env sealing; no rotation~~ — done: HKDF-separated sealing key, `turaes secrets reseal`, rotation runbook.
-- API/apps bind `0.0.0.0` (loopback suffices).
+- ~~API/apps bind `0.0.0.0` (loopback suffices)~~ — done: control binds loopback by default, fronted by the proxy.
 
 ### Sev-3
-- Control unit not hardened; irreversible migrations; root SSH login permitted
-  (key only); cert renewal depends on turaes serving :80; no SLOs/runbook;
-  journald uncapped; vendor `tat_agent` present.
+- ~~Control unit not hardened~~ — done: `ProtectSystem=strict` + device/namespace
+  lockdown (see `deploy/turaes.service`); irreversible migrations; root SSH login
+  permitted (key only); cert renewal depends on turaes serving :80; no
+  SLOs/runbook; journald uncapped; vendor `tat_agent` present.
 
 ## Remediation status
 

@@ -1819,3 +1819,64 @@ async fn secrets_reseal_migrates_legacy_only() {
     .unwrap();
     assert_eq!(action, "secrets.reseal");
 }
+
+#[tokio::test]
+async fn security_headers_are_present() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let headers = resp.headers();
+    assert_eq!(headers["x-content-type-options"], "nosniff");
+    assert_eq!(headers["x-frame-options"], "DENY");
+    assert_eq!(headers["referrer-policy"], "same-origin");
+    // The test origin is http://localhost, which counts as secure.
+    assert_eq!(headers["strict-transport-security"], "max-age=31536000");
+}
+
+#[tokio::test]
+async fn csrf_blocks_cookie_mutations_without_json() {
+    let dir = tempfile::tempdir().unwrap();
+    // A cross-site form POST carries cookies but no JSON content type.
+    let router = test_router(dir.path()).await;
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/apps")
+                .header("cookie", "turaes_session=junk")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // The same request as a real API call (JSON content type) passes CSRF and
+    // reaches the handler (the dev bypass authenticates in tests).
+    let router = test_router(dir.path()).await;
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/apps")
+                .header("cookie", "turaes_session=junk")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"name": "csrfapp", "binary_path": "/bin/true", "port": 9400})
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+}

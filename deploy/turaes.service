@@ -17,6 +17,24 @@ Restart=always
 RestartSec=5
 LimitNOFILE=65535
 NoNewPrivileges=true
+# Sandbox the control plane. It still runs as root (it writes app units,
+# installs binaries and binds :80/:443), but the filesystem, devices, kernel
+# interfaces and namespaces are locked down to what it needs: unit/binary/env
+# writes under /etc and /usr/local, D-Bus + journal sockets (AF_UNIX),
+# loopback/VPC traffic (AF_INET/AF_INET6) and interface lookups (AF_NETLINK).
+ProtectSystem=strict
+# Writable paths mirror the runtime defaults (bin/unit/env/state dirs). If the
+# [runtime] dirs are relocated, extend this list to match.
+ReadWritePaths=/var/lib/turaes /etc /usr/local/bin
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=true
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target

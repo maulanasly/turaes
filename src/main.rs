@@ -14,6 +14,7 @@ mod grpc;
 mod monitor;
 mod routes;
 mod secrets;
+mod security;
 mod state;
 
 #[cfg(test)]
