@@ -1,0 +1,17 @@
+[Unit]
+Description=turaes artifact garbage collection (one-shot)
+Documentation=https://github.com/maulanasly/turaes
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/var/lib/turaes
+EnvironmentFile=-/etc/turaes/turaes.env
+ExecStart=/usr/local/bin/turaes gc
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# Covers the default database + artifact locations; extend if relocated.
+ReadWritePaths=/var/lib/turaes

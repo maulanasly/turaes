@@ -2093,3 +2093,76 @@ async fn quota_get_reports_usage() {
     assert_eq!(body["usage"]["domains"], 1);
     assert!(body["quota"]["max_apps"].as_i64().unwrap() >= 1);
 }
+
+fn age_file(path: &std::path::Path, hours_ago: u64) {
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(hours_ago * 3600);
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+}
+
+#[tokio::test]
+async fn artifact_gc_keeps_referenced_blobs() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let live_hex = "a".repeat(64);
+    let orphan_hex = "b".repeat(64);
+    state
+        .artifacts
+        .store_bytes(&format!("sha256:{live_hex}"), b"live")
+        .await
+        .unwrap();
+    let orphan = state
+        .artifacts
+        .store_bytes(&format!("sha256:{orphan_hex}"), b"orphan")
+        .await
+        .unwrap();
+    // Only blobs older than the grace period are collectible.
+    age_file(&orphan, 2);
+
+    // A stale crashed upload is swept; a fresh one is spared.
+    let sha_dir = state.artifacts.root().join("sha256");
+    std::fs::write(sha_dir.join(".tmp-stale"), b"x").unwrap();
+    age_file(&sha_dir.join(".tmp-stale"), 2);
+    std::fs::write(sha_dir.join(".tmp-fresh"), b"x").unwrap();
+
+    sqlx::query(
+        "INSERT INTO applications (id, name, binary_path, port) VALUES ('g1', 'gcapp', '/bin/true', 9600)",
+    )
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO deployments (id, application_id, status, artifact_hash) VALUES ('gd', 'g1', 'running', ?)",
+    )
+    .bind(format!("sha256:{live_hex}"))
+    .execute(&state.pool)
+    .await
+    .unwrap();
+
+    // Dry run changes nothing.
+    let dry = crate::gc::collect_artifacts(&state, true).await.unwrap();
+    assert_eq!(dry.blobs_removed, 1);
+    assert_eq!(dry.tmps_swept, 1);
+    assert_eq!(dry.blobs_kept, 1);
+    assert!(orphan.is_file());
+
+    let report = crate::gc::collect_artifacts(&state, false).await.unwrap();
+    assert_eq!(report.blobs_removed, 1);
+    assert!(report.bytes_freed > 0);
+    assert_eq!(report.tmps_swept, 1);
+    assert!(!orphan.is_file());
+    assert!(!sha_dir.join(".tmp-stale").exists());
+    assert!(sha_dir.join(".tmp-fresh").is_file());
+    assert!(state.artifacts.has(&format!("sha256:{live_hex}")));
+
+    // The collection itself is audited.
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE action = 'artifacts.gc'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 1);
+}

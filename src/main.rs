@@ -10,6 +10,7 @@ mod bootstrap;
 mod cli;
 mod commands;
 mod edge;
+mod gc;
 mod grpc;
 mod monitor;
 mod routes;
@@ -153,6 +154,26 @@ async fn main() {
                 }
             }
         },
+        Command::Gc { dry_run } => {
+            let pool = db::connect(&cfg.database.url)
+                .await
+                .unwrap_or_else(|e| fatal(e));
+            db::migrate(&pool).await.unwrap_or_else(|e| fatal(e));
+            let state = AppState::new(cfg.clone(), pool);
+            let report = gc::collect_artifacts(&state, dry_run)
+                .await
+                .unwrap_or_else(|e| fatal(e));
+            if dry_run {
+                println!("dry run: nothing deleted");
+            }
+            println!(
+                "artifacts: removed {} blob(s) ({} bytes), swept {} temp upload(s), kept {} blob(s)",
+                report.blobs_removed,
+                report.bytes_freed,
+                report.tmps_swept,
+                report.blobs_kept
+            );
+        }
         Command::Serve => serve(cfg).await,
     }
 }
@@ -206,6 +227,11 @@ fn doctor(cfg: &Config) {
         cfg.backup.dir,
         cfg.backup.retain,
         latest_snapshot(&cfg.backup.dir)
+    );
+    let (artifact_files, artifact_bytes) = gc::store_usage(&cfg.runtime.artifact_dir);
+    println!(
+        "  artifacts         {artifact_files} file(s), {} in store",
+        human_bytes(artifact_bytes)
     );
     println!(
         "  seal              v1 HKDF-SHA256 (previous secret {})",
@@ -270,6 +296,22 @@ fn latest_snapshot(dir: &str) -> String {
             format!("newest {name} ({hours}h ago, {} total)", snaps.len())
         }
         Err(_) => format!("newest {name}"),
+    }
+}
+
+/// Compact byte counts for `doctor` (`1.5 MB`, `512 B`).
+fn human_bytes(n: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = n as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{n} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
     }
 }
 
