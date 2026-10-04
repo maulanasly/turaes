@@ -39,6 +39,29 @@ The session is an HttpOnly, SameSite=Lax JWT cookie.
 { "status": "ok", "version": "0.1.0", "runtime": "systemd", "proxy": false }
 ```
 
+## Identity
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/v1/me` | Resolved tenant principal: user, organizations and roles |
+
+`GET /api/v1/me` →
+
+```json
+{
+  "id": "c3b2a1d0-…",
+  "github_id": 5284227,
+  "login": "maulanasly",
+  "name": "Maulana",
+  "orgs": [{ "org_id": "default", "slug": "default", "name": "Default", "role": "owner" }]
+}
+```
+
+Roles, weakest first: `viewer` (read) › `developer` (deploy, lifecycle, env,
+domains) › `admin` (apps, servers, tokens) › `owner` (members, org). The first
+user to sign in becomes `owner` of the `default` organization; later users
+start as `viewer`.
+
 ## Applications
 
 | Method | Path | Description |

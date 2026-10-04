@@ -1123,3 +1123,38 @@ async fn tenancy_schema_backfills_default_org() {
         .unwrap();
     assert_eq!(action, "app.deploy");
 }
+
+#[tokio::test]
+async fn me_returns_resolved_principal_with_org_role() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+
+    let body = body_json(
+        router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/me")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(body["login"], "dev");
+    assert_eq!(body["orgs"][0]["slug"], "default");
+    assert_eq!(body["orgs"][0]["role"], "owner");
+
+    // A second distinct user bootstraps as viewer, not owner.
+    let second = crate::authz::resolve(&state, 12345, "second", None)
+        .await
+        .unwrap();
+    assert_eq!(second.role_in("default"), Some(crate::authz::Role::Viewer));
+    assert!(second
+        .require("default", crate::authz::Role::Viewer)
+        .is_ok());
+    assert!(second
+        .require("default", crate::authz::Role::Developer)
+        .is_err());
+}

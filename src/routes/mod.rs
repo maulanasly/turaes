@@ -8,5 +8,6 @@ pub mod domains;
 pub mod env;
 pub mod health;
 pub mod logs;
+pub mod me;
 pub mod servers;
 pub mod static_assets;

@@ -241,6 +241,10 @@ pub async fn callback(
         ));
     }
 
+    // Persist the user row (and bootstrap their membership) at sign-in so
+    // the tenant principal exists before the first API request.
+    crate::authz::resolve(&state, user.id, &user.login, user.name.as_deref()).await?;
+
     let token = state
         .issuer
         .mint(user.id, &user.login, user.name.as_deref())?;
@@ -261,18 +265,23 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar) -> Response {
     (jar, StatusCode::NO_CONTENT).into_response()
 }
 
-/// Middleware: reject unauthenticated requests, or attach the dev user.
+/// Middleware: reject unauthenticated requests, and attach both the OAuth
+/// principal (`AuthUser`) and the resolved tenant principal (`CurrentUser`).
 pub async fn require_auth(
     State(state): State<AppState>,
     mut req: axum::extract::Request,
     next: Next,
 ) -> Result<Response> {
     if state.auth_disabled {
+        let current = crate::authz::resolve(&state, 0, "dev", Some("Dev mode")).await?;
         req.extensions_mut().insert(dev_user());
+        req.extensions_mut().insert(current);
         return Ok(next.run(req).await);
     }
     let jar = CookieJar::from_headers(req.headers());
     let user = user_from_jar(&state, &jar)?;
+    let current = crate::authz::resolve(&state, user.id, &user.login, user.name.as_deref()).await?;
     req.extensions_mut().insert(user);
+    req.extensions_mut().insert(current);
     Ok(next.run(req).await)
 }
