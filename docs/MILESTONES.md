@@ -235,7 +235,7 @@ org-scoped.
       retention pruning, `turaes restore --force`, `doctor` freshness.
 - [x] **PR H** Secret hygiene: HKDF domain-separated keys, rotation, fail-closed
       release validation (reject placeholder secret + empty allowlist).
-- [ ] **PR I** Perimeter: loopback control bind, security headers, CSRF,
+- [x] **PR I** Perimeter: loopback control bind, security headers, CSRF,
       rate limiting, body/request timeouts, `turaes.service` sandboxing.
 - [ ] **PR J** Quotas & resource limits: per-org quotas, per-app
       `MemoryMax`/`CPUQuota`/`TasksMax`, enforcement at create/deploy.

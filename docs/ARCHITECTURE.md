@@ -176,6 +176,13 @@ users ──< memberships(role) >── organizations ──< applications ─�
 - **Auth**: GitHub OAuth authorization-code; only numeric ids on
   `allowed_github_ids` may sign in. Session is an HttpOnly, SameSite=Lax JWT
   cookie (Secure when the origin is https). Debug builds can run `AUTH_DISABLED=1`.
+- **Perimeter**: the dashboard/API binds loopback by default and is exposed
+  through the proxy; responses carry `nosniff`/`DENY`/same-origin-referrer
+  (+HSTS on https origins, no `includeSubDomains`, no CSP — the UI boots from
+  an inline script by design); cookie-authed mutations require a JSON content
+  type (no CORS layer exists to grant preflights); global rate buckets cover
+  `/auth/*` (60/min) and mutating `/api/*` (600/min); handlers time out at
+  120s; the systemd unit sandboxes fs/devices/namespaces.
 - **Secrets at rest**: app env vars (and sealed agent/SSH material) use
   AES-256-GCM with a key derived from `jwt_secret` via HKDF-SHA256 under a
   dedicated info string — independent of the JWT signing key. Blobs carry a

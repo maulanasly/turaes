@@ -239,6 +239,18 @@ turaes secrets reseal
 
 All sessions invalidate on rotation (users sign in again) — that is expected.
 
+### Perimeter
+
+The control plane binds loopback by default (`server.host`, override with
+`TURAES_HOST=0.0.0.0` only behind other access controls) and is exposed through
+the proxy's dashboard route. Every response carries `nosniff` / `DENY` /
+same-origin-referrer headers (+HSTS on https origins); cookie-authed mutations
+require a JSON content type (CSRF); `/auth/*` is capped at 60 req/min and
+mutating `/api/*` at 600 req/min globally (`429` + `Retry-After`); handlers
+time out at 120s. The systemd unit confines the filesystem to
+`/var/lib/turaes`, `/etc` and `/usr/local/bin` with device/namespace lockdown
+— extend `ReadWritePaths` if the `[runtime]` dirs move.
+
 ### Upgrade
 
 ```bash

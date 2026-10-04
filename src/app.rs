@@ -1,11 +1,16 @@
 //! Router assembly and process bootstrap.
 
+use std::sync::Arc;
+
+use axum::http::{header, HeaderValue};
 use axum::routing::{delete, get, patch, post};
 use axum::Router;
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::auth;
 use crate::routes;
+use crate::security;
 use crate::state::AppState;
 
 /// Build the full Axum router.
@@ -93,9 +98,40 @@ pub fn build_router(state: AppState) -> Router {
         .route("/agent/artifacts/{hash}", get(routes::agent::download))
         .with_state(state.clone());
 
-    Router::new()
+    // Perimeter, innermost first: CSRF binding, then global rate limits, then
+    // the request timeout. (Layers added later run earlier, so tracing stays
+    // outermost.) Security headers ride on every response, including the
+    // dashboard and health checks. HSTS is only emitted for https origins,
+    // and without includeSubDomains so sibling hosts are never affected.
+    // No CSP: the zero-build UI boots from an inline script by design.
+    let limiter = Arc::new(security::RateLimiter::defaults());
+    let mut router = Router::new()
         .nest("/api/v1", api)
         .merge(public)
         .fallback(routes::static_assets::static_handler)
-        .layer(TraceLayer::new_for_http())
+        .layer(axum::middleware::from_fn(security::csrf))
+        .layer(axum::middleware::from_fn_with_state(
+            limiter,
+            security::limit,
+        ))
+        .layer(axum::middleware::from_fn(security::timeout))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::X_FRAME_OPTIONS,
+            HeaderValue::from_static("DENY"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("same-origin"),
+        ));
+    if state.cfg.secure_cookies() {
+        router = router.layer(SetResponseHeaderLayer::overriding(
+            header::STRICT_TRANSPORT_SECURITY,
+            HeaderValue::from_static("max-age=31536000"),
+        ));
+    }
+    router.layer(TraceLayer::new_for_http())
 }

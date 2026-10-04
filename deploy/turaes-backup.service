@@ -13,4 +13,5 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
+# Covers the default database + backup locations; extend if relocated.
 ReadWritePaths=/var/lib/turaes

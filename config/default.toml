@@ -6,7 +6,10 @@
 # with a TURAES_-prefixed env var, e.g. TURAES_PORT=9000, TURAES_JWT_SECRET=...
 
 [server]
-host = "0.0.0.0"
+# Loopback by default: the dashboard/API is not reachable on public
+# interfaces. Expose it through the Pingora proxy (dashboard route) or set
+# TURAES_HOST=0.0.0.0 explicitly behind other access controls.
+host = "127.0.0.1"
 port = 8787
 # Base domain used to auto-derive app subdomains ({app}.base_domain).
 base_domain = "localhost"
