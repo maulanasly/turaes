@@ -7,6 +7,7 @@ use serde::Deserialize;
 
 use turaes_core::{Error, Result};
 
+use crate::audit;
 use crate::authz::{self, CurrentUser, Role};
 use crate::routes::apps::fetch_org_app;
 use crate::state::AppState;
@@ -76,6 +77,18 @@ pub async fn put(
     .bind(&sealed)
     .execute(&state.pool)
     .await?;
+    // The value is never recorded — only the key.
+    audit::record(
+        &state,
+        Some(&org_id),
+        Some(&user),
+        Some(&id),
+        "env.set",
+        Some("env_var"),
+        None,
+        Some(&serde_json::json!({"key": key}).to_string()),
+    )
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -96,5 +109,16 @@ pub async fn delete(
     if affected == 0 {
         return Err(Error::NotFound(format!("env var {key}")));
     }
+    audit::record(
+        &state,
+        Some(&org_id),
+        Some(&user),
+        Some(&id),
+        "env.unset",
+        Some("env_var"),
+        None,
+        Some(&serde_json::json!({"key": key}).to_string()),
+    )
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }

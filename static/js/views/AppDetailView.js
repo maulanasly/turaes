@@ -13,10 +13,29 @@ import { LogViewer } from "../components/LogViewer.js";
 const TAB_LABEL = {
   overview: "Overview",
   deployments: "Deployments",
+  activity: "Activity",
   environment: "Environment",
   logs: "Logs",
   settings: "Settings",
 };
+
+function Activity({ entries }) {
+  if (!entries) return html`<p class="muted">Loading…</p>`;
+  if (!entries.length) return html`<p class="muted">No recorded actions yet.</p>`;
+  return html`
+    <table class="table">
+      <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Detail</th></tr></thead>
+      <tbody>
+        ${entries.map((e) => html`
+          <tr>
+            <td class="mono small">${fmtTime(e.created_at)}</td>
+            <td>${e.actor_login || "system"}</td>
+            <td class="mono">${e.action}</td>
+            <td class="mono small muted">${e.metadata || "—"}</td>
+          </tr>`)}
+      </tbody>
+    </table>`;
+}
 
 function Kpi({ label, value }) {
   return html`<div class="kpi"><div class="kpi-label">${label}</div><div class="kpi-value">${value}</div></div>`;
@@ -297,6 +316,7 @@ export function AppDetailView({ id, tab, user, servers }) {
   const [notFound, setNotFound] = useState(false);
   const [data, setData] = useState({});
   const [deployments, setDeployments] = useState(null);
+  const [activity, setActivity] = useState(null);
   const [env, setEnv] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -334,6 +354,13 @@ export function AppDetailView({ id, tab, user, servers }) {
     } catch { setEnv([]); }
   }, [id]);
 
+  const loadActivity = useCallback(async () => {
+    try {
+      const r = await oapi(`/audit?app=${encodeURIComponent(id)}&limit=50`);
+      setActivity(r.audit || []);
+    } catch { setActivity([]); }
+  }, [id]);
+
   useEffect(() => {
     loadApp();
     const t = setInterval(loadApp, 15000);
@@ -343,8 +370,9 @@ export function AppDetailView({ id, tab, user, servers }) {
   useEffect(() => {
     if (tab === "overview") loadMetrics();
     if (tab === "deployments") loadDeployments();
+    if (tab === "activity") loadActivity();
     if (tab === "environment") loadEnv();
-  }, [tab, loadMetrics, loadDeployments, loadEnv]);
+  }, [tab, loadMetrics, loadDeployments, loadActivity, loadEnv]);
 
   const deploy = async () => {
     setBusy(true);
@@ -444,6 +472,7 @@ export function AppDetailView({ id, tab, user, servers }) {
       <div class="tab-body" role="tabpanel">
         ${tab === "overview" && html`<${Overview} data=${data} />`}
         ${tab === "deployments" && html`<${Deployments} deployments=${deployments} onRollbackTo=${rollbackTo} />`}
+        ${tab === "activity" && html`<${Activity} entries=${activity} />`}
         ${tab === "environment" && html`<${Environment} env=${env} appId=${id} reload=${loadEnv} />`}
         ${tab === "logs" && html`<${LogViewer} appId=${id} />`}
         ${tab === "settings" && html`<${Settings} app=${app} servers=${servers} user=${user} onSaved=${loadApp} />`}

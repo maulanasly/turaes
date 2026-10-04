@@ -204,7 +204,9 @@ org-scoped.
 - [x] **T1b** Scope every route under `/api/v1/orgs/{org}/…` with per-action
       role checks; cross-org isolation tests. Servers stay global and require
       an operator; loopback ports conflict-checked across orgs.
-- [ ] **T1c** Audit log writes on all mutations + read API + UI timeline.
+- [x] **T1c** Audit log writes on all mutations + read API + UI timeline
+      (`app.*`, `env.set/unset`, `domain.add/remove`, `server.create/delete/
+      bootstrap`; per-app Activity tab; secrets never recorded).
 - [ ] **T1d** Scoped API tokens (hash-only, `read`/`deploy`/`admin`) + bearer
       auth + UI.
 - [ ] **T1e** Org switcher, members/invites, org settings UI.

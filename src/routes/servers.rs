@@ -11,6 +11,7 @@ use serde::Deserialize;
 use turaes_core::models::Server;
 use turaes_core::{Error, Result};
 
+use crate::audit;
 use crate::authz::{self, CurrentUser};
 use crate::state::AppState;
 
@@ -74,6 +75,18 @@ pub async fn create(
     .fetch_one(&state.pool)
     .await
     .map_err(map_unique_name)?;
+    // Platform-global action: no org. SSH material is never recorded.
+    audit::record(
+        &state,
+        None,
+        Some(&user),
+        None,
+        "server.create",
+        Some("server"),
+        Some(&server.id),
+        Some(&serde_json::json!({"name": server.name, "address": server.address}).to_string()),
+    )
+    .await?;
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({ "server": server })),
@@ -129,6 +142,17 @@ pub async fn delete(
     if affected == 0 {
         return Err(Error::NotFound(format!("server {id}")));
     }
+    audit::record(
+        &state,
+        None,
+        Some(&user),
+        None,
+        "server.delete",
+        Some("server"),
+        Some(&id),
+        None,
+    )
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -177,6 +201,17 @@ pub async fn bootstrap(
 ) -> Result<Json<serde_json::Value>> {
     authz::require_operator(&user)?;
     let output = run_bootstrap(&state, &id).await?;
+    audit::record(
+        &state,
+        None,
+        Some(&user),
+        None,
+        "server.bootstrap",
+        Some("server"),
+        Some(&id),
+        None,
+    )
+    .await?;
     Ok(Json(serde_json::json!({ "ok": true, "output": output })))
 }
 

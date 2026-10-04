@@ -18,6 +18,7 @@ use turaes_runtime::proc::ProcRuntime;
 use turaes_runtime::systemd::SystemdRuntime;
 use turaes_runtime::{AppSpec, DeployOutcome, Deployer, RunState, Runtime, Slot};
 
+use crate::audit;
 use crate::authz::{self, CurrentUser, Role};
 use crate::state::AppState;
 
@@ -370,6 +371,18 @@ pub async fn create(
     .execute(&state.pool)
     .await?;
 
+    audit::record(
+        &state,
+        Some(&org_id),
+        Some(&user),
+        Some(&inserted.id),
+        "app.create",
+        Some("application"),
+        Some(&inserted.id),
+        Some(&serde_json::json!({"name": inserted.name, "port": inserted.port}).to_string()),
+    )
+    .await?;
+
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({ "application": inserted })),
@@ -404,6 +417,18 @@ pub async fn delete(
 ) -> Result<StatusCode> {
     let org_id = authz::authorize_org(&state, &user, &org, Role::Admin).await?;
     let app = fetch_org_app(&state.pool, &org_id, &id).await?;
+    // Record before the row disappears (the FK then nulls the reference).
+    audit::record(
+        &state,
+        Some(&org_id),
+        Some(&user),
+        Some(&app.id),
+        "app.delete",
+        Some("application"),
+        Some(&app.id),
+        Some(&serde_json::json!({"name": app.name}).to_string()),
+    )
+    .await?;
     let runtime = runtime_for(&state.cfg, &app.runtime);
     let offset = state.cfg.runtime.slot_offset as i64;
     let _ = runtime.remove(&spec_for(&state.cfg, &app)).await;
@@ -428,6 +453,17 @@ pub async fn deploy(
     let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
     let app = fetch_org_app(&state.pool, &org_id, &id).await?;
     let (dep_id, out) = deploy_app(&state, &app).await?;
+    audit::record(
+        &state,
+        Some(&org_id),
+        Some(&user),
+        Some(&app.id),
+        "app.deploy",
+        Some("deployment"),
+        Some(&dep_id),
+        Some(&serde_json::json!({"artifact": out.artifact_hash}).to_string()),
+    )
+    .await?;
     Ok(Json(serde_json::json!({
         "deployment_id": dep_id,
         "state": out.state,
@@ -681,6 +717,17 @@ pub async fn rollback(
         .to_string_lossy()
         .to_string();
     let (dep_id, out) = deploy_app_source(&state, &app, source).await?;
+    audit::record(
+        &state,
+        Some(&org_id),
+        Some(&user),
+        Some(&app.id),
+        "app.rollback",
+        Some("deployment"),
+        Some(&dep_id),
+        Some(&serde_json::json!({"rolled_back_to": previous}).to_string()),
+    )
+    .await?;
     Ok(Json(serde_json::json!({
         "deployment_id": dep_id,
         "rolled_back_to": previous,
@@ -721,7 +768,19 @@ pub async fn stop(
 ) -> Result<Json<serde_json::Value>> {
     let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
     let app = fetch_org_app(&state.pool, &org_id, &id).await?;
-    lifecycle(&state, &app, "stop").await
+    let out = lifecycle(&state, &app, "stop").await?;
+    audit::record(
+        &state,
+        Some(&org_id),
+        Some(&user),
+        Some(&app.id),
+        "app.stop",
+        Some("application"),
+        Some(&app.id),
+        None,
+    )
+    .await?;
+    Ok(out)
 }
 
 /// `POST /api/v1/orgs/{org}/apps/{id}/start`
@@ -732,7 +791,19 @@ pub async fn start(
 ) -> Result<Json<serde_json::Value>> {
     let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
     let app = fetch_org_app(&state.pool, &org_id, &id).await?;
-    lifecycle(&state, &app, "start").await
+    let out = lifecycle(&state, &app, "start").await?;
+    audit::record(
+        &state,
+        Some(&org_id),
+        Some(&user),
+        Some(&app.id),
+        "app.start",
+        Some("application"),
+        Some(&app.id),
+        None,
+    )
+    .await?;
+    Ok(out)
 }
 
 /// `POST /api/v1/orgs/{org}/apps/{id}/restart`
@@ -743,7 +814,19 @@ pub async fn restart(
 ) -> Result<Json<serde_json::Value>> {
     let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
     let app = fetch_org_app(&state.pool, &org_id, &id).await?;
-    lifecycle(&state, &app, "restart").await
+    let out = lifecycle(&state, &app, "restart").await?;
+    audit::record(
+        &state,
+        Some(&org_id),
+        Some(&user),
+        Some(&app.id),
+        "app.restart",
+        Some("application"),
+        Some(&app.id),
+        None,
+    )
+    .await?;
+    Ok(out)
 }
 
 /// `PATCH /api/v1/orgs/{org}/apps/{id}` — edit an application (and its placement).
@@ -800,6 +883,18 @@ pub async fn update(
         .bind(&id)
         .execute(&state.pool)
         .await?;
+
+    audit::record(
+        &state,
+        Some(&org_id),
+        Some(&user),
+        Some(&app.id),
+        "app.update",
+        Some("application"),
+        Some(&app.id),
+        Some(&serde_json::json!({"port": port, "server_id": server_id}).to_string()),
+    )
+    .await?;
 
     let _ = refresh_proxy_routes(&state).await;
     Ok(Json(serde_json::json!({ "application": updated })))

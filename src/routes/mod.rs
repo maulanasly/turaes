@@ -3,6 +3,7 @@
 pub mod agent;
 pub mod apps;
 pub mod artifacts;
+pub mod audit;
 pub mod deployments;
 pub mod domains;
 pub mod env;

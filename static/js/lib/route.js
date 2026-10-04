@@ -1,5 +1,5 @@
 // Pure route parsing (no framework imports, so it is unit-testable in Node).
-export const APP_TABS = ["overview", "deployments", "environment", "logs", "settings"];
+export const APP_TABS = ["overview", "deployments", "activity", "environment", "logs", "settings"];
 
 export function parseRoute(hash) {
   const path = String(hash || "").replace(/^#/, "").split("?")[0];
