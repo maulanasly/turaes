@@ -32,6 +32,10 @@ barely surfaced.
 | "Unique (latest)" | "Unique visitors (latest)" |
 | `server_id: 4284…` | server **name** |
 | "Set" | "Updated" |
+| destructive verbs | **Delete** removes a whole app; **Remove** takes a member out of a collection (env var, domain, server, org member); **Revoke** invalidates a token; **Roll back** redeploys a previous build |
+| "Primary domain" vs "Domain aliases" | primary is set in Settings; aliases route in addition (hint text in both places) |
+| "Requests observed" | "Visits observed" (the series counts `visitors_total`, not requests) |
+| env "Updated" column | "Created" (only the creation timestamp exists) |
 
 ## Information architecture
 

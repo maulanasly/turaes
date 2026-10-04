@@ -58,7 +58,7 @@ export function LogViewer({ appId, height = 300 }) {
   return html`
     <div>
       <div class="panel-head">
-        <h2>Logs <span class="muted">· ${status}</span></h2>
+        <h2>Logs <span class="muted" role="status">· ${status}</span></h2>
         <div class="controls">
           <label class="inline"><input type="checkbox" checked=${autoscroll}
             onChange=${(e) => setAutoscroll(e.target.checked)} /> autoscroll</label>

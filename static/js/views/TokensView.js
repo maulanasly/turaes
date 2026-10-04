@@ -89,6 +89,8 @@ export function TokensView({ user }) {
         ? html`<p class="muted">Loading…</p>`
         : tokens === "denied"
           ? html`<p class="muted">Token management needs an admin of this organization.</p>`
+          : tokens.length === 0
+          ? html`<p class="muted">No tokens yet — create one below for CI access.</p>`
           : html`<div class="table-wrap"><table>
               <thead><tr><th>Name</th><th>Scope</th><th>Created</th><th>Last used</th><th></th></tr></thead>
               <tbody>

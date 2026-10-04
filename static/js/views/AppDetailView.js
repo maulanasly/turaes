@@ -232,6 +232,7 @@ function Domains({ appId }) {
   return html`
     <div>
       <h2>Domain aliases</h2>
+      <p class="muted small">The primary domain lives in Settings; aliases route here in addition.</p>
       ${!domains || domains.length === 0
         ? html`<p class="muted">No aliases.</p>`
         : html`<table><tbody>${domains.map((d) => html`

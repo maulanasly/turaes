@@ -173,6 +173,10 @@ summary { cursor: pointer; color: var(--muted); }
   border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+@media (prefers-reduced-motion: reduce) {
+  .skeleton, .spinner { animation: none; }
+}
+
 .table-wrap { overflow-x: auto; }
 .break { word-break: break-all; }
 @media (max-width: 720px) {

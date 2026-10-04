@@ -32,12 +32,27 @@ function NavLink({ route, view, match, label }) {
     aria-current=${active ? "page" : null}>${label}</a>`;
 }
 
+const VIEW_TITLES = {
+  apps: "Applications",
+  app: "Application",
+  servers: "Servers",
+  server: "Server",
+  tokens: "API tokens",
+  org: "Organization",
+  notfound: "Not found",
+};
+
 function Shell() {
   const route = useRoute();
   const [user, setUser] = useState(undefined);
   const [servers, setServers] = useState([]);
   const [health, setHealth] = useState(null);
   const [theme, toggleTheme] = useTheme();
+
+  // Screen-reader and tab users learn where they are on every navigation.
+  useEffect(() => {
+    document.title = `turaes — ${VIEW_TITLES[route.view] || "Applications"}`;
+  }, [route.view]);
 
   const loadUser = useCallback(async () => {
     try {
