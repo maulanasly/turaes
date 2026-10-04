@@ -89,6 +89,23 @@ curl localhost:8787/api/v1/orgs/default/apps \
   -H 'Authorization: Bearer turaes_…'
 ```
 
+## Organizations
+
+Any signed-in user may create an organization and becomes its `owner`.
+Managing members requires `owner`; the member roster is visible to `viewer`
+and up. The last owner can neither be demoted nor removed. Invites accept a
+GitHub login (resolved via the public GitHub users API) or a raw numeric
+GitHub id.
+
+| Method | Path | Role | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/orgs` | any | The caller's organizations, with roles |
+| `POST` | `/api/v1/orgs` | any | Create an organization (`201`; caller becomes `owner`) |
+| `GET` | `/api/v1/orgs/{org}/members` | viewer | Roster with roles |
+| `POST` | `/api/v1/orgs/{org}/members` | owner | Invite (`{login}` or `{github_id}`, optional `{role}`) |
+| `PATCH` | `/api/v1/orgs/{org}/members/{user_id}` | owner | Change a member's role |
+| `DELETE` | `/api/v1/orgs/{org}/members/{user_id}` | owner | Remove a member |
+
 ## Applications
 
 All app routes are nested under `/api/v1/orgs/{org}/…`, where `{org}` is an

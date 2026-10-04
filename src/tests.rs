@@ -1549,3 +1549,217 @@ async fn token_rejects_unknown_and_cross_org() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
+
+async fn post_json(
+    router: axum::Router,
+    uri: &str,
+    payload: serde_json::Value,
+) -> axum::response::Response {
+    router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn org_create_and_membership_lifecycle() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+
+    let resp = post_json(
+        app::build_router(state.clone()),
+        "/api/v1/orgs",
+        json!({"slug": "acme", "name": "Acme"}),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // Duplicate slugs conflict; malformed slugs are rejected.
+    let router = app::build_router(state.clone());
+    let resp = post_json(router, "/api/v1/orgs", json!({"slug": "acme"})).await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let router = app::build_router(state.clone());
+    let resp = post_json(router, "/api/v1/orgs", json!({"slug": "Bad Slug!"})).await;
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // The creator is the founding owner.
+    let router = app::build_router(state.clone());
+    let body = body_json(
+        router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/orgs/acme/members")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    let members = body["members"].as_array().unwrap();
+    assert_eq!(members.len(), 1);
+    assert_eq!(members[0]["login"], "dev");
+    assert_eq!(members[0]["role"], "owner");
+    let dev_uid = members[0]["user_id"].as_str().unwrap().to_string();
+
+    // Invite by raw GitHub id, then re-invite conflicts.
+    let router = app::build_router(state.clone());
+    let resp = post_json(
+        router,
+        "/api/v1/orgs/acme/members",
+        json!({"github_id": 424242, "role": "developer"}),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let router = app::build_router(state.clone());
+    let resp = post_json(
+        router,
+        "/api/v1/orgs/acme/members",
+        json!({"github_id": 424242}),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+
+    // Promote, then the sole-owner guards engage.
+    // (PATCH needs a member id; fetch it from the roster.)
+    let router = app::build_router(state.clone());
+    let body = body_json(
+        router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/orgs/acme/members")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    let other = body["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["login"] != "dev")
+        .unwrap();
+    let other_uid = other["user_id"].as_str().unwrap().to_string();
+
+    let router = app::build_router(state.clone());
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/orgs/acme/members/{other_uid}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"role": "admin"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Removing the sole owner is refused...
+    let router = app::build_router(state.clone());
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/v1/orgs/acme/members/{dev_uid}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+
+    // ...until a second owner exists.
+    let router = app::build_router(state.clone());
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/orgs/acme/members/{other_uid}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"role": "owner"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let router = app::build_router(state.clone());
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/v1/orgs/acme/members/{dev_uid}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // Removed members lose access entirely (403, not a guard trip).
+    let router = app::build_router(state.clone());
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/orgs/acme/members/{other_uid}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"role": "viewer"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // The sole-owner demote guard trips where the caller is still a member.
+    let router = app::build_router(state.clone());
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/orgs/default/members/{dev_uid}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"role": "viewer"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn member_management_requires_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, read_token) = mint_token(test_router(dir.path()).await, "read").await;
+
+    // Viewers may see the roster but not change it.
+    let router = test_router(dir.path()).await;
+    let resp = router
+        .oneshot(bearer("/api/v1/orgs/default/members", &read_token))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let router = test_router(dir.path()).await;
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/members")
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {read_token}"))
+                .body(Body::from(json!({"github_id": 111}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}

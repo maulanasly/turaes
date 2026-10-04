@@ -12,6 +12,7 @@ import { AppDetailView } from "./views/AppDetailView.js";
 import { ServersView } from "./views/ServersView.js";
 import { ServerDetailView } from "./views/ServerDetailView.js";
 import { TokensView } from "./views/TokensView.js";
+import { OrgView } from "./views/OrgView.js";
 import { LoginView } from "./views/LoginView.js";
 
 function useTheme() {
@@ -45,7 +46,11 @@ function Shell() {
       try {
         const me = await api("/api/v1/me");
         const orgs = me.orgs || [];
-        const pick = orgs.find((o) => o.slug === "default") || orgs[0];
+        let stored = null;
+        try { stored = localStorage.getItem("turaes-org"); } catch (e) {}
+        const pick = orgs.find((o) => o.slug === stored)
+          || orgs.find((o) => o.slug === "default")
+          || orgs[0];
         if (pick) setOrg(pick.slug);
       } catch (e) {}
     } catch { setUser(null); }
@@ -103,6 +108,7 @@ function Shell() {
         <${NavLink} route=${route} view="apps" match="app" label="Applications" />
         <${NavLink} route=${route} view="servers" match="server" label="Servers" />
         <${NavLink} route=${route} view="tokens" label="Tokens" />
+        <${NavLink} route=${route} view="org" label="Organization" />
       </nav>
       <div class="controls">
         <span class=${"dot " + (health ? "ok" : "bad")}
@@ -128,6 +134,7 @@ function Shell() {
       ${route.view === "servers" && html`<${ServersView} user=${user} onChanged=${loadServers} />`}
       ${route.view === "server" && html`<${ServerDetailView} id=${route.id} />`}
       ${route.view === "tokens" && html`<${TokensView} user=${user} />`}
+      ${route.view === "org" && html`<${OrgView} user=${user} />`}
     </main>
 
     <${Toasts} />

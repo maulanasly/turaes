@@ -1,6 +1,6 @@
 //! Router assembly and process bootstrap.
 
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post};
 use axum::Router;
 use tower_http::trace::TraceLayer;
 
@@ -52,10 +52,20 @@ pub fn build_router(state: AppState) -> Router {
         .route("/tokens/{id}", delete(routes::tokens::revoke));
 
     // Authenticated API surface: tenant-scoped routes plus the global
-    // identity (`/me`), tenant-gated artifacts and operator-gated servers.
+    // identity (`/me`), the caller's organizations, tenant-gated artifacts
+    // and operator-gated servers.
     let api = Router::new()
         .nest("/orgs/{org}", org_api)
         .route("/me", get(routes::me::me))
+        .route("/orgs", get(routes::orgs::list).post(routes::orgs::create))
+        .route(
+            "/orgs/{org}/members",
+            get(routes::orgs::members).post(routes::orgs::invite),
+        )
+        .route(
+            "/orgs/{org}/members/{user_id}",
+            patch(routes::orgs::change_role).delete(routes::orgs::remove),
+        )
         .route("/artifacts/{hash}", get(routes::artifacts::download))
         .route(
             "/servers",
