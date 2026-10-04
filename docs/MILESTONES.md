@@ -233,7 +233,7 @@ org-scoped.
 - [x] **PR G** Backups: `VACUUM INTO` snapshots (`turaes backup`), nightly
       `turaes-backup.timer`, pre-migration snapshot on every boot (fail-closed),
       retention pruning, `turaes restore --force`, `doctor` freshness.
-- [ ] **PR H** Secret hygiene: HKDF domain-separated keys, rotation, fail-closed
+- [x] **PR H** Secret hygiene: HKDF domain-separated keys, rotation, fail-closed
       release validation (reject placeholder secret + empty allowlist).
 - [ ] **PR I** Perimeter: loopback control bind, security headers, CSRF,
       rate limiting, body/request timeouts, `turaes.service` sandboxing.

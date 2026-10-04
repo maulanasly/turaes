@@ -13,6 +13,7 @@ mod edge;
 mod grpc;
 mod monitor;
 mod routes;
+mod secrets;
 mod state;
 
 #[cfg(test)]
@@ -133,6 +134,24 @@ async fn main() {
             println!("restored {} from {}", dest.display(), file.display());
             println!("start turaes again: systemctl start turaes");
         }
+        Command::Secrets { cmd } => match cmd {
+            cli::SecretsCommand::Reseal => {
+                let pool = db::connect(&cfg.database.url)
+                    .await
+                    .unwrap_or_else(|e| fatal(e));
+                db::migrate(&pool).await.unwrap_or_else(|e| fatal(e));
+                let state = AppState::new(cfg.clone(), pool);
+                let (env_up, env_total, ssh_up, ssh_total) =
+                    secrets::reseal(&state).await.unwrap_or_else(|e| fatal(e));
+                println!("env_vars resealed {env_up}/{env_total}; server keys resealed {ssh_up}/{ssh_total}");
+                if !cfg.auth.secret_previous.is_empty() {
+                    println!(
+                        "rotation staged: verify apps still deploy, \
+                         then unset TURAES_SECRET_PREVIOUS"
+                    );
+                }
+            }
+        },
         Command::Serve => serve(cfg).await,
     }
 }
@@ -187,6 +206,20 @@ fn doctor(cfg: &Config) {
         cfg.backup.retain,
         latest_snapshot(&cfg.backup.dir)
     );
+    println!(
+        "  seal              v1 HKDF-SHA256 (previous secret {})",
+        if cfg.auth.secret_previous.is_empty() {
+            "unset"
+        } else {
+            "STAGED FOR ROTATION"
+        }
+    );
+    if cfg.auth.jwt_secret == turaes_core::config::DEFAULT_JWT_PLACEHOLDER {
+        println!("  WARNING           default jwt_secret placeholder is active");
+    }
+    if cfg.auth.allowed_github_ids.is_empty() && !cfg.auth.allow_open_signin {
+        println!("  WARNING           sign-in allowlist is empty (open to all GitHub users)");
+    }
     println!("  proxy.enabled     {}", cfg.proxy.enabled);
     println!(
         "  grpc.enabled      {} ({}:{})",

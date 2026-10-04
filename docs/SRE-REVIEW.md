@@ -34,7 +34,7 @@ systemd services on the same host. Multi-node is built but dormant
 - Proxy logs ERROR for scanner 404/TLS noise (~45% of recent lines); no rate limit.
 - Not zero-downtime (`systemctl restart` drops :80/:443 + API).
 - Artifact store unbounded (no GC).
-- Shared secret for JWT signing **and** env sealing; no rotation.
+- ~~Shared secret for JWT signing **and** env sealing; no rotation~~ — done: HKDF-separated sealing key, `turaes secrets reseal`, rotation runbook.
 - API/apps bind `0.0.0.0` (loopback suffices).
 
 ### Sev-3
@@ -49,7 +49,7 @@ systemd services on the same host. Multi-node is built but dormant
 | Zero-downtime deploys (control/edge, app blue/green) | **in progress** — [PLAN-ZERO-DOWNTIME.md](./PLAN-ZERO-DOWNTIME.md) |
 | Exposure reduction (Tailscale admin + Cloudflare Tunnel/Access, SG lockdown) | **backlog** |
 | Backups/DR + pre-migration snapshot | **done (local)** — nightly timer + fail-closed boot snapshot + restore; offsite copies still backlog |
-| Scheduler patching (unattended-upgrades), resource limits, `/metrics`+alerting, log/rate hygiene, artifact GC, secret separation | backlog |
+| Scheduler patching (unattended-upgrades), resource limits, `/metrics`+alerting, log/rate hygiene, artifact GC | backlog (secret separation done) |
 
 ## Reliability lens
 
