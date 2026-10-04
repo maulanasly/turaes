@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::{Extension, Json};
 use serde::Deserialize;
@@ -15,7 +15,7 @@ use turaes_core::models::Organization;
 use turaes_core::{Error, Result};
 
 use crate::audit;
-use crate::authz::{self, CurrentUser, Role};
+use crate::authz::{self, CurrentUser, OrgMembership, Role};
 use crate::state::AppState;
 
 /// Body for creating an organization.
@@ -96,8 +96,11 @@ fn validate_role(role: Option<&str>) -> Result<Role> {
 pub async fn list(
     State(_state): State<AppState>,
     Extension(user): Extension<CurrentUser>,
+    Query(q): Query<super::LimitQuery>,
 ) -> Result<Json<serde_json::Value>> {
-    Ok(Json(serde_json::json!({ "organizations": user.orgs })))
+    let limit = super::LimitQuery::effective(q.limit);
+    let orgs: Vec<OrgMembership> = user.orgs.into_iter().take(limit.max(0) as usize).collect();
+    Ok(Json(serde_json::json!({ "organizations": orgs })))
 }
 
 /// `POST /api/v1/orgs` — create an organization; the caller becomes `owner`.
@@ -157,14 +160,16 @@ pub async fn members(
     State(state): State<AppState>,
     Extension(user): Extension<CurrentUser>,
     Path(org): Path<String>,
+    Query(q): Query<super::LimitQuery>,
 ) -> Result<Json<serde_json::Value>> {
     let org_id = authz::authorize_org(&state, &user, &org, Role::Viewer).await?;
     let rows: Vec<MemberEntry> = sqlx::query_as(
         "SELECT u.id AS user_id, u.github_id, u.login, u.name, m.role, m.created_at \
          FROM memberships m JOIN users u ON u.id = m.user_id \
-         WHERE m.org_id = ? ORDER BY m.created_at ASC",
+         WHERE m.org_id = ? ORDER BY m.created_at ASC LIMIT ?",
     )
     .bind(&org_id)
+    .bind(super::LimitQuery::effective(q.limit))
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(serde_json::json!({ "members": rows })))

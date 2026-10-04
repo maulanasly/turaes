@@ -5,7 +5,7 @@
 //! never reach `owner`. Only the SHA-256 hash is stored; the plaintext is
 //! returned exactly once at creation.
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::{Extension, Json};
 use serde::Deserialize;
@@ -87,13 +87,15 @@ pub async fn list(
     State(state): State<AppState>,
     Extension(user): Extension<CurrentUser>,
     Path(org): Path<String>,
+    Query(q): Query<super::LimitQuery>,
 ) -> Result<Json<serde_json::Value>> {
     let org_id = authz::authorize_org(&state, &user, &org, Role::Admin).await?;
     let tokens = sqlx::query_as::<_, ApiToken>(
         "SELECT * FROM api_tokens WHERE org_id = ? AND revoked_at IS NULL \
-         ORDER BY created_at DESC",
+         ORDER BY created_at DESC LIMIT ?",
     )
     .bind(&org_id)
+    .bind(super::LimitQuery::effective(q.limit))
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(serde_json::json!({ "tokens": tokens })))

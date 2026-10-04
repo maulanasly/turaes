@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::{Extension, Json};
 use serde::Deserialize;
@@ -36,12 +36,15 @@ pub struct CreateServer {
 pub async fn list(
     State(state): State<AppState>,
     Extension(user): Extension<CurrentUser>,
+    Query(q): Query<super::LimitQuery>,
 ) -> Result<Json<serde_json::Value>> {
     authz::require_operator(&user)?;
-    let servers =
-        sqlx::query_as::<_, Server>("SELECT * FROM servers ORDER BY is_local DESC, name ASC")
-            .fetch_all(&state.pool)
-            .await?;
+    let servers = sqlx::query_as::<_, Server>(
+        "SELECT * FROM servers ORDER BY is_local DESC, name ASC LIMIT ?",
+    )
+    .bind(super::LimitQuery::effective(q.limit))
+    .fetch_all(&state.pool)
+    .await?;
     Ok(Json(serde_json::json!({ "servers": servers })))
 }
 

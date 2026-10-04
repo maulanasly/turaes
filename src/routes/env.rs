@@ -1,6 +1,6 @@
 //! Per-application environment variables (values sealed at rest, never returned).
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
@@ -41,13 +41,15 @@ pub async fn list(
     State(state): State<AppState>,
     Extension(user): Extension<CurrentUser>,
     Path((org, id)): Path<(String, String)>,
+    Query(q): Query<super::LimitQuery>,
 ) -> Result<Json<serde_json::Value>> {
     let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
     fetch_org_app(&state.pool, &org_id, &id).await?;
     let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT key, created_at FROM env_vars WHERE application_id = ? ORDER BY key ASC",
+        "SELECT key, created_at FROM env_vars WHERE application_id = ? ORDER BY key ASC LIMIT ?",
     )
     .bind(&id)
+    .bind(super::LimitQuery::effective(q.limit))
     .fetch_all(&state.pool)
     .await?;
     let keys: Vec<serde_json::Value> = rows

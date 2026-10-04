@@ -2,11 +2,18 @@
 
 Base path: `/` on the configured port (default `8787`). All `/api/*` routes
 require a session cookie except `/health` and the OAuth handshake. Errors are
-JSON `{"detail": "..."}`.
+JSON `{"detail": "...", "code": "..."}` — switch on the stable `code`
+(`config`, `not_found`, `unauthorized`, `forbidden`, `bad_request`,
+`conflict`, `db`, `io`, `internal`), never on the human `detail` text.
 
 Status codes: `200` ok · `201` created · `204` no content · `401` unauthenticated ·
 `403` not on allowlist · `404` unknown id · `409` name conflict · `422` bad input ·
 `500` internal.
+
+Conventions: every list endpoint accepts `?limit` (client cap, clamped to
+1..=200; absent returns everything). Timestamps are UTC text
+(`YYYY-MM-DD HH:MM:SS`, from SQLite `datetime('now')`); the dashboard parses
+them as UTC.
 
 ## Authentication
 

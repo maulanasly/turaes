@@ -1,6 +1,6 @@
 //! Domain aliases for an application (the primary lives on `applications.domain`).
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::{Extension, Json};
 use serde::Deserialize;
@@ -44,13 +44,15 @@ pub async fn list(
     State(state): State<AppState>,
     Extension(user): Extension<CurrentUser>,
     Path((org, id)): Path<(String, String)>,
+    Query(q): Query<super::LimitQuery>,
 ) -> Result<Json<serde_json::Value>> {
     let org_id = authz::authorize_org(&state, &user, &org, Role::Viewer).await?;
     fetch_org_app(&state.pool, &org_id, &id).await?;
     let domains = sqlx::query_as::<_, Domain>(
-        "SELECT * FROM domains WHERE application_id = ? ORDER BY domain ASC",
+        "SELECT * FROM domains WHERE application_id = ? ORDER BY domain ASC LIMIT ?",
     )
     .bind(&id)
+    .bind(super::LimitQuery::effective(q.limit))
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(serde_json::json!({ "domains": domains })))

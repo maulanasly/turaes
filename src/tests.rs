@@ -2488,3 +2488,92 @@ async fn doctor_passes_and_fails_closed() {
     bad.database.url = "sqlite:///proc/definitely-not-here/t.db?mode=rwc".into();
     assert!(crate::doctor(&bad, true).await.is_err());
 }
+
+#[tokio::test]
+async fn errors_carry_stable_codes() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/orgs/default/apps/nope")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let body = body_json(resp).await;
+    assert_eq!(body["code"], "not_found");
+    assert!(body["detail"].as_str().unwrap().contains("nope"));
+
+    let router = test_router(dir.path()).await;
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/apps")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"name": "Bad Name", "binary_path": "/bin/true", "port": 1}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = body_json(resp).await;
+    assert_eq!(body["code"], "bad_request");
+}
+
+#[tokio::test]
+async fn list_limit_caps_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    for (name, port) in [("lim1", 9901), ("lim2", 9902), ("lim3", 9903)] {
+        let payload = json!({"name": name, "binary_path": "/bin/true", "port": port});
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/orgs/default/apps")
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+
+    let router = test_router(dir.path()).await;
+    let body = body_json(
+        router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/orgs/default/apps?limit=2")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(body["applications"].as_array().unwrap().len(), 2);
+
+    // Absent limit still returns everything (dashboard behavior preserved).
+    let router = test_router(dir.path()).await;
+    let body = body_json(
+        router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/orgs/default/apps")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(body["applications"].as_array().unwrap().len(), 3);
+}
