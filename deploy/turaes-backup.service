@@ -1,0 +1,16 @@
+[Unit]
+Description=turaes database snapshot (one-shot)
+Documentation=https://github.com/maulanasly/turaes
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/var/lib/turaes
+EnvironmentFile=-/etc/turaes/turaes.env
+ExecStart=/usr/local/bin/turaes backup
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/turaes

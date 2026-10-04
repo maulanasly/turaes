@@ -223,6 +223,35 @@ org-scoped.
 
 ---
 
+## P1 — Trust & durability 🔄 (now)
+
+**Goal**: remove the Sev-1 data-loss and exposure risks from
+[SRE-REVIEW.md](./SRE-REVIEW.md), then harden the perimeter.
+
+### Deliverables
+
+- [x] **PR G** Backups: `VACUUM INTO` snapshots (`turaes backup`), nightly
+      `turaes-backup.timer`, pre-migration snapshot on every boot (fail-closed),
+      retention pruning, `turaes restore --force`, `doctor` freshness.
+- [ ] **PR H** Secret hygiene: HKDF domain-separated keys, rotation, fail-closed
+      release validation (reject placeholder secret + empty allowlist).
+- [ ] **PR I** Perimeter: loopback control bind, security headers, CSRF,
+      rate limiting, body/request timeouts, `turaes.service` sandboxing.
+- [ ] **PR J** Quotas & resource limits: per-org quotas, per-app
+      `MemoryMax`/`CPUQuota`/`TasksMax`, enforcement at create/deploy.
+- [ ] **PR K** Artifact GC: delete blobs unreferenced by any deployment.
+- [ ] **PR L** gRPC mTLS + per-node credentials (when the fleet activates;
+      until then bind loopback/VPC and document).
+
+### Exit criteria
+
+- [ ] A fresh box restores from a snapshot with one documented procedure.
+- [ ] No single secret drives JWT signing *and* at-rest sealing.
+- [ ] The control plane is not reachable on a public interface by default.
+- [ ] An app cannot OOM the 3.6 GB box; artifacts cannot grow unbounded.
+
+---
+
 ## Cross-milestone definition of done
 
 1. `make verify` green.

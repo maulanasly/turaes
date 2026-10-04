@@ -51,8 +51,11 @@ else
 fi
 
 install -m 0644 "${SCRIPT_DIR}/turaes.service" "${UNIT_DEST}"
+install -m 0644 "${SCRIPT_DIR}/turaes-backup.service" /etc/systemd/system/turaes-backup.service
+install -m 0644 "${SCRIPT_DIR}/turaes-backup.timer" /etc/systemd/system/turaes-backup.timer
 systemctl daemon-reload
 systemctl enable turaes
+systemctl enable --now turaes-backup.timer
 systemctl restart turaes
 
 sleep 1

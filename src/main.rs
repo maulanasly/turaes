@@ -5,6 +5,7 @@ mod app;
 mod audit;
 mod auth;
 mod authz;
+mod backup;
 mod bootstrap;
 mod cli;
 mod commands;
@@ -40,6 +41,9 @@ async fn main() {
     match cli.command.unwrap_or(Command::Serve) {
         Command::Migrate => {
             let pool = db::connect(&cfg.database.url)
+                .await
+                .unwrap_or_else(|e| fatal(e));
+            backup::snapshot_before_migrate(&cfg, &pool)
                 .await
                 .unwrap_or_else(|e| fatal(e));
             db::migrate(&pool).await.unwrap_or_else(|e| fatal(e));
@@ -104,6 +108,31 @@ async fn main() {
             .await
             .unwrap_or_else(|e| fatal(e));
         }
+        Command::Backup => {
+            let pool = db::connect(&cfg.database.url)
+                .await
+                .unwrap_or_else(|e| fatal(e));
+            let (path, pruned) = backup::snapshot_now(&cfg, &pool)
+                .await
+                .unwrap_or_else(|e| fatal(e));
+            println!("snapshot {}", path.display());
+            println!(
+                "pruned {pruned} old snapshot(s), retaining {}",
+                cfg.backup.retain
+            );
+        }
+        Command::Restore { file, force } => {
+            if !force {
+                fatal(
+                    "refusing to restore a live database: stop turaes \
+                     (systemctl stop turaes) and re-run with --force",
+                );
+            }
+            let dest = backup::db_path(&cfg.database.url).unwrap_or_else(|e| fatal(e));
+            backup::restore_file(&file, &dest).unwrap_or_else(|e| fatal(e));
+            println!("restored {} from {}", dest.display(), file.display());
+            println!("start turaes again: systemctl start turaes");
+        }
         Command::Serve => serve(cfg).await,
     }
 }
@@ -152,6 +181,12 @@ fn doctor(cfg: &Config) {
     println!("  runtime.bin_dir   {}", cfg.runtime.bin_dir);
     println!("  runtime.artifact  {}", cfg.runtime.artifact_dir);
     println!("  monitor.interval  {}s", cfg.monitor.interval_secs);
+    println!(
+        "  backup            {} (retain {}, {})",
+        cfg.backup.dir,
+        cfg.backup.retain,
+        latest_snapshot(&cfg.backup.dir)
+    );
     println!("  proxy.enabled     {}", cfg.proxy.enabled);
     println!(
         "  grpc.enabled      {} ({}:{})",
@@ -169,6 +204,41 @@ fn doctor(cfg: &Config) {
     println!("  secure_cookies    {}", cfg.secure_cookies());
 }
 
+/// Human-readable backup freshness for `doctor`: newest snapshot + age, or
+/// why there is nothing to report.
+fn latest_snapshot(dir: &str) -> String {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return "no backup dir yet".into(),
+    };
+    let mut snaps: Vec<(std::path::PathBuf, std::time::SystemTime)> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|e| e == "db"))
+        .filter_map(|p| {
+            std::fs::metadata(&p)
+                .and_then(|m| m.modified())
+                .ok()
+                .map(|t| (p, t))
+        })
+        .collect();
+    if snaps.is_empty() {
+        return "no snapshots yet".into();
+    }
+    snaps.sort_by_key(|(_, t)| std::cmp::Reverse(*t));
+    let (path, mtime) = &snaps[0];
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    match mtime.elapsed() {
+        Ok(age) => {
+            let hours = age.as_secs() / 3600;
+            format!("newest {name} ({hours}h ago, {} total)", snaps.len())
+        }
+        Err(_) => format!("newest {name}"),
+    }
+}
+
 fn redact(secret: &str) -> String {
     if secret.len() <= 8 {
         "********".into()
@@ -179,6 +249,10 @@ fn redact(secret: &str) -> String {
 
 async fn serve(cfg: Arc<Config>) {
     let pool = db::connect(&cfg.database.url)
+        .await
+        .unwrap_or_else(|e| fatal(e));
+    // Fail-closed: snapshot before running (possibly destructive) migrations.
+    backup::snapshot_before_migrate(&cfg, &pool)
         .await
         .unwrap_or_else(|e| fatal(e));
     db::migrate(&pool).await.unwrap_or_else(|e| fatal(e));

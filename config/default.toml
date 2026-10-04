@@ -58,6 +58,13 @@ retention_days = 30
 # Skip counting /metrics, /health and /__dev_version as visits (mirrors tonggeret).
 visitor_skip_paths = ["/metrics", "/health", "/__dev_version"]
 
+[backup]
+# Directory for `turaes-*.db` snapshots (a pre-migration snapshot is taken on
+# every boot before migrations run; `turaes backup` takes one on demand).
+dir = "/var/lib/turaes/backups"
+# How many recent snapshots to keep (older ones are pruned).
+retain = 14
+
 [grpc]
 # Control-plane gRPC for agents/edge. Keep disabled until workers exist.
 enabled = false

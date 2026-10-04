@@ -26,6 +26,17 @@ pub enum Command {
     Migrate,
     /// Print resolved configuration (secrets redacted) and capability checks.
     Doctor,
+    /// Take a timestamped SQLite snapshot into the backup dir (and prune).
+    Backup,
+    /// Restore the database from a snapshot file. Stop turaes first and pass
+    /// `--force` to confirm.
+    Restore {
+        /// Snapshot file to restore from.
+        file: PathBuf,
+        /// Confirm turaes is stopped and the database may be replaced.
+        #[arg(long)]
+        force: bool,
+    },
     /// One-shot app operations against the local database (bootstrap/ops; no
     /// HTTP auth required).
     App {

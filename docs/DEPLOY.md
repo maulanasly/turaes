@@ -198,11 +198,25 @@ turaes migrate                   # apply migrations (also runs on boot)
 
 ### Backup
 
-Back up SQLite and the per-app state root:
+Snapshots are automatic: `turaes-backup.timer` takes a nightly snapshot, and
+every boot takes a `pre-migration-*.db` snapshot *before* migrations run (boot
+aborts if the snapshot fails). Only the newest `TURAES_BACKUP_RETAIN` (default
+14) snapshots are kept, in `TURAES_BACKUP_DIR` (default
+`/var/lib/turaes/backups`):
 
 ```bash
-sqlite3 /var/lib/turaes/turaes.db ".backup '/var/backups/turaes-$(date +%F).db'"
-tar czf /var/backups/turaes-state-$(date +%F).tgz /var/lib/turaes
+turaes backup                    # snapshot now (+ prune)
+turaes doctor                    # shows newest snapshot + age
+tar czf /var/backups/turaes-state-$(date +%F).tgz /var/lib/turaes  # state root
+```
+
+Copy snapshots off the box for real DR (a host loss still takes everything
+with it). To restore:
+
+```bash
+systemctl stop turaes
+turaes restore /var/lib/turaes/backups/turaes-<timestamp>.db --force
+systemctl start turaes
 ```
 
 ### Upgrade
