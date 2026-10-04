@@ -389,6 +389,16 @@ pub(crate) async fn resolve_kind_shape(input: &CreateApp) -> Result<(String, i64
             "'args' and 'command' are mutually exclusive (argv carries its own arguments)".into(),
         ));
     }
+    if input
+        .binary_path
+        .as_deref()
+        .is_some_and(|b| !b.trim().is_empty())
+        && input.command.is_some()
+    {
+        return Err(Error::BadRequest(
+            "'binary_path' and 'command' are mutually exclusive (argv[0] is the binary)".into(),
+        ));
+    }
     if let Some(argv) = &input.command {
         if argv.is_empty() || argv.iter().any(|a| a.trim().is_empty()) {
             return Err(Error::BadRequest(

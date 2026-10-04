@@ -2858,7 +2858,7 @@ async fn api_rejects_kind_mismatches() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
-    // binary + command together.
+    // binary + command together (/usr/bin/true exists on macOS and Linux).
     let router = test_router(dir.path()).await;
     let resp = router
         .oneshot(
@@ -2868,7 +2868,7 @@ async fn api_rejects_kind_mismatches() {
                 .header("content-type", "application/json")
                 .body(
                     Body::from(
-                        json!({"name": "c1", "binary_path": "/bin/true", "command": ["/bin/true"], "port": 9942})
+                        json!({"name": "c1", "binary_path": "/usr/bin/true", "command": ["/usr/bin/true"], "port": 9942})
                             .to_string(),
                     ),
                 )
