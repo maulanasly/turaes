@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use turaes_core::models::Application;
 use turaes_monitor::{health, scrape, stats};
 
-use crate::routes::apps::{runtime_for, spec_for};
+use crate::routes::apps::{active_spec, runtime_for};
 use crate::state::AppState;
 
 /// Running aggregate for one app's current minute.
@@ -85,7 +85,9 @@ async fn watch_app(
     app: &Application,
     memo: &mut AppMemo,
 ) -> turaes_core::Result<()> {
-    let base = format!("http://127.0.0.1:{}", app.port);
+    // Probe and scrape the live blue/green slot, not the base port (which is
+    // dead while the other slot serves).
+    let base = format!("http://127.0.0.1:{}", live_port(app));
     let elapsed = memo
         .last_tick
         .map(|t| t.elapsed().as_secs_f64())
@@ -117,7 +119,7 @@ async fn probe_health(
         path: app.health_path.clone(),
         ..Default::default()
     };
-    let url = format!("http://127.0.0.1:{}{}", app.port, app.health_path);
+    let url = format!("http://127.0.0.1:{}{}", live_port(app), app.health_path);
     let outcome = health::probe(&state.http, &url, Duration::from_secs(cfg.timeout_secs)).await;
 
     sqlx::query(
@@ -146,7 +148,9 @@ async fn probe_health(
             .await?;
             if app.auto_restart {
                 let runtime = runtime_for(&state.cfg, &app.runtime);
-                let spec = spec_for(&state.cfg, app);
+                // Restart the live slot — never the legacy unslotted unit,
+                // which would resurrect a stale listener on the base port.
+                let spec = active_spec(&state.cfg, app);
                 if let Err(e) = runtime.restart(&spec).await {
                     tracing::warn!(app = %app.name, error = %e, "auto-restart failed");
                 } else {
@@ -292,6 +296,11 @@ async fn flush_bucket(state: &AppState, app: &Application, memo: &AppMemo) {
 }
 
 /// The running blue/green instance name (`name`, `name-a`, or `name-b`).
+/// Port serving live traffic: the active blue/green slot, else the base port.
+fn live_port(app: &Application) -> i64 {
+    app.active_port.unwrap_or(app.port)
+}
+
 fn active_instance(cfg: &turaes_core::config::Config, app: &Application) -> String {
     let offset = cfg.runtime.slot_offset as i64;
     match app.active_port {
@@ -357,4 +366,40 @@ async fn cleanup(state: &AppState) -> turaes_core::Result<()> {
         sqlx::query(&sql).bind(&cutoff).execute(&state.pool).await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app(port: i64, active_port: Option<i64>) -> Application {
+        Application {
+            id: "a".into(),
+            name: "beruang".into(),
+            description: None,
+            binary_path: "/bin/true".into(),
+            args: None,
+            port,
+            active_port,
+            health_path: "/health".into(),
+            metrics_path: None,
+            domain: None,
+            server_id: "local".into(),
+            org_id: "default".into(),
+            mem_limit_mb: None,
+            cpu_quota_pct: None,
+            runtime: "systemd".into(),
+            auto_restart: true,
+            status: "running".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn live_port_follows_the_active_slot() {
+        assert_eq!(live_port(&app(8000, None)), 8000);
+        assert_eq!(live_port(&app(8000, Some(8000))), 8000);
+        assert_eq!(live_port(&app(8000, Some(18000))), 18000);
+    }
 }
