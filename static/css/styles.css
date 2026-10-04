@@ -83,6 +83,8 @@ h3 { font-size: 13px; margin: 0 0 8px; }
 .stat { display: flex; justify-content: space-between; padding: 2px 0; font-variant-numeric: tabular-nums; }
 .stat span:first-child { color: var(--muted); }
 
+.notice { border: 1px solid var(--warn); border-radius: 8px; padding: 10px 12px; margin: 0 0 12px; display: grid; gap: 8px; }
+
 .badge { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); font-weight: 600; white-space: nowrap; }
 .badge.running { color: var(--ok); border-color: var(--ok); }
 .badge.stopped { color: var(--muted); }

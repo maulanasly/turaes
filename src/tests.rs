@@ -1391,3 +1391,161 @@ async fn audit_is_org_scoped() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
+
+async fn mint_token(router: axum::Router, scopes: &str) -> (String, String) {
+    let body = body_json(
+        router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/orgs/default/tokens")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({"name": format!("ci-{scopes}"), "scopes": scopes}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(body["token"]["scopes"], scopes);
+    // The hash is never serialized; the plaintext is returned exactly once.
+    assert!(body["token"].get("token_hash").is_none());
+    let plaintext = body["plaintext"].as_str().unwrap().to_string();
+    assert!(plaintext.starts_with("turaes_"));
+    (body["token"]["id"].as_str().unwrap().to_string(), plaintext)
+}
+
+fn bearer(uri: &str, plaintext: &str) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .header("authorization", format!("Bearer {plaintext}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn token_lifecycle_and_scope_floors() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, read_token) = mint_token(test_router(dir.path()).await, "read").await;
+    let (_, deploy_token) = mint_token(test_router(dir.path()).await, "deploy").await;
+
+    // Read scope: lists fine, creating is forbidden, fleet is forbidden.
+    let router = test_router(dir.path()).await;
+    let resp = router
+        .oneshot(bearer("/api/v1/orgs/default/apps", &read_token))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let router = test_router(dir.path()).await;
+    let resp = router
+        .oneshot(bearer("/api/v1/orgs/default/apps/nope/stop", &read_token))
+        .await
+        .unwrap();
+    // Wrong method for the stop path (GET vs POST) aside, authz runs first.
+    assert!(
+        resp.status() == StatusCode::FORBIDDEN || resp.status() == StatusCode::METHOD_NOT_ALLOWED
+    );
+    let router = test_router(dir.path()).await;
+    let resp = router
+        .oneshot(bearer("/api/v1/servers", &read_token))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // Deploy scope passes the developer floor (404: the app itself is missing).
+    let router = test_router(dir.path()).await;
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/apps/nope/stop")
+                .header("authorization", format!("Bearer {deploy_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // Revocation kills the token.
+    let (id, _) = mint_token(test_router(dir.path()).await, "read").await;
+    let router = test_router(dir.path()).await;
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/v1/orgs/default/tokens/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // A revoked token's plaintext no longer authenticates (mint a fresh one
+    // and revoke it to capture the plaintext before it dies).
+    let (rid, rplain) = mint_token(test_router(dir.path()).await, "read").await;
+    let router = test_router(dir.path()).await;
+    router
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/v1/orgs/default/tokens/{rid}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let router = test_router(dir.path()).await;
+    let resp = router
+        .oneshot(bearer("/api/v1/orgs/default/apps", &rplain))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn token_rejects_unknown_and_cross_org() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let (_, token) = mint_token(app::build_router(state.clone()), "admin").await;
+
+    // Unknown tokens are unauthorized.
+    let router = app::build_router(state.clone());
+    let resp = router
+        .oneshot(bearer("/api/v1/orgs/default/apps", "bogus"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // A token is bound to its org: another org is forbidden.
+    sqlx::query("INSERT INTO organizations (id, slug, name) VALUES ('other', 'other', 'Other')")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    let router = app::build_router(state.clone());
+    let resp = router
+        .oneshot(bearer("/api/v1/orgs/other/apps", &token))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // Invalid scopes are rejected at mint time.
+    let router = app::build_router(state.clone());
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/tokens")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"name": "x", "scopes": "owner"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}

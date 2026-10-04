@@ -44,7 +44,12 @@ pub fn build_router(state: AppState) -> Router {
             axum::routing::put(routes::env::put).delete(routes::env::delete),
         )
         .route("/deployments/{id}", get(routes::deployments::get))
-        .route("/audit", get(routes::audit::list));
+        .route("/audit", get(routes::audit::list))
+        .route(
+            "/tokens",
+            get(routes::tokens::list).post(routes::tokens::create),
+        )
+        .route("/tokens/{id}", delete(routes::tokens::revoke));
 
     // Authenticated API surface: tenant-scoped routes plus the global
     // identity (`/me`), tenant-gated artifacts and operator-gated servers.

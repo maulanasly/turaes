@@ -264,14 +264,33 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar) -> Response {
     let jar = jar.add(removal_cookie(&state, SESSION_COOKIE));
     (jar, StatusCode::NO_CONTENT).into_response()
 }
+/// Extract a `Bearer` API token from the `Authorization` header, if present.
+fn bearer_token(req: &axum::extract::Request) -> Option<String> {
+    let value = req.headers().get(axum::http::header::AUTHORIZATION)?;
+    let value = value.to_str().ok()?;
+    let token = value
+        .strip_prefix("Bearer ")
+        .or_else(|| value.strip_prefix("bearer "))?;
+    if token.trim().is_empty() {
+        return None;
+    }
+    Some(token.to_string())
+}
 
 /// Middleware: reject unauthenticated requests, and attach both the OAuth
 /// principal (`AuthUser`) and the resolved tenant principal (`CurrentUser`).
+/// An explicit `Authorization: Bearer` API token always wins over the session
+/// cookie (and over the dev bypass, so CI-style access is testable).
 pub async fn require_auth(
     State(state): State<AppState>,
     mut req: axum::extract::Request,
     next: Next,
 ) -> Result<Response> {
+    if let Some(token) = bearer_token(&req) {
+        let current = crate::authz::resolve_token(&state, &token).await?;
+        req.extensions_mut().insert(current);
+        return Ok(next.run(req).await);
+    }
     if state.auth_disabled {
         let current = crate::authz::resolve(&state, 0, "dev", Some("Dev mode")).await?;
         req.extensions_mut().insert(dev_user());
