@@ -11,6 +11,7 @@ pub mod health;
 pub mod logs;
 pub mod me;
 pub mod orgs;
+pub mod quotas;
 pub mod servers;
 pub mod static_assets;
 pub mod tokens;

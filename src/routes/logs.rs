@@ -133,6 +133,8 @@ mod tests {
             domain: None,
             server_id: "local".into(),
             org_id: "default".into(),
+            mem_limit_mb: None,
+            cpu_quota_pct: None,
             runtime: runtime.into(),
             auto_restart: true,
             status: "running".into(),

@@ -20,6 +20,7 @@ use turaes_runtime::{AppSpec, DeployOutcome, Deployer, RunState, Runtime, Slot};
 
 use crate::audit;
 use crate::authz::{self, CurrentUser, Role};
+use crate::routes::quotas;
 use crate::state::AppState;
 
 /// Body for creating an application.
@@ -47,6 +48,10 @@ pub struct CreateApp {
     pub runtime: Option<String>,
     /// Restart on unhealthy (defaults to true).
     pub auto_restart: Option<bool>,
+    /// Resident memory ceiling in MiB (systemd only).
+    pub mem_limit_mb: Option<i64>,
+    /// CPU ceiling in percent of one core (systemd only).
+    pub cpu_quota_pct: Option<i64>,
 }
 
 /// Query for historical stats.
@@ -84,6 +89,11 @@ pub struct UpdateApp {
     pub auto_restart: Option<bool>,
     /// Node placement.
     pub server_id: Option<String>,
+    /// Resident memory ceiling in MiB (systemd only). Absent keeps, `null`
+    /// clears, a number sets.
+    pub mem_limit_mb: Option<Option<i64>>,
+    /// CPU ceiling in percent of one core (systemd only). Same tri-state.
+    pub cpu_quota_pct: Option<Option<i64>>,
 }
 
 /// Body for rollback (optional explicit target).
@@ -112,6 +122,31 @@ pub(crate) fn validate_name(name: &str) -> Result<()> {
 
 /// Fetch an app scoped to an organization. Cross-org ids yield `NotFound` so
 /// one tenant can never probe another tenant's applications.
+/// Validate per-app resource limits. The `proc` runtime cannot confine, so
+/// limits with it are rejected instead of silently ignored.
+fn validate_limits(mem_mb: Option<i64>, cpu_pct: Option<i64>, runtime: &str) -> Result<()> {
+    if let Some(m) = mem_mb {
+        if !(16..=65536).contains(&m) {
+            return Err(Error::BadRequest(
+                "mem_limit_mb must be between 16 and 65536".into(),
+            ));
+        }
+    }
+    if let Some(c) = cpu_pct {
+        if !(1..=6400).contains(&c) {
+            return Err(Error::BadRequest(
+                "cpu_quota_pct must be between 1 and 6400".into(),
+            ));
+        }
+    }
+    if (mem_mb.is_some() || cpu_pct.is_some()) && runtime == "proc" {
+        return Err(Error::BadRequest(
+            "resource limits require the systemd runtime".into(),
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) async fn fetch_org_app(pool: &Pool, org_id: &str, id: &str) -> Result<Application> {
     sqlx::query_as::<_, Application>("SELECT * FROM applications WHERE id = ? AND org_id = ?")
         .bind(id)
@@ -178,6 +213,8 @@ pub fn spec_for_slot(cfg: &Config, app: &Application, slot: Option<Slot>, port: 
         state_dir: format!("{}/{}", cfg.runtime.state_dir, app.name),
         env_file: Some(format!("{}/{}.env", cfg.runtime.env_dir, instance)),
         user: None,
+        mem_limit_mb: app.mem_limit_mb.map(|m| m as u64),
+        cpu_quota_pct: app.cpu_quota_pct.map(|c| c as u32),
     }
 }
 
@@ -335,11 +372,23 @@ pub async fn create(
         "",
     )
     .await?;
+    validate_limits(input.mem_limit_mb, input.cpu_quota_pct, &runtime)?;
+    quotas::ensure_capacity(
+        &state.pool,
+        &org_id,
+        "",
+        input.mem_limit_mb,
+        input.cpu_quota_pct,
+    )
+    .await?;
+    if input.domain.as_ref().is_some_and(|d| !d.is_empty()) {
+        quotas::ensure_domain_capacity(&state.pool, &org_id).await?;
+    }
     let inserted = sqlx::query_as::<_, Application>(
         "INSERT INTO applications \
          (id, org_id, name, description, binary_path, args, port, health_path, metrics_path, domain, \
-          server_id, runtime, auto_restart, status, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', datetime('now'), datetime('now')) \
+          server_id, runtime, auto_restart, mem_limit_mb, cpu_quota_pct, status, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', datetime('now'), datetime('now')) \
          RETURNING *",
     )
     .bind(&id)
@@ -355,6 +404,8 @@ pub async fn create(
     .bind(&server_id)
     .bind(&runtime)
     .bind(input.auto_restart.unwrap_or(true) as i64)
+    .bind(input.mem_limit_mb)
+    .bind(input.cpu_quota_pct)
     .fetch_one(&state.pool)
     .await
     .map_err(map_unique_name)?;
@@ -858,9 +909,18 @@ pub async fn update(
     if port != app.port {
         ensure_port_free(&state.pool, port, state.cfg.runtime.slot_offset as i64, &id).await?;
     }
+    let mem_limit_mb = input.mem_limit_mb.unwrap_or(app.mem_limit_mb);
+    let cpu_quota_pct = input.cpu_quota_pct.unwrap_or(app.cpu_quota_pct);
+    validate_limits(mem_limit_mb, cpu_quota_pct, &runtime)?;
+    quotas::ensure_capacity(&state.pool, &org_id, &id, mem_limit_mb, cpu_quota_pct).await?;
+    let domain = input.domain.or(app.domain.clone());
+    if domain.as_ref().is_some_and(|d| !d.is_empty()) && domain != app.domain {
+        quotas::ensure_domain_capacity(&state.pool, &org_id).await?;
+    }
     let updated = sqlx::query_as::<_, Application>(
         "UPDATE applications SET description = ?, args = ?, port = ?, health_path = ?, \
          metrics_path = ?, domain = ?, runtime = ?, auto_restart = ?, server_id = ?, \
+         mem_limit_mb = ?, cpu_quota_pct = ?, \
          updated_at = datetime('now') WHERE id = ? RETURNING *",
     )
     .bind(input.description.or(app.description))
@@ -868,10 +928,12 @@ pub async fn update(
     .bind(port)
     .bind(input.health_path.unwrap_or(app.health_path))
     .bind(input.metrics_path.or(app.metrics_path))
-    .bind(input.domain.or(app.domain))
+    .bind(domain)
     .bind(&runtime)
     .bind(input.auto_restart.unwrap_or(app.auto_restart) as i64)
     .bind(&server_id)
+    .bind(mem_limit_mb)
+    .bind(cpu_quota_pct)
     .bind(&id)
     .fetch_one(&state.pool)
     .await?;

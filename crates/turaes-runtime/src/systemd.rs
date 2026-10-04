@@ -120,6 +120,14 @@ pub fn render_unit(spec: &AppSpec) -> String {
         .map(|p| format!("EnvironmentFile={p}\n"))
         .unwrap_or_default();
     let user = spec.user();
+    let memory = spec
+        .mem_limit_mb
+        .map(|m| format!("MemoryMax={m}M\n"))
+        .unwrap_or_default();
+    let cpu = spec
+        .cpu_quota_pct
+        .map(|c| format!("CPUQuota={c}%\n"))
+        .unwrap_or_default();
     format!(
         "[Unit]\n\
          Description=turaes-managed application ({name})\n\
@@ -139,6 +147,9 @@ pub fn render_unit(spec: &AppSpec) -> String {
          PrivateTmp=true\n\
          ProtectSystem=strict\n\
          ReadWritePaths={state_dir}\n\
+         {memory}\
+         {cpu}\
+         TasksMax=512\n\
          \n\
          [Install]\n\
          WantedBy=multi-user.target\n",
@@ -149,6 +160,8 @@ pub fn render_unit(spec: &AppSpec) -> String {
         port = spec.port,
         exec = spec.installed_path,
         args = args,
+        memory = memory,
+        cpu = cpu,
     )
 }
 
@@ -261,6 +274,8 @@ mod tests {
             state_dir: "/var/lib/beruang".into(),
             env_file: Some("/etc/beruang.env".into()),
             user: None,
+            mem_limit_mb: None,
+            cpu_quota_pct: None,
         }
     }
 
@@ -274,6 +289,22 @@ mod tests {
         assert!(unit.contains("ProtectSystem=strict"));
         assert!(unit.contains("ReadWritePaths=/var/lib/beruang"));
         assert!(unit.contains("WantedBy=multi-user.target"));
+    }
+
+    #[test]
+    fn unit_renders_resource_limits() {
+        let mut s = spec();
+        s.mem_limit_mb = Some(512);
+        s.cpu_quota_pct = Some(150);
+        let unit = render_unit(&s);
+        assert!(unit.contains("MemoryMax=512M"));
+        assert!(unit.contains("CPUQuota=150%"));
+        assert!(unit.contains("TasksMax=512"));
+
+        let bare = render_unit(&spec());
+        assert!(!bare.contains("MemoryMax="));
+        assert!(!bare.contains("CPUQuota="));
+        assert!(bare.contains("TasksMax=512"));
     }
 
     #[test]

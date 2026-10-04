@@ -236,6 +236,8 @@ function EditForm({ app, servers, onSaved }) {
   const submit = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
+    const mem = String(fd.get("mem_limit_mb") || "").trim();
+    const cpu = String(fd.get("cpu_quota_pct") || "").trim();
     const payload = {
       port: Number(fd.get("port")),
       domain: fd.get("domain"),
@@ -244,6 +246,8 @@ function EditForm({ app, servers, onSaved }) {
       health_path: fd.get("health_path"),
       metrics_path: fd.get("metrics_path"),
       auto_restart: fd.get("auto_restart") === "on",
+      mem_limit_mb: mem === "" ? null : Number(mem),
+      cpu_quota_pct: cpu === "" ? null : Number(cpu),
     };
     try {
       await oapi(`/apps/${app.id}`, { method: "PATCH", body: JSON.stringify(payload) });
@@ -276,6 +280,11 @@ function EditForm({ app, servers, onSaved }) {
         <label>Metrics path <input name="metrics_path" value=${app.metrics_path || ""} /></label>
         <label class="inline"><input type="checkbox" name="auto_restart" checked=${app.auto_restart} /> Restart when unhealthy</label>
       </div>
+      <div class="row">
+        <label>Memory limit (MB) <input name="mem_limit_mb" type="number" min="16" max="65536" value=${app.mem_limit_mb ?? ""} placeholder="unlimited" /></label>
+        <label>CPU limit (% of one core) <input name="cpu_quota_pct" type="number" min="1" max="6400" value=${app.cpu_quota_pct ?? ""} placeholder="unlimited" /></label>
+      </div>
+      <p class="muted small">Limits need the systemd runtime and take effect on the next deploy or restart.</p>
       <div><button class="btn" type="submit">Save settings</button></div>
     </form>`;
 }
