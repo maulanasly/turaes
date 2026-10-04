@@ -29,11 +29,11 @@ systemd services on the same host. Multi-node is built but dormant
 
 ### Sev-2
 - No automated security patching (84 pending; `unattended-upgrades` disabled).
-- No resource limits, no swap (`MemoryMax=infinity` on a 3.6 GB box).
+- ~~No resource limits, no swap (`MemoryMax=infinity` on a 3.6 GB box)~~ — done: per-app `MemoryMax`/`CPUQuota`/`TasksMax`, per-org quotas.
 - No platform `/metrics`/alerting; nothing pages.
 - Proxy logs ERROR for scanner 404/TLS noise (~45% of recent lines); no rate limit.
 - Not zero-downtime (`systemctl restart` drops :80/:443 + API).
-- Artifact store unbounded (no GC).
+- ~~Artifact store unbounded (no GC)~~ — done: monthly `turaes gc` + `--dry-run`.
 - ~~Shared secret for JWT signing **and** env sealing; no rotation~~ — done: HKDF-separated sealing key, `turaes secrets reseal`, rotation runbook.
 - ~~API/apps bind `0.0.0.0` (loopback suffices)~~ — done: control binds loopback by default, fronted by the proxy.
 
@@ -50,7 +50,7 @@ systemd services on the same host. Multi-node is built but dormant
 | Zero-downtime deploys (control/edge, app blue/green) | **in progress** — [PLAN-ZERO-DOWNTIME.md](./PLAN-ZERO-DOWNTIME.md) |
 | Exposure reduction (Tailscale admin + Cloudflare Tunnel/Access, SG lockdown) | **backlog** |
 | Backups/DR + pre-migration snapshot | **done (local)** — nightly timer + fail-closed boot snapshot + restore; offsite copies still backlog |
-| Scheduler patching (unattended-upgrades), resource limits, `/metrics`+alerting, log/rate hygiene, artifact GC | backlog (secret separation done) |
+| Scheduler patching (unattended-upgrades), `/metrics`+alerting, log hygiene | backlog (secret separation, backups, quotas, artifact GC done) |
 
 ## Reliability lens
 

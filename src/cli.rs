@@ -43,6 +43,12 @@ pub enum Command {
         #[command(subcommand)]
         cmd: SecretsCommand,
     },
+    /// Delete artifact blobs no deployment references (plus stale uploads).
+    Gc {
+        /// Count and measure without deleting anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// One-shot app operations against the local database (bootstrap/ops; no
     /// HTTP auth required).
     App {

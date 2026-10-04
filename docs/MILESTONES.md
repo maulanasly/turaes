@@ -239,7 +239,8 @@ org-scoped.
       rate limiting, body/request timeouts, `turaes.service` sandboxing.
 - [x] **PR J** Quotas & resource limits: per-org quotas, per-app
       `MemoryMax`/`CPUQuota`/`TasksMax`, enforcement at create/deploy.
-- [ ] **PR K** Artifact GC: delete blobs unreferenced by any deployment.
+- [x] **PR K** Artifact GC: delete blobs unreferenced by any deployment
+      (`turaes gc`, monthly timer, grace period, audited).
 - [ ] **PR L** gRPC mTLS + per-node credentials (when the fleet activates;
       until then bind loopback/VPC and document).
 

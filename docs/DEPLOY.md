@@ -239,6 +239,20 @@ turaes secrets reseal
 
 All sessions invalidate on rotation (users sign in again) — that is expected.
 
+### Artifact garbage collection
+
+Every deploy stores the binary in the content-addressed store, so it grows
+forever without collection. `turaes-gc.timer` runs monthly; anything not
+named by a deployment row is unreachable (rollback can never address it) and
+is deleted, along with stale crashed uploads. Files younger than an hour are
+always spared (a deploy stores the blob before writing its row):
+
+```bash
+turaes gc --dry-run   # report reclaimable blobs without deleting
+turaes gc             # collect (audited as `artifacts.gc`)
+turaes doctor          # shows store file count + size
+```
+
 ### Perimeter
 
 The control plane binds loopback by default (`server.host`, override with
