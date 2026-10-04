@@ -3,8 +3,8 @@ import { useEffect, useState, useCallback, useMemo } from "preact/hooks";
 import { oapi } from "../lib/api.js";
 import { toast } from "../lib/toast.js";
 import { confirmAction } from "../lib/confirm.js";
-import { fmtBytes, parseTs, fmtTime, shortHash, serverName, runtimeLabel } from "../lib/format.js";
-import { APP_TABS, navigate } from "../lib/router.js";
+import { fmtBytes, parseTs, fmtTime, fmtRangeLabel, timeAgo, shortHash, serverName, runtimeLabel } from "../lib/format.js";
+import { APP_TABS, RANGES, DEFAULT_RANGE, normalizeRange, rangeToHours, navigate } from "../lib/router.js";
 import { StatusBadge } from "../components/StatusBadge.js";
 import { Skeleton } from "../components/Skeleton.js";
 import { Chart } from "../components/Chart.js";
@@ -41,7 +41,9 @@ function Kpi({ label, value }) {
   return html`<div class="kpi"><div class="kpi-label">${label}</div><div class="kpi-value">${value}</div></div>`;
 }
 
-function Overview({ data }) {
+function Overview({ data, range, onRange, updatedAt, loading, onRefresh }) {
+  const hours = rangeToHours(range);
+  const rangeLabel = fmtRangeLabel(range);
   const metrics = data.metrics || [];
   const visitors = data.visitors || [];
   const cpu = metrics.map((m) => ({ x: parseTs(m.recorded_at), y: m.cpu_pct }));
@@ -68,25 +70,48 @@ function Overview({ data }) {
   const last = metrics[metrics.length - 1];
   const totalVisits = regions.reduce((s, [, r]) => s + r.visits, 0);
   const maxUniques = regions.reduce((s, [, r]) => Math.max(s, r.uniques), 0);
+  const cpuAvg = metrics.length
+    ? metrics.reduce((s, m) => s + m.cpu_pct, 0) / metrics.length
+    : null;
+  const memPeak = metrics.length ? Math.max(...metrics.map((m) => m.mem_bytes)) : null;
+  const freshness = updatedAt ? `updated ${timeAgo(Date.now() - updatedAt)}` : "loading…";
+  const emptyHint = `No samples in the ${rangeLabel} — the app may have been down, or samples aged out of retention.`;
 
   return html`
     <div class="detail">
+      <div class="range-bar">
+        <div class="seg" role="radiogroup" aria-label="Time range">
+          ${RANGES.map((r) => html`
+            <button type="button" role="radio" aria-checked=${r === range}
+              class=${r === range ? "active" : ""} disabled=${loading}
+              onClick=${() => onRange(r)} title=${fmtRangeLabel(r)}>${r}</button>`)}
+        </div>
+        <div class="controls">
+          <span class="muted small" role="status">${freshness} · ${rangeLabel}</span>
+          <button type="button" class="btn small ghost" disabled=${loading} onClick=${onRefresh}>
+            ${loading ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
+      </div>
       <div class="kpis">
-        <${Kpi} label="CPU now" value=${last ? `${last.cpu_pct.toFixed(1)}%` : "—"} />
-        <${Kpi} label="Memory now" value=${last ? fmtBytes(last.mem_bytes) : "—"} />
-        <${Kpi} label="Visits observed" value=${totalVisits} />
-        <${Kpi} label="Unique visitors" value=${maxUniques} />
+        <${Kpi} label=${`CPU avg (${rangeLabel})`} value=${cpuAvg === null ? "—" : `${cpuAvg.toFixed(1)}%`} />
+        <${Kpi} label=${`Memory peak (${rangeLabel})`} value=${memPeak === null ? "—" : fmtBytes(memPeak)} />
+        <${Kpi} label=${`Visits (${rangeLabel})`} value=${totalVisits} />
+        <${Kpi} label="Unique visitors (latest per region)" value=${maxUniques} />
       </div>
       <div class="charts">
-        <${Chart} title="CPU %" points=${cpu} color="var(--cpu)" formatY=${(v) => v.toFixed(1)} />
-        <${Chart} title="Memory" points=${mem} color="var(--mem)" formatY=${fmtBytes} />
+        <${Chart} title="CPU %" points=${cpu} color="var(--cpu)" formatY=${(v) => v.toFixed(1)}
+          subtitle=${rangeLabel} rangeHours=${hours} emptyHint=${emptyHint} />
+        <${Chart} title="Memory" points=${mem} color="var(--mem)" formatY=${fmtBytes}
+          subtitle=${rangeLabel} rangeHours=${hours} emptyHint=${emptyHint} />
       </div>
-      <${Chart} title="Visits observed" points=${visitSeries} color="var(--visits)" formatY=${(v) => Math.round(v)} />
+      <${Chart} title="Visits observed" points=${visitSeries} color="var(--visits)" formatY=${(v) => Math.round(v)}
+        subtitle=${rangeLabel} rangeHours=${hours} emptyHint=${emptyHint} />
       <div>
-        <h2>Visitors by region</h2>
+        <h2>Visitors by region <span class="muted small">· ${rangeLabel}, unique is latest per region (never summed)</span></h2>
         ${regions.length === 0
-          ? html`<p class="muted">No visits recorded yet.</p>`
-          : html`<table><thead><tr><th>Region</th><th>Visits</th><th>Unique</th></tr></thead>
+          ? html`<p class="muted">No visits recorded in the ${rangeLabel}.</p>`
+          : html`<table><thead><tr><th>Region</th><th>Visits</th><th>Unique (latest)</th></tr></thead>
               <tbody>${regions.map(([region, r]) => html`
                 <tr><td class="mono">${region}</td><td>${r.visits}</td><td>${r.uniques}</td></tr>`)}
               </tbody></table>`}
@@ -338,15 +363,35 @@ function Settings({ app, servers, user, onSaved }) {
     </div>`}`;
 }
 
-export function AppDetailView({ id, tab, user, servers }) {
+export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
   const [app, setApp] = useState(null);
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState(null);
   const [data, setData] = useState({});
+  const [metricsAt, setMetricsAt] = useState(null);
+  const [metricsLoading, setMetricsLoading] = useState(false);
   const [deployments, setDeployments] = useState(null);
   const [activity, setActivity] = useState(null);
   const [env, setEnv] = useState(null);
   const [busy, setBusy] = useState(false);
+
+  // Single range drives CPU, memory and visitors together. URL wins, then
+  // the stored preference, then the default — all normalized.
+  const [range, setRange] = useState(() => {
+    try {
+      const stored = localStorage.getItem("turaes-range");
+      return normalizeRange(routeRange || stored || DEFAULT_RANGE);
+    } catch {
+      return normalizeRange(routeRange || DEFAULT_RANGE);
+    }
+  });
+
+  // Follow back/forward navigation that changes `?range=`.
+  useEffect(() => {
+    if (routeRange && normalizeRange(routeRange) !== range) {
+      setRange(normalizeRange(routeRange));
+    }
+  }, [routeRange]);
 
   const loadApp = useCallback(async () => {
     try {
@@ -361,15 +406,21 @@ export function AppDetailView({ id, tab, user, servers }) {
 
   const retry = () => { setError(null); loadApp(); };
 
-  const loadMetrics = useCallback(async () => {
+  const loadMetrics = useCallback(async (hours) => {
+    setMetricsLoading(true);
     try {
+      const h = hours ?? rangeToHours(range);
       const [m, v] = await Promise.all([
-        oapi(`/apps/${id}/stats?hours=1`),
-        oapi(`/apps/${id}/visitors?hours=24`),
+        oapi(`/apps/${id}/stats?hours=${h}`),
+        oapi(`/apps/${id}/visitors?hours=${h}`),
       ]);
+      if (document.hidden) return;
       setData({ metrics: m.metrics || [], visitors: v.visitors || [] });
-    } catch { /* ignore */ }
-  }, [id]);
+      setMetricsAt(Date.now());
+    } catch { /* ignore */ } finally {
+      setMetricsLoading(false);
+    }
+  }, [id, range]);
 
   const loadDeployments = useCallback(async () => {
     try {
@@ -394,16 +445,27 @@ export function AppDetailView({ id, tab, user, servers }) {
 
   useEffect(() => {
     loadApp();
-    const t = setInterval(loadApp, 15000);
+    const t = setInterval(() => { if (!document.hidden) loadApp(); }, 15000);
     return () => clearInterval(t);
   }, [loadApp]);
+
+  const changeRange = useCallback((next) => {
+    const r = normalizeRange(next);
+    setRange(r);
+    try { localStorage.setItem("turaes-range", r); } catch {}
+    // Deep-linkable + back-button safe; the route effect picks it up.
+    navigate(`#/apps/${id}/overview${r === DEFAULT_RANGE ? "" : `?range=${r}`}`);
+    loadMetrics(rangeToHours(r));
+  }, [id, loadMetrics]);
+
+  const refreshMetrics = useCallback(() => { loadMetrics(); }, [loadMetrics]);
 
   useEffect(() => {
     if (tab === "overview") loadMetrics();
     if (tab === "deployments") loadDeployments();
     if (tab === "activity") loadActivity();
     if (tab === "environment") loadEnv();
-  }, [tab, loadMetrics, loadDeployments, loadActivity, loadEnv]);
+  }, [tab, id, range, loadMetrics, loadDeployments, loadActivity, loadEnv]);
 
   const deploy = async () => {
     setBusy(true);
@@ -522,12 +584,18 @@ export function AppDetailView({ id, tab, user, servers }) {
         </div>
       </div>
       <nav class="tabs" role="tablist">
-        ${APP_TABS.map((t) => html`
-          <a role="tab" aria-selected=${t === tab} class=${t === tab ? "active" : ""}
-            href=${`#/apps/${id}/${t}`}>${TAB_LABEL[t]}</a>`)}
+        ${APP_TABS.map((t) => {
+          const href = t === "overview" && range !== DEFAULT_RANGE
+            ? `#/apps/${id}/${t}?range=${range}`
+            : `#/apps/${id}/${t}`;
+          return html`
+            <a role="tab" aria-selected=${t === tab} class=${t === tab ? "active" : ""}
+              href=${href}>${TAB_LABEL[t]}</a>`;
+        })}
       </nav>
       <div class="tab-body" role="tabpanel">
-        ${tab === "overview" && html`<${Overview} data=${data} />`}
+        ${tab === "overview" && html`<${Overview} data=${data} range=${range} onRange=${changeRange}
+          updatedAt=${metricsAt} loading=${metricsLoading} onRefresh=${refreshMetrics} />`}
         ${tab === "deployments" && html`<${Deployments} deployments=${deployments} onRollbackTo=${rollbackTo} />`}
         ${tab === "activity" && html`<${Activity} entries=${activity} />`}
         ${tab === "environment" && html`<${Environment} env=${env} appId=${id} reload=${loadEnv} />`}

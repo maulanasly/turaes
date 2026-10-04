@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fmtBytes, shortHash, serverName, runtimeLabel, timeAgo } from "../../static/js/lib/format.js";
+import { fmtBytes, shortHash, serverName, runtimeLabel, timeAgo, fmtRangeLabel, fmtFullDate, fmtAxisTick } from "../../static/js/lib/format.js";
 
 test("fmtBytes scales", () => {
   assert.equal(fmtBytes(0), "0 B");
@@ -31,4 +31,29 @@ test("timeAgo", () => {
   assert.equal(timeAgo(1000), "just now");
   assert.equal(timeAgo(30000), "30s ago");
   assert.equal(timeAgo(120000), "2m ago");
+});
+
+test("fmtRangeLabel", () => {
+  assert.equal(fmtRangeLabel("1h"), "last hour");
+  assert.equal(fmtRangeLabel("6h"), "last 6 hours");
+  assert.equal(fmtRangeLabel("24h"), "last 24 hours");
+  assert.equal(fmtRangeLabel("7d"), "last 7 days");
+  assert.equal(fmtRangeLabel("30d"), "last 30 days");
+  assert.equal(fmtRangeLabel("bogus"), "last 24 hours");
+});
+
+test("fmtFullDate is a human datetime (never NaN text)", () => {
+  const t = Date.UTC(2026, 9, 4, 12, 30); // Oct 4, 2026 12:30 UTC
+  const s = fmtFullDate(t);
+  assert.equal(s.includes("Oct"), true);
+  assert.equal(s === "—", false);
+  assert.equal(fmtFullDate(NaN), "—");
+});
+
+test("fmtAxisTick uses clock for short windows, full date for week+", () => {
+  const t = Date.UTC(2026, 9, 4, 12, 30);
+  assert.equal(fmtAxisTick(t, 24), fmtAxisTick(t, 24));
+  // 168h threshold switches to full date; result must differ from a plain clock.
+  assert.equal(fmtAxisTick(t, 24) === fmtAxisTick(t, 168), false);
+  assert.equal(fmtAxisTick(t, undefined), fmtAxisTick(t, 24));
 });

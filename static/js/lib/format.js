@@ -21,6 +21,38 @@ export function fmtClock(d) {
   return new Date(d).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+// Full date-time for long chart windows (>= 7d): "Oct 1, 02:30 PM".
+export function fmtFullDate(d) {
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return "—";
+  return dt.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+// Human label for a monitoring range key ("24h" -> "last 24 hours").
+// Unknown keys fall back to the default window.
+export function fmtRangeLabel(range) {
+  switch (range) {
+    case "1h":
+      return "last hour";
+    case "6h":
+      return "last 6 hours";
+    case "24h":
+      return "last 24 hours";
+    case "7d":
+      return "last 7 days";
+    case "30d":
+      return "last 30 days";
+    default:
+      return "last 24 hours";
+  }
+}
+
+// Axis tick: clock time for short windows, full date for week+ windows
+// so 7d/30d charts stay readable.
+export function fmtAxisTick(d, hours) {
+  return (hours ?? 24) >= 168 ? fmtFullDate(d) : fmtClock(d);
+}
+
 // Local, readable datetime for tables.
 export function fmtTime(s) {
   if (!s) return "—";
