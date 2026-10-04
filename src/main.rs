@@ -40,12 +40,23 @@ async fn main() {
     let cli = Cli::parse();
     init_tracing();
 
+    // serve-static is config-free: it is the supervision target for `static`
+    // apps, whose units carry no EnvironmentFile (and must boot with none).
+    if let Some(Command::ServeStatic { dir, port }) = &cli.command {
+        serve_static::run(dir.clone(), *port)
+            .await
+            .unwrap_or_else(|e| fatal(e));
+        return;
+    }
+
     let cfg = match Config::load(cli.config.as_deref()) {
         Ok(cfg) => Arc::new(cfg),
         Err(e) => fatal(e),
     };
 
     match cli.command.unwrap_or(Command::Serve) {
+        // Handled before Config::load above (config-free by design).
+        Command::ServeStatic { .. } => unreachable!("serve-static runs before config load"),
         Command::Migrate => {
             let pool = db::connect(&cfg.database.url)
                 .await
@@ -163,11 +174,6 @@ async fn main() {
             db::migrate(&pool).await.unwrap_or_else(|e| fatal(e));
             let state = AppState::new(cfg.clone(), pool);
             commands::run_secrets(&state, cmd, org.as_deref())
-                .await
-                .unwrap_or_else(|e| fatal(e));
-        }
-        Command::ServeStatic { dir, port } => {
-            serve_static::run(dir, port)
                 .await
                 .unwrap_or_else(|e| fatal(e));
         }
