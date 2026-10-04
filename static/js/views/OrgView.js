@@ -1,13 +1,13 @@
 import { html } from "../lib/html.js";
 import { useState, useEffect, useCallback } from "preact/hooks";
-import { api, oapi, getOrg, setOrg } from "../lib/api.js";
+import { api, oapi, getOrg } from "../lib/api.js";
 import { toast } from "../lib/toast.js";
 import { confirmAction } from "../lib/confirm.js";
 import { fmtTime } from "../lib/format.js";
 
 const ROLES = ["viewer", "developer", "admin", "owner"];
 
-export function OrgView({ user }) {
+export function OrgView({ user, onOrgChange }) {
   const [me, setMe] = useState(null);
   const [members, setMembers] = useState(null);
   const [quota, setQuota] = useState(null);
@@ -46,9 +46,9 @@ export function OrgView({ user }) {
   useEffect(() => { loadMe(); loadMembers(); loadQuota(); }, [loadMe, loadMembers, loadQuota]);
 
   const switchOrg = (slug) => {
-    try { localStorage.setItem("turaes-org", slug); } catch (e) {}
-    setOrg(slug);
-    location.reload();
+    // Shell owns the active org: remounts org-scoped views (key={org}) and
+    // refetches alerts, so no full page reload is needed.
+    onOrgChange?.(slug);
   };
 
   const retry = () => { setError(null); loadMembers(); };

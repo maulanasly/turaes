@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { sortApps } from "../../static/js/lib/sort.js";
+import { sortApps, filterApps } from "../../static/js/lib/sort.js";
 
 const apps = [
   { name: "zeta", status: "running", server_id: "s2", port: 9000, updated_at: "2026-01-03" },
@@ -28,5 +28,27 @@ test("recent is newest first", () => {
 test("does not mutate input", () => {
   const copy = [...apps];
   sortApps(apps, "name");
+  assert.deepEqual(apps, copy);
+});
+
+test("filterApps matches name case-insensitively", () => {
+  assert.deepEqual(filterApps(apps, "ALPHA").map((a) => a.name), ["alpha"]);
+  assert.deepEqual(filterApps(apps, "Zeta").map((a) => a.name), ["zeta"]);
+});
+
+test("filterApps matches domain case-insensitively", () => {
+  const withDomain = [...apps, { name: "web", domain: "Shop.example.com" }];
+  assert.deepEqual(filterApps(withDomain, "SHOP").map((a) => a.name), ["web"]);
+});
+
+test("filterApps trims the query and ignores empty queries", () => {
+  assert.equal(filterApps(apps, "   ").length, apps.length);
+  assert.equal(filterApps(apps, "").length, apps.length);
+  assert.equal(filterApps(apps, null).length, apps.length);
+});
+
+test("filterApps does not mutate input", () => {
+  const copy = [...apps];
+  filterApps(apps, "alpha");
   assert.deepEqual(apps, copy);
 });

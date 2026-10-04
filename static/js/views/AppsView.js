@@ -4,7 +4,7 @@ import { navigate } from "../lib/router.js";
 import { oapi } from "../lib/api.js";
 import { toast } from "../lib/toast.js";
 import { serverName, runtimeLabel } from "../lib/format.js";
-import { sortApps } from "../lib/sort.js";
+import { sortApps, filterApps } from "../lib/sort.js";
 import { StatusBadge } from "../components/StatusBadge.js";
 import { Skeleton } from "../components/Skeleton.js";
 
@@ -71,7 +71,6 @@ function NewAppForm({ servers, onCreated }) {
 
 export function AppsView({ user, servers }) {
   const [apps, setApps] = useState(null);
-  const [alerts, setAlerts] = useState([]);
   const [error, setError] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [q, setQ] = useState(() => {
@@ -98,10 +97,6 @@ export function AppsView({ user, servers }) {
       if (e.status === 401) { setApps([]); setError(null); }
       else { setError(e.message); toast.error(e.message); }
     }
-    try {
-      const a = await oapi("/alerts?status=firing&limit=10");
-      setAlerts(a.alerts || []);
-    } catch { /* alerts are advisory; never block the list */ }
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -115,7 +110,7 @@ export function AppsView({ user, servers }) {
   };
 
   const filtered = sortApps(
-    (apps || []).filter((a) => !q || a.name.includes(q) || (a.domain || "").includes(q)),
+    filterApps(apps, q),
     sortKey,
     (id) => serverName(servers, id),
   );
@@ -139,14 +134,6 @@ export function AppsView({ user, servers }) {
           </button>`}
         </div>
       </div>
-      ${alerts.length > 0 && html`<div class="notice" role="alert">
-        ${alerts.map((a) => html`<div>
-          <strong>${a.severity === "critical" ? "Critical" : "Warning"}</strong>
-          ${" "}${a.application_id
-            ? html`<a href=${`#/apps/${a.application_id}/overview`}>${a.subject}</a>`
-            : a.subject}
-        </div>`)}
-      </div>`}
       ${showAdd && user && html`<div class="form-wrap"><${NewAppForm} servers=${servers} onCreated=${created} /></div>`}
       ${error
         ? html`<p class="muted">Could not load applications: ${error}</p>

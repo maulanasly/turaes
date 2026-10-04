@@ -2,7 +2,7 @@
 import { render } from "preact";
 import { useEffect, useState, useCallback } from "preact/hooks";
 import { html } from "./lib/html.js";
-import { api, setOrg } from "./lib/api.js";
+import { api, setOrg, getOrg, oapi } from "./lib/api.js";
 import { toast } from "./lib/toast.js";
 import { useRoute, pathFor } from "./lib/router.js";
 import { Toasts } from "./components/Toasts.js";
@@ -46,8 +46,12 @@ function Shell() {
   const route = useRoute();
   const [user, setUser] = useState(undefined);
   const [servers, setServers] = useState([]);
+  const [alerts, setAlerts] = useState([]);
   const [health, setHealth] = useState(null);
   const [theme, toggleTheme] = useTheme();
+  // Active org lives in Shell state so a switch remounts the org-scoped views
+  // (via `key`) instead of a full page reload.
+  const [org, setOrgState] = useState(() => getOrg() || "default");
 
   // Screen-reader and tab users learn where they are on every navigation.
   useEffect(() => {
@@ -66,7 +70,7 @@ function Shell() {
         const pick = orgs.find((o) => o.slug === stored)
           || orgs.find((o) => o.slug === "default")
           || orgs[0];
-        if (pick) setOrg(pick.slug);
+        if (pick) { setOrg(pick.slug); setOrgState(pick.slug); }
       } catch (e) {}
     } catch { setUser(null); }
   }, []);
@@ -76,18 +80,28 @@ function Shell() {
   const loadHealth = useCallback(async () => {
     try { setHealth(await api("/health")); } catch { setHealth(null); }
   }, []);
+  const loadAlerts = useCallback(async () => {
+    try { const r = await oapi("/alerts?status=firing&limit=10"); setAlerts(r.alerts || []); } catch { setAlerts([]); }
+  }, []);
 
   useEffect(() => { loadUser(); }, [loadUser]);
 
-  // Only poll once authenticated.
+  // Only poll once authenticated. Alerts are org-scoped, so refetch when the
+  // active org changes.
   useEffect(() => {
     if (!user) return undefined;
-    loadServers(); loadHealth();
+    loadServers(); loadHealth(); loadAlerts();
     const t = setInterval(() => {
-      if (!document.hidden) { loadServers(); loadHealth(); }
+      if (!document.hidden) { loadServers(); loadHealth(); loadAlerts(); }
     }, 30000);
     return () => clearInterval(t);
-  }, [user, loadServers, loadHealth]);
+  }, [user, org, loadServers, loadHealth, loadAlerts]);
+
+  const changeOrg = useCallback((slug) => {
+    try { localStorage.setItem("turaes-org", slug); } catch (e) {}
+    setOrg(slug);
+    setOrgState(slug);
+  }, []);
 
   // Remember the intended route across a full-page sign-in redirect.
   useEffect(() => {
@@ -144,12 +158,21 @@ function Shell() {
     </header>
 
     <main>
-      ${route.view === "apps" && html`<${AppsView} user=${user} servers=${servers} />`}
-      ${route.view === "app" && html`<${AppDetailView} id=${route.id} tab=${route.tab} range=${route.range} user=${user} servers=${servers} />`}
-      ${route.view === "servers" && html`<${ServersView} user=${user} onChanged=${loadServers} />`}
-      ${route.view === "server" && html`<${ServerDetailView} id=${route.id} />`}
-      ${route.view === "tokens" && html`<${TokensView} user=${user} />`}
-      ${route.view === "org" && html`<${OrgView} user=${user} />`}
+      ${alerts.length > 0 && html`<section class="panel notice" role="alert">
+        <div class="panel-head"><strong>Firing alerts</strong></div>
+        ${alerts.map((a) => html`<div>
+          <strong>${a.severity === "critical" ? "Critical" : "Warning"}</strong>
+          ${" "}${a.application_id
+            ? html`<a href=${`#/apps/${a.application_id}/overview`}>${a.subject}</a>`
+            : a.subject}
+        </div>`)}
+      </section>`}
+      ${route.view === "apps" && html`<${AppsView} key=${org} user=${user} servers=${servers} />`}
+      ${route.view === "app" && html`<${AppDetailView} key=${org} id=${route.id} tab=${route.tab} range=${route.range} user=${user} servers=${servers} />`}
+      ${route.view === "servers" && html`<${ServersView} key=${org} user=${user} onChanged=${loadServers} />`}
+      ${route.view === "server" && html`<${ServerDetailView} key=${org} id=${route.id} />`}
+      ${route.view === "tokens" && html`<${TokensView} key=${org} user=${user} />`}
+      ${route.view === "org" && html`<${OrgView} key=${org} user=${user} onOrgChange=${changeOrg} />`}
       ${route.view === "notfound" && html`<section class="panel">
         <h1>Not found</h1>
         <p class="muted">No view matches <span class="mono">${route.path || ""}</span>.</p>
