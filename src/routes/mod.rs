@@ -1,6 +1,7 @@
 //! HTTP route modules.
 
 pub mod agent;
+pub mod alerts;
 pub mod apps;
 pub mod artifacts;
 pub mod audit;

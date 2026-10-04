@@ -71,6 +71,7 @@ function NewAppForm({ servers, onCreated }) {
 
 export function AppsView({ user, servers }) {
   const [apps, setApps] = useState(null);
+  const [alerts, setAlerts] = useState([]);
   const [showAdd, setShowAdd] = useState(false);
   const [q, setQ] = useState("");
   const [sortKey, setSortKey] = useState("name");
@@ -83,6 +84,10 @@ export function AppsView({ user, servers }) {
       if (e.status === 401) setApps([]);
       else toast.error(e.message);
     }
+    try {
+      const a = await oapi("/alerts?status=firing&limit=10");
+      setAlerts(a.alerts || []);
+    } catch { /* alerts are advisory; never block the list */ }
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -112,6 +117,14 @@ export function AppsView({ user, servers }) {
           </button>`}
         </div>
       </div>
+      ${alerts.length > 0 && html`<div class="notice" role="alert">
+        ${alerts.map((a) => html`<div>
+          <strong>${a.severity === "critical" ? "Critical" : "Warning"}</strong>
+          ${" "}${a.application_id
+            ? html`<a href=${`#/apps/${a.application_id}/overview`}>${a.subject}</a>`
+            : a.subject}
+        </div>`)}
+      </div>`}
       ${showAdd && user && html`<div class="form-wrap"><${NewAppForm} servers=${servers} onCreated=${load} /></div>`}
       ${apps === null
         ? html`<${Skeleton} lines={4} height=${64} />`

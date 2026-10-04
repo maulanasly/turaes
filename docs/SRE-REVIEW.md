@@ -54,6 +54,8 @@ systemd services on the same host. Multi-node is built but dormant
 
 ## Reliability lens
 
-Availability rests on `Restart=always` + one node. MTTD ≈ ∞ (no alerts);
-MTTR is manual with no backups/rollback. Adequate for a single-operator
-platform; not for an availability target until the backlog above lands.
+Availability rests on `Restart=always` + one node. MTTD is now one monitor
+interval for unhealthy apps, failed deploys and stale backups (alert rules +
+optional webhook); MTTR is manual with snapshot restore + rollback. Adequate
+for a single-operator platform; not for an availability target until the
+backlog above lands.

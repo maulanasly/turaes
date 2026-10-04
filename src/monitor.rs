@@ -77,6 +77,9 @@ async fn tick(state: &AppState, memo: &mut HashMap<String, AppMemo>) -> turaes_c
     memo.retain(|id, _| alive.contains(id.as_str()));
 
     cleanup(state).await?;
+
+    // Alert rules run last: they read the statuses this tick just wrote.
+    crate::alerts::evaluate(state).await;
     Ok(())
 }
 

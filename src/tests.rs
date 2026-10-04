@@ -48,6 +48,14 @@ interval_secs = 15
 retention_days = 30
 visitor_skip_paths = ["/metrics"]
 
+[alerts]
+webhook_url = ""
+backup_stale_hours = 48
+
+[backup]
+dir = "{base}/backups"
+retain = 3
+
 [runtime]
 driver = "proc"
 unit_dir = "{base}/units"
@@ -2165,4 +2173,208 @@ async fn artifact_gc_keeps_referenced_blobs() {
         .await
         .unwrap();
     assert_eq!(n, 1);
+}
+
+#[tokio::test]
+async fn alerts_fire_and_resolve_for_unhealthy_app() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    sqlx::query(
+        "INSERT INTO applications (id, name, binary_path, port, status) \
+         VALUES ('al1', 'alertapp', '/bin/true', 9700, 'unhealthy')",
+    )
+    .execute(&state.pool)
+    .await
+    .unwrap();
+
+    crate::alerts::evaluate(&state).await;
+    let body = body_json(
+        app::build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/orgs/default/alerts")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    let rows = body["alerts"].as_array().unwrap();
+    let unl = rows.iter().find(|r| r["kind"] == "app.unhealthy").unwrap();
+    assert_eq!(unl["subject"], "alertapp is unhealthy");
+    assert!(unl["notified_at"].is_null());
+
+    // Evaluation is idempotent: no duplicate firing rows.
+    crate::alerts::evaluate(&state).await;
+    let n: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM alerts WHERE kind = 'app.unhealthy' AND status = 'firing'",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    assert_eq!(n, 1);
+
+    // Recovery resolves; history is queryable.
+    sqlx::query("UPDATE applications SET status = 'running' WHERE id = 'al1'")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    crate::alerts::evaluate(&state).await;
+    let router = app::build_router(state.clone());
+    let body = body_json(
+        router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/orgs/default/alerts?status=resolved")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(body["alerts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["kind"] == "app.unhealthy"));
+}
+
+#[tokio::test]
+async fn alerts_fire_for_failed_deploy_until_superseded() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    sqlx::query(
+        "INSERT INTO applications (id, name, binary_path, port, status) \
+         VALUES ('al2', 'failapp', '/bin/true', 9701, 'failed')",
+    )
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO deployments (id, application_id, status, finished_at) \
+         VALUES ('fd1', 'al2', 'failed', datetime('now'))",
+    )
+    .execute(&state.pool)
+    .await
+    .unwrap();
+
+    crate::alerts::evaluate(&state).await;
+    let n: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM alerts WHERE kind = 'deploy.failed' AND status = 'firing'",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    assert_eq!(n, 1);
+
+    // A newer success resolves it.
+    sqlx::query(
+        "INSERT INTO deployments (id, application_id, status, finished_at) \
+         VALUES ('ok1', 'al2', 'running', datetime('now'))",
+    )
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    crate::alerts::evaluate(&state).await;
+    let n: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM alerts WHERE kind = 'deploy.failed' AND status = 'firing'",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    assert_eq!(n, 0);
+}
+
+#[tokio::test]
+async fn alerts_backup_stale_resolves_on_fresh_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+
+    // Empty backup dir: platform alert fires (visible to org admins).
+    crate::alerts::evaluate(&state).await;
+    let router = app::build_router(state.clone());
+    let body = body_json(
+        router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/orgs/default/alerts")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    let stale = body["alerts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["kind"] == "backup.stale")
+        .unwrap()
+        .clone();
+    assert_eq!(stale["severity"], "critical");
+    assert!(stale["org_id"].is_null());
+
+    // A fresh snapshot resolves it.
+    let backup_dir = dir.path().join("backups");
+    std::fs::create_dir_all(&backup_dir).unwrap();
+    std::fs::write(backup_dir.join("turaes-test.db"), b"fake").unwrap();
+    crate::alerts::evaluate(&state).await;
+    let n: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM alerts WHERE kind = 'backup.stale' AND status = 'firing'",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    assert_eq!(n, 0);
+
+    // Manual resolve of a still-firing alert works and is audited.
+    sqlx::query(
+        "INSERT INTO applications (id, name, binary_path, port, status) \
+         VALUES ('al3', 'ackapp', '/bin/true', 9702, 'unhealthy')",
+    )
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    crate::alerts::evaluate(&state).await;
+    let id: String = sqlx::query_scalar(
+        "SELECT id FROM alerts WHERE kind = 'app.unhealthy' AND status = 'firing'",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    let router = app::build_router(state.clone());
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/default/alerts/{id}/resolve"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let n: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM audit_log WHERE action = 'alert.resolve'")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(n, 1);
+
+    // Resolving twice is a 404 (nothing firing under that id).
+    let router = app::build_router(state.clone());
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/default/alerts/{id}/resolve"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
