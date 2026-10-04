@@ -333,12 +333,14 @@ pub async fn list(
     State(state): State<AppState>,
     Extension(user): Extension<CurrentUser>,
     Path(org): Path<String>,
+    Query(q): Query<super::LimitQuery>,
 ) -> Result<Json<serde_json::Value>> {
     let org_id = authz::authorize_org(&state, &user, &org, Role::Viewer).await?;
     let apps = sqlx::query_as::<_, Application>(
-        "SELECT * FROM applications WHERE org_id = ? ORDER BY created_at DESC",
+        "SELECT * FROM applications WHERE org_id = ? ORDER BY created_at DESC LIMIT ?",
     )
     .bind(&org_id)
+    .bind(super::LimitQuery::effective(q.limit))
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(serde_json::json!({ "applications": apps })))

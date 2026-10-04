@@ -1,8 +1,9 @@
 //! The single error type crossing turaes boundaries.
 //!
-//! Every variant maps to a JSON body `{"detail": "..."}` — the same shape
-//! beruang and monthly-logs use. Bad input is 422 (not 400) to stay consistent
-//! across the fleet.
+//! Every variant maps to a JSON body `{"detail": "...", "code": "..."}` — the
+//! same `detail` shape beruang and monthly-logs use, plus a stable
+//! machine-readable code so clients never parse human text. Bad input is 422
+//! (not 400) to stay consistent across the fleet.
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -58,6 +59,22 @@ impl Error {
             }
         }
     }
+
+    /// Stable machine-readable code for the variant. Clients should switch on
+    /// this, never on the human `detail` text.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Error::Config(_) => "config",
+            Error::NotFound(_) => "not_found",
+            Error::Unauthorized(_) => "unauthorized",
+            Error::Forbidden(_) => "forbidden",
+            Error::BadRequest(_) => "bad_request",
+            Error::Conflict(_) => "conflict",
+            Error::Db(_) => "db",
+            Error::Io(_) => "io",
+            Error::Internal(_) => "internal",
+        }
+    }
 }
 
 impl IntoResponse for Error {
@@ -66,6 +83,10 @@ impl IntoResponse for Error {
         if status.is_server_error() {
             tracing::error!(error = %self, "request failed");
         }
-        (status, Json(json!({ "detail": self.to_string() }))).into_response()
+        (
+            status,
+            Json(json!({ "detail": self.to_string(), "code": self.code() })),
+        )
+            .into_response()
     }
 }
