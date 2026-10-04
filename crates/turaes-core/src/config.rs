@@ -53,6 +53,9 @@ pub struct Config {
     pub monitor: MonitorConfig,
     /// Process runtime settings.
     pub runtime: RuntimeConfig,
+    /// Alerting and notification settings.
+    #[serde(default)]
+    pub alerts: AlertsConfig,
     /// SQLite backup settings.
     #[serde(default)]
     pub backup: BackupConfig,
@@ -219,6 +222,31 @@ fn default_slot_offset() -> u16 {
 
 fn default_drain_secs() -> u64 {
     10
+}
+
+/// Alerting and notification settings.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AlertsConfig {
+    /// Webhook URL for firing/resolving alerts (generic JSON; Discord/Slack
+    /// compatible via `text`/`content`). Empty = record only, never dispatch.
+    #[serde(default)]
+    pub webhook_url: String,
+    /// Fire `backup.stale` when no snapshot is newer than this many hours.
+    #[serde(default = "default_backup_stale_hours")]
+    pub backup_stale_hours: u64,
+}
+
+impl Default for AlertsConfig {
+    fn default() -> Self {
+        Self {
+            webhook_url: String::new(),
+            backup_stale_hours: default_backup_stale_hours(),
+        }
+    }
+}
+
+fn default_backup_stale_hours() -> u64 {
+    48
 }
 
 /// SQLite backup settings.
@@ -462,6 +490,12 @@ fn apply_env(cfg: &mut Config) -> Result<()> {
 
     env_str("TURAES_BACKUP_DIR", &mut cfg.backup.dir);
     env_parse("TURAES_BACKUP_RETAIN", &mut cfg.backup.retain);
+
+    env_str("TURAES_ALERT_WEBHOOK_URL", &mut cfg.alerts.webhook_url);
+    env_parse(
+        "TURAES_ALERT_BACKUP_STALE_HOURS",
+        &mut cfg.alerts.backup_stale_hours,
+    );
 
     env_bool("TURAES_GRPC_ENABLED", &mut cfg.grpc.enabled);
     env_str("TURAES_GRPC_HOST", &mut cfg.grpc.host);

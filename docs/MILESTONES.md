@@ -253,6 +253,29 @@ org-scoped.
 
 ---
 
+## O1 — Observability 🔄 (now)
+
+**Goal**: know before users do. Alerting first; metrics and deeper telemetry
+follow.
+
+### Deliverables
+
+- [x] **Alerting**: `alerts` table + monitor rule evaluation (`app.unhealthy`,
+      `deploy.failed`, `backup.stale`), webhook dispatch (fire + resolve),
+      timeline + manual-resolve API, dashboard firing banner.
+- [ ] Platform self-`/metrics` + alerting on it.
+- [ ] Proxy request metrics (RPS/latency/status) per app.
+- [ ] Certificate expiry alerts + renewal UI.
+- [ ] Log persistence + search.
+
+### Exit criteria
+
+- [x] A sustained-unhealthy app and a failed deploy each raise exactly one
+      firing alert; recovery resolves them.
+- [ ] Nothing pages that should not; nothing silent that should page.
+
+---
+
 ## Cross-milestone definition of done
 
 1. `make verify` green.

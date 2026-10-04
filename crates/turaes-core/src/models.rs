@@ -234,6 +234,37 @@ pub struct OrgQuota {
     pub max_domains: i64,
 }
 
+/// A firing or resolved alert from the monitor's rule evaluation.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct Alert {
+    /// UUID.
+    pub id: String,
+    /// Owning organization; `None` for platform-global alerts.
+    pub org_id: Option<String>,
+    /// `warning` or `critical`.
+    pub severity: String,
+    /// Rule name, e.g. `app.unhealthy`.
+    pub kind: String,
+    /// Deduplication key, e.g. `app.unhealthy:{app_id}`.
+    pub key: String,
+    /// Short human summary.
+    pub subject: String,
+    /// Longer context, when any.
+    pub detail: Option<String>,
+    /// `firing` or `resolved`.
+    pub status: String,
+    /// Related application, when any.
+    pub application_id: Option<String>,
+    /// First fired timestamp.
+    pub fired_at: String,
+    /// Resolution timestamp, when resolved.
+    pub resolved_at: Option<String>,
+    /// Last notification dispatch, when any.
+    pub notified_at: Option<String>,
+    /// Creation timestamp.
+    pub created_at: String,
+}
+
 /// A tenant workspace.
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Organization {

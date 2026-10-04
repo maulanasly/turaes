@@ -196,6 +196,21 @@ unlimited apps count toward `max_apps` but not the memory/CPU budgets.
 
 Exceeding a budget on create/update/domain-claim yields `409`.
 
+## Alerts
+
+The monitor evaluates alert rules every tick (unhealthy apps, recent failed
+deploys, stale backups) and notifies a webhook once on fire and once on
+resolve. With no webhook configured, alerts are still recorded for the
+dashboard banner. Deduplication is by key — one firing row per key, ever.
+
+| Method | Path | Role | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/orgs/{org}/alerts?status=firing&limit=50` | viewer | Newest-first timeline (platform alerts included for admins) |
+| `POST` | `/api/v1/orgs/{org}/alerts/{id}/resolve` | developer | Manually resolve (platform alerts need admin) |
+
+Set `TURAES_ALERT_WEBHOOK_URL` to a generic JSON receiver (Discord/Slack
+incoming webhooks both accept the `text`/`content` payload).
+
 Response (`201`):
 
 ```json

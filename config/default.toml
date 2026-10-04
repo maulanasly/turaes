@@ -61,6 +61,14 @@ retention_days = 30
 # Skip counting /metrics, /health and /__dev_version as visits (mirrors tonggeret).
 visitor_skip_paths = ["/metrics", "/health", "/__dev_version"]
 
+[alerts]
+# Webhook URL for firing/resolving alerts (generic JSON body; Discord and
+# Slack incoming webhooks both accept it). Empty = record alerts for the
+# dashboard only, never dispatch.
+webhook_url = ""
+# Fire `backup.stale` when no snapshot is newer than this many hours.
+backup_stale_hours = 48
+
 [backup]
 # Directory for `turaes-*.db` snapshots (a pre-migration snapshot is taken on
 # every boot before migrations run; `turaes backup` takes one on demand).

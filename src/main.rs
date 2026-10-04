@@ -1,6 +1,7 @@
 //! turaes entry point: CLI parsing, tracing, and process bootstrap.
 
 mod agent;
+mod alerts;
 mod app;
 mod audit;
 mod auth;

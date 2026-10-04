@@ -50,6 +50,8 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/deployments/{id}", get(routes::deployments::get))
         .route("/audit", get(routes::audit::list))
+        .route("/alerts", get(routes::alerts::list))
+        .route("/alerts/{id}/resolve", post(routes::alerts::resolve))
         .route("/quota", get(routes::quotas::get).put(routes::quotas::put))
         .route(
             "/tokens",
