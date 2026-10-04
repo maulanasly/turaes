@@ -3,6 +3,7 @@
 mod agent;
 mod alerts;
 mod app;
+mod apply;
 mod audit;
 mod auth;
 mod authz;
@@ -17,11 +18,13 @@ mod monitor;
 mod routes;
 mod secrets;
 mod security;
+mod serve_static;
 mod state;
 
 #[cfg(test)]
 mod tests;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::Parser;
@@ -137,24 +140,37 @@ async fn main() {
             println!("restored {} from {}", dest.display(), file.display());
             println!("start turaes again: systemctl start turaes");
         }
-        Command::Secrets { cmd } => match cmd {
-            cli::SecretsCommand::Reseal => {
-                let pool = db::connect(&cfg.database.url)
-                    .await
-                    .unwrap_or_else(|e| fatal(e));
-                db::migrate(&pool).await.unwrap_or_else(|e| fatal(e));
-                let state = AppState::new(cfg.clone(), pool);
-                let (env_up, env_total, ssh_up, ssh_total) =
-                    secrets::reseal(&state).await.unwrap_or_else(|e| fatal(e));
-                println!("env_vars resealed {env_up}/{env_total}; server keys resealed {ssh_up}/{ssh_total}");
-                if !cfg.auth.secret_previous.is_empty() {
-                    println!(
-                        "rotation staged: verify apps still deploy, \
-                         then unset TURAES_SECRET_PREVIOUS"
-                    );
-                }
-            }
-        },
+        Command::Apply { file, org, dry_run } => {
+            let path = file.unwrap_or_else(|| PathBuf::from("turaes.yaml"));
+            let pool = db::connect(&cfg.database.url)
+                .await
+                .unwrap_or_else(|e| fatal(e));
+            db::migrate(&pool).await.unwrap_or_else(|e| fatal(e));
+            let state = AppState::new(cfg.clone(), pool);
+            let org_id = commands::resolve_org(&state.pool, org.as_deref())
+                .await
+                .unwrap_or_else(|e| fatal(e));
+            let (manifest, base_dir) = apply::load_manifest(&path).unwrap_or_else(|e| fatal(e));
+            let report = apply::apply_manifest(&state, &org_id, &manifest, &base_dir, dry_run)
+                .await
+                .unwrap_or_else(|e| fatal(e));
+            print!("{report}");
+        }
+        Command::Secrets { cmd, org } => {
+            let pool = db::connect(&cfg.database.url)
+                .await
+                .unwrap_or_else(|e| fatal(e));
+            db::migrate(&pool).await.unwrap_or_else(|e| fatal(e));
+            let state = AppState::new(cfg.clone(), pool);
+            commands::run_secrets(&state, cmd, org.as_deref())
+                .await
+                .unwrap_or_else(|e| fatal(e));
+        }
+        Command::ServeStatic { dir, port } => {
+            serve_static::run(dir, port)
+                .await
+                .unwrap_or_else(|e| fatal(e));
+        }
         Command::Gc { dry_run } => {
             let pool = db::connect(&cfg.database.url)
                 .await

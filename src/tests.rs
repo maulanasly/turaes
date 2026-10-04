@@ -2413,8 +2413,12 @@ async fn cli_org_scoping_and_remove() {
         &state,
         AppCommand::Add {
             name: "cliapp".into(),
-            binary: "/bin/true".into(),
-            port: 9800,
+            binary: Some("/bin/true".into()),
+            command: None,
+            workdir: None,
+            publish_dir: None,
+            kind: "service".into(),
+            port: Some(9800),
             domain: None,
             health: "/health".into(),
             metrics: "/metrics".into(),
@@ -2576,4 +2580,443 @@ async fn list_limit_caps_rows() {
     )
     .await;
     assert_eq!(body["applications"].as_array().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn cli_secrets_set_unset_roundtrip() {
+    use crate::cli::SecretsCommand;
+
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    sqlx::query(
+        "INSERT INTO applications (id, name, binary_path, port) \
+         VALUES ('sec1', 'secapp', '/bin/true', 9910)",
+    )
+    .execute(&state.pool)
+    .await
+    .unwrap();
+
+    crate::commands::run_secrets(
+        &state,
+        SecretsCommand::Set {
+            app: "secapp".into(),
+            key: "API_KEY".into(),
+            value: Some("v1".into()),
+        },
+        Some("default"),
+    )
+    .await
+    .unwrap();
+    let sealed: String = sqlx::query_scalar(
+        "SELECT value_enc FROM env_vars WHERE application_id = 'sec1' AND key = 'API_KEY'",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    assert_eq!(state.secrets.open(&sealed).unwrap(), "v1");
+
+    crate::commands::run_secrets(
+        &state,
+        SecretsCommand::Unset {
+            app: "secapp".into(),
+            key: "API_KEY".into(),
+        },
+        Some("default"),
+    )
+    .await
+    .unwrap();
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM env_vars WHERE application_id = 'sec1'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 0);
+
+    // Unsetting again is a clean NotFound, not a silent no-op.
+    let err = crate::commands::run_secrets(
+        &state,
+        SecretsCommand::Unset {
+            app: "secapp".into(),
+            key: "API_KEY".into(),
+        },
+        Some("default"),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.to_string().contains("no secret"));
+}
+
+async fn apply_manifest(
+    state: &AppState,
+    org_id: &str,
+    yaml: &str,
+    base: &std::path::Path,
+    dry_run: bool,
+) -> turaes_core::Result<crate::apply::ApplyReport> {
+    let manifest = turaes_core::manifest::AppManifest::parse(yaml).unwrap();
+    crate::apply::apply_manifest(state, org_id, &manifest, base, dry_run).await
+}
+
+#[tokio::test]
+async fn apply_creates_updates_and_dry_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let yaml = r#"
+name: yamlapp
+binary: /bin/true
+port: 9920
+domain: yaml.example.com
+aliases: [www.yaml.example.com]
+env:
+  LOG_LEVEL: info
+"#;
+
+    // Dry run first: nothing written.
+    let report = apply_manifest(&state, "default", yaml, dir.path(), true)
+        .await
+        .unwrap();
+    assert!(report.created);
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM applications WHERE name = 'yamlapp'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 0);
+
+    // Real apply creates everything.
+    let report = apply_manifest(&state, "default", yaml, dir.path(), false)
+        .await
+        .unwrap();
+    assert!(report.created);
+    let app: turaes_core::models::Application =
+        sqlx::query_as("SELECT * FROM applications WHERE name = 'yamlapp'")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(app.port, 9920);
+    assert_eq!(app.kind, "service");
+    let placements: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM app_servers WHERE application_id = ?")
+            .bind(&app.id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(placements, 1);
+    let health_path: String =
+        sqlx::query_scalar("SELECT path FROM health_checks WHERE application_id = ?")
+            .bind(&app.id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(health_path, "/health");
+    let aliases: i64 = sqlx::query_scalar("SELECT count(*) FROM domains WHERE application_id = ?")
+        .bind(&app.id)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(aliases, 1);
+    let env_val: String = sqlx::query_scalar(
+        "SELECT value_enc FROM env_vars WHERE application_id = ? AND key = 'LOG_LEVEL'",
+    )
+    .bind(&app.id)
+    .fetch_one(&state.pool)
+    .await
+    .map(|sealed: String| state.secrets.open(&sealed).unwrap())
+    .unwrap();
+    assert_eq!(env_val, "info");
+
+    // Re-apply is a no-op.
+    let report = apply_manifest(&state, "default", yaml, dir.path(), false)
+        .await
+        .unwrap();
+    assert!(!report.created && report.changed.is_empty());
+
+    // Port change shows up as a diff and sticks.
+    let yaml2 = yaml.replace("port: 9920", "port: 9921");
+    let report = apply_manifest(&state, "default", &yaml2, dir.path(), false)
+        .await
+        .unwrap();
+    assert!(report.changed.contains(&"port".to_string()));
+    let port: i64 = sqlx::query_scalar("SELECT port FROM applications WHERE name = 'yamlapp'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(port, 9921);
+}
+
+#[tokio::test]
+async fn apply_aborts_on_missing_secret_and_prunes() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let yaml = r#"
+name: secapp
+binary: /bin/true
+port: 9930
+secrets: [DATABASE_URL]
+"#;
+    // First apply aborts on the missing secret — but leaves the shell app so
+    // `secrets set` has something to attach to (retry completes it).
+    let err = apply_manifest(&state, "default", yaml, dir.path(), false)
+        .await
+        .unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("turaes secrets set secapp DATABASE_URL"));
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM applications WHERE name = 'secapp'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 1);
+
+    crate::commands::run_secrets(
+        &state,
+        crate::cli::SecretsCommand::Set {
+            app: "secapp".into(),
+            key: "DATABASE_URL".into(),
+            value: Some("postgres://db".into()),
+        },
+        Some("default"),
+    )
+    .await
+    .unwrap();
+    let report = apply_manifest(&state, "default", yaml, dir.path(), false)
+        .await
+        .unwrap();
+    assert!(!report.created);
+    let stored: String = sqlx::query_scalar(
+        "SELECT value_enc FROM env_vars WHERE key = 'DATABASE_URL' AND application_id = (SELECT id FROM applications WHERE name = 'secapp')",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .map(|sealed: String| state.secrets.open(&sealed).unwrap())
+    .unwrap();
+    assert_eq!(stored, "postgres://db");
+
+    // Prune check: add a stale key + alias outside the file, re-apply, gone.
+    let app_id: String = sqlx::query_scalar("SELECT id FROM applications WHERE name = 'secapp'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO env_vars (id, application_id, key, value_enc) VALUES ('stale', ?, 'OLD_KEY', 'x')")
+        .bind(&app_id)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO domains (id, application_id, domain) VALUES ('stdom', ?, 'stale.example.com')",
+    )
+    .bind(&app_id)
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    let report = apply_manifest(&state, "default", yaml, dir.path(), false)
+        .await
+        .unwrap();
+    assert_eq!(report.pruned_env, 1);
+    assert_eq!(report.pruned_aliases, 1);
+    // ...while the declared secret survives.
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM env_vars WHERE key = 'DATABASE_URL'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 1);
+}
+
+#[tokio::test]
+async fn api_rejects_kind_mismatches() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    // Worker with a port.
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/apps")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"name": "w1", "binary_path": "/bin/sleep", "port": 1, "kind": "worker"})
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Static without publish_dir.
+    let router = test_router(dir.path()).await;
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/apps")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"name": "s1", "port": 9941, "kind": "static"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // binary + command together (/usr/bin/true exists on macOS and Linux).
+    let router = test_router(dir.path()).await;
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/apps")
+                .header("content-type", "application/json")
+                .body(
+                    Body::from(
+                        json!({"name": "c1", "binary_path": "/usr/bin/true", "command": ["/usr/bin/true"], "port": 9942})
+                            .to_string(),
+                    ),
+                )
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn worker_deploys_without_health_gate() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let yaml = r#"
+name: sleeper
+kind: worker
+command: [/bin/sleep, "60"]
+"#;
+    let report = apply_manifest(&state, "default", yaml, dir.path(), false)
+        .await
+        .unwrap();
+    assert!(report.created);
+    let app: turaes_core::models::Application =
+        sqlx::query_as("SELECT * FROM applications WHERE name = 'sleeper'")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(app.port, 0);
+
+    // Deploy: no health gate, slot cut over on clean start.
+    let (dep_id, out) = crate::routes::apps::deploy_app(&state, &app).await.unwrap();
+    assert_eq!(out.state, turaes_runtime::RunState::Running);
+    let active: Option<i64> =
+        sqlx::query_scalar("SELECT active_port FROM applications WHERE name = 'sleeper'")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert!(active.is_some());
+
+    // Cleanup the stray sleeper.
+    let app: turaes_core::models::Application =
+        sqlx::query_as("SELECT * FROM applications WHERE name = 'sleeper'")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    let rt = crate::routes::apps::runtime_for(&state.cfg, "proc");
+    let spec = crate::routes::apps::active_spec(&state.cfg, &app);
+    rt.stop(&spec).await.unwrap();
+    let _ = dep_id;
+}
+
+#[tokio::test]
+async fn command_service_deploys_and_serves() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    // A $PORT-honoring HTTP server as an argv command (no shell involved).
+    let script = dir.path().join("srv.py");
+    std::fs::write(
+        &script,
+        "import http.server, os\nclass H(http.server.BaseHTTPRequestHandler):\n def do_GET(self):\n  self.send_response(200);self.end_headers();self.wfile.write(b'ok')\n def log_message(self, *a): pass\nhttp.server.HTTPServer(('127.0.0.1', int(os.environ['PORT'])), H).serve_forever()\n",
+    )
+    .unwrap();
+    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".into());
+    let yaml = format!(
+        "name: pysvc\ncommand: [{python:?}, {}]\nport: 9950\n",
+        script.to_string_lossy()
+    );
+    let report = apply_manifest(&state, "default", &yaml, dir.path(), false)
+        .await
+        .unwrap();
+    assert!(report.created);
+
+    let app: turaes_core::models::Application =
+        sqlx::query_as("SELECT * FROM applications WHERE name = 'pysvc'")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(app.binary_path, python);
+    let (_dep_id, out) = crate::routes::apps::deploy_app(&state, &app).await.unwrap();
+    assert_eq!(out.state, turaes_runtime::RunState::Running);
+
+    // stop it again so the test process tree stays clean.
+    let app: turaes_core::models::Application =
+        sqlx::query_as("SELECT * FROM applications WHERE name = 'pysvc'")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    let rt = crate::routes::apps::runtime_for(&state.cfg, "proc");
+    let spec = crate::routes::apps::active_spec(&state.cfg, &app);
+    rt.stop(&spec).await.unwrap();
+}
+
+#[tokio::test]
+async fn static_apply_syncs_on_proc_apply() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let pubdir = dir.path().join("dist");
+    std::fs::create_dir(&pubdir).unwrap();
+    std::fs::write(pubdir.join("index.html"), "<h1>static</h1>").unwrap();
+    let yaml = format!(
+        "name: staticsite\nkind: static\nport: 9960\npublish_dir: {}\ndomain: static.example.com\n",
+        pubdir.to_string_lossy()
+    );
+    let report = apply_manifest(&state, "default", &yaml, dir.path(), false)
+        .await
+        .unwrap();
+    assert!(report.created);
+    let app: turaes_core::models::Application =
+        sqlx::query_as("SELECT * FROM applications WHERE name = 'staticsite'")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(app.kind, "static");
+
+    // Applying the spec syncs the slot public dir (no process spawned).
+    let rt = crate::routes::apps::runtime_for(&state.cfg, "proc");
+    let spec =
+        crate::routes::apps::spec_for_slot(&state.cfg, &app, Some(turaes_runtime::Slot::A), 9960);
+    rt.apply(&spec, &std::collections::BTreeMap::new())
+        .await
+        .unwrap();
+    let served = std::fs::read_to_string(format!("{}/index.html", spec.public_dir())).unwrap();
+    assert_eq!(served, "<h1>static</h1>");
+}
+
+#[tokio::test]
+async fn static_rollback_needs_a_previous_slot() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let pubdir = dir.path().join("dist");
+    std::fs::create_dir(&pubdir).unwrap();
+    let yaml = format!(
+        "name: rbstatic\nkind: static\nport: 9970\npublish_dir: {}\n",
+        pubdir.to_string_lossy()
+    );
+    apply_manifest(&state, "default", &yaml, dir.path(), false)
+        .await
+        .unwrap();
+    let app: turaes_core::models::Application =
+        sqlx::query_as("SELECT * FROM applications WHERE name = 'rbstatic'")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+
+    // Never deployed: nothing to cut back to.
+    let err = crate::routes::apps::rollback_static(&state, &app)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("never deployed"));
 }

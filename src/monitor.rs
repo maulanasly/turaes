@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use turaes_core::models::Application;
 use turaes_monitor::{health, scrape, stats};
+use turaes_runtime::RunState;
 
 use crate::routes::apps::{active_spec, runtime_for};
 use crate::state::AppState;
@@ -105,11 +106,46 @@ async fn watch_app(
         };
     }
 
-    probe_health(state, app, memo).await?;
-    scrape_metrics(state, app, &base, memo).await;
+    if app.kind == "worker" {
+        // Workers expose no HTTP surface: mirror supervisor state instead of
+        // probing. A dead worker with auto_restart is restarted (systemd
+        // already does this itself; the proc supervisor needs the nudge).
+        watch_worker(state, app).await?;
+    } else {
+        probe_health(state, app, memo).await?;
+        scrape_metrics(state, app, &base, memo).await;
+    }
     sample_resources(state, app, memo, elapsed).await;
     flush_bucket(state, app, memo).await;
 
+    Ok(())
+}
+
+/// Mirror a worker's supervisor state into the database.
+async fn watch_worker(state: &AppState, app: &Application) -> turaes_core::Result<()> {
+    use crate::routes::apps::{active_spec, runtime_for};
+
+    let runtime = runtime_for(&state.cfg, &app.runtime);
+    let spec = active_spec(&state.cfg, app);
+    let observed = runtime.status(&spec).await.unwrap_or(RunState::Unknown);
+    let desired = observed.as_status();
+    if app.status != desired && app.status != "stopped" {
+        set_status(state, &app.id, desired).await?;
+        record_event(
+            state,
+            Some(app.id.as_str()),
+            "worker",
+            &format!("{} is {}", app.name, desired),
+        )
+        .await?;
+    }
+    // Never touch a manually stopped (or never-started) worker: no restart
+    // spam against missing units, no status churn.
+    if observed != RunState::Running && app.auto_restart && app.status != "stopped" {
+        if let Err(e) = runtime.restart(&spec).await {
+            tracing::warn!(app = %app.name, error = %e, "worker auto-restart failed");
+        }
+    }
     Ok(())
 }
 
@@ -391,6 +427,10 @@ mod tests {
             org_id: "default".into(),
             mem_limit_mb: None,
             cpu_quota_pct: None,
+            kind: "service".into(),
+            command: None,
+            workdir: None,
+            publish_dir: None,
             runtime: "systemd".into(),
             auto_restart: true,
             status: "running".into(),

@@ -50,7 +50,7 @@
 | `turaes-runtime` | `Runtime`/`AppSpec`/`RunState`, `SystemdRuntime`, `ProcRuntime`, `Deployer` + artifact hashing |
 | `turaes-proxy` | `Router`/`RouteTable` (ArcSwap), `CertStore` (certbot layout), Pingora data plane (feature-gated) |
 | `turaes-monitor` | Prometheus text parser, visitor folding, HTTP health `Threshold`, cgroup/`/proc` stats, rollup bucketing |
-| `src/` | CLI (`serve`/`migrate`/`doctor`), Axum router, OAuth, handlers, embedded static UI |
+| `src/` | CLI (`serve`/`migrate`/`doctor`/`backup`/`restore`/`secrets`/`gc`/`app`/`server`/`apply`/`serve-static`, …), Axum router, OAuth, handlers, embedded static UI |
 
 ## Data flow
 
@@ -71,6 +71,14 @@ POST /api/v1/apps/{id}/deploy
 
 `AppSpec` is the only contract between the control plane and the runtime. A
 deploy is idempotent: re-running it re-installs and restarts.
+
+Application kinds share the slot machinery with kind-specific steps:
+`service` (binary or argv, health-gated), `static` (publish dir synced per
+slot, served by `turaes serve-static`, always-200 gate), `worker` (no port,
+no gate, no route; supervision + restart only). Command apps execute argv in
+place (nothing is installed or stored; history records a `cmd:` identity
+hash); static history records a `dir:` content hash and rolls back by cutting
+to the surviving slot.
 
 ### Monitoring (the tonggeret path)
 
@@ -107,7 +115,10 @@ atomically after each deploy/domain change. Unknown hosts return 404.
 
 ## Docker-less runtime design
 
-`Runtime` is deliberately small so both supervisors behave identically:
+`Runtime` is deliberately small so both supervisors behave identically.
+Nothing in it is Rust-specific: any executable honoring `$PORT` and a 2xx
+health path deploys — Go/Zig/C binaries, `deno compile` output, shebang
+scripts, or explicit interpreter argv (`command`, no shell ever).
 
 ```rust
 #[async_trait]

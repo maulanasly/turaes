@@ -75,7 +75,15 @@ pub fn tail(body: &str, n: usize) -> String {
 impl Runtime for ProcRuntime {
     async fn apply(&self, spec: &AppSpec, env: &BTreeMap<String, String>) -> Result<()> {
         tokio::fs::create_dir_all(&spec.state_dir).await?;
-        crate::runtime::install_binary(&spec.binary_path, &spec.installed_path).await?;
+        if spec.kind == "static" {
+            let src = spec
+                .publish_dir
+                .as_deref()
+                .ok_or_else(|| Error::Internal("static app spec is missing publish_dir".into()))?;
+            crate::runtime::sync_dir(src, &spec.public_dir()).await?;
+        } else if spec.command.is_none() {
+            crate::runtime::install_binary(&spec.binary_path, &spec.installed_path).await?;
+        }
         if let Some(env_file) = &spec.env_file {
             if let Some(parent) = Path::new(env_file).parent() {
                 tokio::fs::create_dir_all(parent).await?;
@@ -108,20 +116,46 @@ impl Runtime for ProcRuntime {
             .open(self.log_path(spec))?;
         let stderr = log.try_clone()?;
 
-        let mut cmd = Command::new(&spec.installed_path);
-        if let Some(args) = &spec.args {
-            cmd.args(args.split_whitespace());
-        }
+        // Resolve the program: the static file server, an explicit argv, or
+        // the installed binary plus flat args. No shell is ever involved.
+        let (program, argv): (String, Vec<String>) = if spec.kind == "static" {
+            let server_bin = std::env::current_exe()
+                .map(|p| p.to_string_lossy().into_owned())
+                .map_err(|e| Error::Internal(format!("cannot locate turaes binary: {e}")))?;
+            (
+                server_bin,
+                vec![
+                    "serve-static".into(),
+                    "--dir".into(),
+                    spec.public_dir(),
+                    "--port".into(),
+                    spec.port.to_string(),
+                ],
+            )
+        } else if let Some(command) = &spec.command {
+            let (first, rest) = command
+                .split_first()
+                .ok_or_else(|| Error::Internal("command argv must not be empty".into()))?;
+            (first.clone(), rest.to_vec())
+        } else {
+            let mut argv = Vec::new();
+            if let Some(args) = &spec.args {
+                argv.extend(args.split_whitespace().map(str::to_string));
+            }
+            (spec.installed_path.clone(), argv)
+        };
+        let mut cmd = Command::new(&program);
+        cmd.args(&argv);
         cmd.envs(&env)
             .env("PORT", spec.port.to_string())
-            .current_dir(&spec.state_dir)
+            .current_dir(spec.working_dir())
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(stderr))
             .stdin(Stdio::null());
 
-        let child = cmd.spawn().map_err(|e| {
-            Error::Internal(format!("failed to spawn {}: {e}", spec.installed_path))
-        })?;
+        let child = cmd
+            .spawn()
+            .map_err(|e| Error::Internal(format!("failed to spawn {program}: {e}")))?;
         let pid = child.id().unwrap_or(0);
         tokio::fs::write(self.pid_path(spec), pid.to_string()).await?;
         Ok(())
@@ -208,6 +242,10 @@ mod tests {
             user: None,
             mem_limit_mb: None,
             cpu_quota_pct: None,
+            kind: "service".into(),
+            command: None,
+            workdir: None,
+            publish_dir: None,
         };
         assert!(rt.pid_path(&spec).ends_with("demo.pid"));
         assert!(rt.log_path(&spec).ends_with("demo.log"));

@@ -7,6 +7,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::{Extension, Json};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use turaes_core::config::Config;
 use turaes_core::db::Pool;
@@ -30,12 +31,22 @@ pub struct CreateApp {
     pub name: String,
     /// Optional description.
     pub description: Option<String>,
-    /// Absolute path to the prebuilt binary.
-    pub binary_path: String,
+    /// Absolute path to the prebuilt binary (required unless `command` is set,
+    /// in which case the server uses `command[0]`; ignored for `static`).
+    pub binary_path: Option<String>,
     /// Optional arguments.
     pub args: Option<String>,
-    /// Loopback port.
-    pub port: u16,
+    /// Exec argv for interpreted apps (mutually exclusive with meaningful
+    /// `args`; the binary runs `command`, not `binary_path + args`).
+    pub command: Option<Vec<String>>,
+    /// Working directory override.
+    pub workdir: Option<String>,
+    /// Source directory synced for `static` apps.
+    pub publish_dir: Option<String>,
+    /// `service` (default), `static`, or `worker`.
+    pub kind: Option<String>,
+    /// Loopback port (`service`/`static` require one; `worker` passes 0/omit).
+    pub port: Option<u16>,
     /// Health path (defaults to `/health`).
     pub health_path: Option<String>,
     /// Metrics path (defaults to `/metrics`).
@@ -94,6 +105,12 @@ pub struct UpdateApp {
     pub mem_limit_mb: Option<Option<i64>>,
     /// CPU ceiling in percent of one core (systemd only). Same tri-state.
     pub cpu_quota_pct: Option<Option<i64>>,
+    /// Exec argv for interpreted apps (absent keeps, `null` clears).
+    pub command: Option<Option<Vec<String>>>,
+    /// Working directory override (absent keeps, `null` clears).
+    pub workdir: Option<Option<String>>,
+    /// Source directory synced for `static` apps (absent keeps, `null` clears).
+    pub publish_dir: Option<Option<String>>,
 }
 
 /// Body for rollback (optional explicit target).
@@ -171,7 +188,8 @@ pub(crate) async fn ensure_port_free(
     let paired = port + offset;
     let clash: Option<String> = sqlx::query_scalar(
         "SELECT name FROM applications \
-         WHERE id != ? AND (port = ? OR port = ? OR port + ? = ? OR port + ? = ?) \
+         WHERE kind != 'worker' AND id != ? \
+         AND (port = ? OR port = ? OR port + ? = ? OR port + ? = ?) \
          LIMIT 1",
     )
     .bind(except_id)
@@ -224,6 +242,13 @@ pub fn spec_for_slot(cfg: &Config, app: &Application, slot: Option<Slot>, port: 
         user: None,
         mem_limit_mb: app.mem_limit_mb.map(|m| m as u64),
         cpu_quota_pct: app.cpu_quota_pct.map(|c| c as u32),
+        kind: app.kind.clone(),
+        command: app
+            .command
+            .as_deref()
+            .and_then(|c| serde_json::from_str(c).ok()),
+        workdir: app.workdir.clone(),
+        publish_dir: app.publish_dir.clone(),
     }
 }
 
@@ -238,11 +263,13 @@ pub async fn refresh_proxy_routes(state: &AppState) -> Result<()> {
 
     // Placements (replicas) joined with their server address.
     // Route to the active blue/green slot port (falls back to the base port).
+    // Workers bind nothing and are never routed.
     let placements: Vec<(String, String, i64)> = sqlx::query_as(
         "SELECT p.application_id, s.address, COALESCE(a.active_port, p.port) AS port \
          FROM app_servers p \
          JOIN servers s ON s.id = p.server_id \
-         JOIN applications a ON a.id = p.application_id",
+         JOIN applications a ON a.id = p.application_id \
+         WHERE a.kind != 'worker'",
     )
     .fetch_all(&state.pool)
     .await?;
@@ -346,6 +373,108 @@ pub async fn list(
     Ok(Json(serde_json::json!({ "applications": apps })))
 }
 
+/// Validate kind/shape fields, mirroring `AppManifest::validate`. Returns the
+/// effective (db_port, binary_path): workers bind nothing (port 0), command
+/// apps execute argv[0] (which becomes their binary path), static apps sync
+/// their publish dir.
+pub(crate) async fn resolve_kind_shape(input: &CreateApp) -> Result<(String, i64, String)> {
+    let kind = input.kind.clone().unwrap_or_else(|| "service".into());
+    if !matches!(kind.as_str(), "service" | "static" | "worker") {
+        return Err(Error::BadRequest(
+            "kind must be 'service', 'static' or 'worker'".into(),
+        ));
+    }
+    if input.args.is_some() && input.command.is_some() {
+        return Err(Error::BadRequest(
+            "'args' and 'command' are mutually exclusive (argv carries its own arguments)".into(),
+        ));
+    }
+    if input
+        .binary_path
+        .as_deref()
+        .is_some_and(|b| !b.trim().is_empty())
+        && input.command.is_some()
+    {
+        return Err(Error::BadRequest(
+            "'binary_path' and 'command' are mutually exclusive (argv[0] is the binary)".into(),
+        ));
+    }
+    if let Some(argv) = &input.command {
+        if argv.is_empty() || argv.iter().any(|a| a.trim().is_empty()) {
+            return Err(Error::BadRequest(
+                "'command' must be a non-empty argv array".into(),
+            ));
+        }
+        if argv[0].contains(' ') {
+            return Err(Error::BadRequest(
+                "command[0] must be a binary path without spaces (no shell)".into(),
+            ));
+        }
+        if tokio::fs::metadata(&argv[0]).await.is_err() {
+            return Err(Error::BadRequest(format!(
+                "command binary '{}' does not exist or is not readable",
+                argv[0]
+            )));
+        }
+    }
+    let binary_path = if let Some(argv) = &input.command {
+        argv[0].clone()
+    } else if kind == "static" {
+        match input.publish_dir.as_deref() {
+            Some(d) if !d.trim().is_empty() => d.to_string(),
+            _ => {
+                return Err(Error::BadRequest("kind: static needs 'publish_dir'".into()));
+            }
+        }
+    } else {
+        match input.binary_path.as_deref() {
+            Some(b) if !b.trim().is_empty() => b.to_string(),
+            _ => return Err(Error::BadRequest("binary_path is required".into())),
+        }
+    };
+    if kind == "static" && (input.binary_path.is_some() || input.command.is_some()) {
+        return Err(Error::BadRequest(
+            "kind: static takes 'publish_dir', not 'binary_path'/'command'".into(),
+        ));
+    }
+    if kind != "static" && input.publish_dir.is_some() {
+        return Err(Error::BadRequest(
+            "'publish_dir' is only valid for kind: static".into(),
+        ));
+    }
+    let port = match kind.as_str() {
+        "worker" => match input.port {
+            None | Some(0) => 0,
+            Some(_) => {
+                return Err(Error::BadRequest(
+                    "kind: worker takes no port (pass 0 or omit it)".into(),
+                ));
+            }
+        },
+        _ => match input.port {
+            Some(p) if p != 0 => p as i64,
+            _ => {
+                return Err(Error::BadRequest(
+                    "kind: service/static needs 'port'".into(),
+                ))
+            }
+        },
+    };
+    if kind == "worker" {
+        if input.domain.as_ref().is_some_and(|d| !d.is_empty()) {
+            return Err(Error::BadRequest(
+                "kind: worker takes no 'domain' (nothing is routed)".into(),
+            ));
+        }
+        if input.metrics_path.is_some() {
+            return Err(Error::BadRequest(
+                "kind: worker takes no 'metrics_path' (nothing is scraped)".into(),
+            ));
+        }
+    }
+    Ok((kind, port, binary_path))
+}
+
 /// `POST /api/v1/orgs/{org}/apps`
 pub async fn create(
     State(state): State<AppState>,
@@ -355,9 +484,7 @@ pub async fn create(
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
     let org_id = authz::authorize_org(&state, &user, &org, Role::Admin).await?;
     validate_name(&input.name)?;
-    if input.binary_path.trim().is_empty() {
-        return Err(Error::BadRequest("binary_path is required".into()));
-    }
+    let (kind, port, binary_path) = resolve_kind_shape(&input).await?;
     let id = uuid::Uuid::new_v4().to_string();
     let runtime = input
         .runtime
@@ -376,13 +503,9 @@ pub async fn create(
     if server_exists == 0 {
         return Err(Error::BadRequest(format!("unknown server '{server_id}'")));
     }
-    ensure_port_free(
-        &state.pool,
-        input.port as i64,
-        state.cfg.runtime.slot_offset as i64,
-        "",
-    )
-    .await?;
+    if port != 0 {
+        ensure_port_free(&state.pool, port, state.cfg.runtime.slot_offset as i64, "").await?;
+    }
     validate_limits(input.mem_limit_mb, input.cpu_quota_pct, &runtime)?;
     quotas::ensure_capacity(
         &state.pool,
@@ -395,28 +518,42 @@ pub async fn create(
     if input.domain.as_ref().is_some_and(|d| !d.is_empty()) {
         quotas::ensure_domain_capacity(&state.pool, &org_id).await?;
     }
+    let command_json = input
+        .command
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| Error::BadRequest(format!("invalid command argv: {e}")))?;
     let inserted = sqlx::query_as::<_, Application>(
         "INSERT INTO applications \
          (id, org_id, name, description, binary_path, args, port, health_path, metrics_path, domain, \
-          server_id, runtime, auto_restart, mem_limit_mb, cpu_quota_pct, status, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', datetime('now'), datetime('now')) \
+          server_id, runtime, auto_restart, mem_limit_mb, cpu_quota_pct, kind, command, workdir, \
+          publish_dir, status, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stopped', datetime('now'), datetime('now')) \
          RETURNING *",
     )
     .bind(&id)
     .bind(&org_id)
     .bind(&input.name)
     .bind(&input.description)
-    .bind(&input.binary_path)
+    .bind(&binary_path)
     .bind(&input.args)
-    .bind(input.port as i64)
+    .bind(port)
     .bind(input.health_path.unwrap_or_else(|| "/health".into()))
-    .bind(input.metrics_path.or_else(|| Some("/metrics".into())))
+    .bind(match kind.as_str() {
+        "worker" => None,
+        _ => input.metrics_path.or_else(|| Some("/metrics".into())),
+    })
     .bind(&input.domain)
     .bind(&server_id)
     .bind(&runtime)
     .bind(input.auto_restart.unwrap_or(true) as i64)
     .bind(input.mem_limit_mb)
     .bind(input.cpu_quota_pct)
+    .bind(&kind)
+    .bind(&command_json)
+    .bind(&input.workdir)
+    .bind(&input.publish_dir)
     .fetch_one(&state.pool)
     .await
     .map_err(map_unique_name)?;
@@ -539,7 +676,53 @@ pub async fn deploy(
 /// Stores the current binary in the artifact store first, then deploys from the
 /// stored (content-addressed) copy — so rollback and remote agents can reuse it.
 /// Shared by the HTTP handler and the `turaes app deploy` CLI command.
+/// Identity hash for command apps: `cmd:<sha256(argv JSON)>`. The code lives
+/// wherever argv[0] resolves (venv, host interpreter); the hash names the
+/// config generation, not bytes, so rollback means a fresh restart cutover.
+pub(crate) fn command_identity_hash(app: &Application) -> Result<String> {
+    let argv = app
+        .command
+        .as_deref()
+        .ok_or_else(|| Error::Internal("command app is missing its argv".into()))?;
+    let digest = Sha256::digest(argv.as_bytes());
+    let mut hex = String::with_capacity(64);
+    for b in digest {
+        hex.push_str(&format!("{b:02x}"));
+    }
+    Ok(format!("cmd:{hex}"))
+}
+
+/// What gets installed: a stored file, or an argv identity (command apps
+/// execute in place — argv[0] may be a bare `PATH` name, never stored).
+enum Artifact {
+    File(String),
+    Command(String),
+}
+
 pub async fn deploy_app(state: &AppState, app: &Application) -> Result<(String, DeployOutcome)> {
+    // Static apps sync directories, not files; remote agents only speak files.
+    if app.kind == "static" {
+        if app.server_id != "local" {
+            return Err(Error::BadRequest(format!(
+                "remote deploy of static app '{}' is not implemented yet (agent ships files, not trees)",
+                app.name
+            )));
+        }
+        return deploy_static(state, app).await;
+    }
+
+    // Command apps execute in place; remote agents only speak files.
+    if app.command.is_some() {
+        let hash = command_identity_hash(app)?;
+        if app.server_id == "local" {
+            return deploy_artifact(state, app, Artifact::Command(hash)).await;
+        }
+        return Err(Error::BadRequest(format!(
+            "remote deploy of command app '{}' is not implemented yet (agent transport carries files, not argv)",
+            app.name
+        )));
+    }
+
     let hash = state
         .artifacts
         .put_file(std::path::Path::new(&app.binary_path))
@@ -582,81 +765,113 @@ pub async fn deploy_app(state: &AppState, app: &Application) -> Result<(String, 
     ))
 }
 
-/// Deploy an app from an explicit on-disk artifact `source`, using blue/green
-/// slots: start the inactive slot, health-gate it, then cut the route over and
-/// drain the previous slot. The previous slot is left installed for rollback.
-pub async fn deploy_app_source(
+/// Pick the inactive blue/green slot for the next deploy.
+/// Returns (target slot, target port, previous spec, previous is legacy).
+async fn pick_inactive_slot(
     state: &AppState,
     app: &Application,
-    source: String,
-) -> Result<(String, DeployOutcome)> {
-    let env = load_env(state, &app.id).await?;
+    runtime: &Arc<dyn Runtime>,
+) -> (Slot, i64, Option<AppSpec>, bool) {
     let offset = state.cfg.runtime.slot_offset as i64;
     let port_a = app.port;
     let port_b = app.port + offset;
-
-    // Target the inactive slot; remember the previous slot to drain on success.
-    let runtime = runtime_for(&state.cfg, &app.runtime);
-
-    // (target slot, target port, previous spec, previous is legacy-unslotted)
-    let (slot, port, previous, prev_legacy): (Slot, i64, Option<AppSpec>, bool) =
-        match app.active_port {
-            None => {
-                // Migrate a running legacy (unslotted) unit to slot B without a
-                // port clash; a never-deployed app starts on slot A.
-                let legacy = spec_for(&state.cfg, app);
-                if matches!(runtime.status(&legacy).await, Ok(RunState::Running)) {
-                    (Slot::B, port_b, Some(legacy), true)
-                } else {
-                    (Slot::A, port_a, None, false)
-                }
+    match app.active_port {
+        None => {
+            // Migrate a running legacy (unslotted) unit to slot B without a
+            // port clash; a never-deployed app starts on slot A.
+            let legacy = spec_for(&state.cfg, app);
+            let running = matches!(runtime.status(&legacy).await, Ok(RunState::Running));
+            if running {
+                (Slot::B, port_b, Some(legacy), true)
+            } else {
+                (Slot::A, port_a, None, false)
             }
-            Some(active) if active == port_b => (
-                Slot::A,
-                port_a,
-                Some(spec_for_slot(&state.cfg, app, Some(Slot::B), port_b as u16)),
-                false,
-            ),
-            Some(_) => (
-                Slot::B,
-                port_b,
-                Some(spec_for_slot(&state.cfg, app, Some(Slot::A), port_a as u16)),
-                false,
-            ),
-        };
-
-    let mut spec = spec_for_slot(&state.cfg, app, Some(slot), port as u16);
-    spec.binary_path = source;
-    let dep_id = uuid::Uuid::new_v4().to_string();
-
-    sqlx::query(
-        "INSERT INTO deployments (id, application_id, status, started_at) \
-         VALUES (?, ?, 'installing', datetime('now'))",
-    )
-    .bind(&dep_id)
-    .bind(&app.id)
-    .execute(&state.pool)
-    .await?;
-
-    let outcome = Deployer::new(runtime.clone()).deploy(&spec, &env).await;
-    let out = match outcome {
-        Ok(out) => out,
-        Err(e) => {
-            let _ = runtime.stop(&spec).await;
-            fail_deployment(state, app, &dep_id, &format!("start failed: {e}")).await?;
-            return Err(e);
         }
-    };
-
-    // Health-gate the new slot before cutting over (zero-downtime only if it is up).
-    if !health_gate(state, app, port).await {
-        let _ = runtime.stop(&spec).await;
-        fail_deployment(state, app, &dep_id, "new slot failed health check").await?;
-        return Err(Error::Internal(
-            "deploy failed health check; previous slot kept".into(),
-        ));
+        Some(active) if active == port_b => (
+            Slot::A,
+            port_a,
+            Some(spec_for_slot(&state.cfg, app, Some(Slot::B), port_b as u16)),
+            false,
+        ),
+        Some(_) => (
+            Slot::B,
+            port_b,
+            Some(spec_for_slot(&state.cfg, app, Some(Slot::A), port_a as u16)),
+            false,
+        ),
     }
+}
 
+/// Hash a publish directory (relative paths + bytes) for static deploy history.
+/// Format: `dir:<hex>`. The files themselves live in the per-slot public
+/// directories; the hash is the identity, not a retrieval key.
+async fn dir_content_hash(publish_dir: &str) -> Result<String> {
+    let root = std::path::Path::new(publish_dir);
+    if !root.is_dir() {
+        return Err(Error::BadRequest(format!(
+            "publish_dir '{publish_dir}' is not a directory"
+        )));
+    }
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let mut entries = tokio::fs::read_dir(&dir)
+            .await
+            .map_err(|e| Error::Internal(format!("failed to read {}: {e}", dir.display())))?;
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| Error::Internal(format!("failed to list {}: {e}", dir.display())))?
+        {
+            let path = entry.path();
+            let ftype = entry
+                .file_type()
+                .await
+                .map_err(|e| Error::Internal(format!("failed to stat {}: {e}", path.display())))?;
+            if ftype.is_dir() {
+                stack.push(path);
+            } else if ftype.is_file() {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    let mut hasher = Sha256::new();
+    let mut empty = true;
+    for path in files {
+        empty = false;
+        let rel = path.strip_prefix(root).unwrap_or(&path);
+        hasher.update(rel.to_string_lossy().as_bytes());
+        hasher.update([0u8]);
+        let bytes = tokio::fs::read(&path)
+            .await
+            .map_err(|e| Error::Internal(format!("failed to read {}: {e}", path.display())))?;
+        hasher.update(&bytes);
+    }
+    if empty {
+        tracing::warn!(dir = publish_dir, "deploying an empty publish directory");
+    }
+    let mut hex = String::with_capacity(64);
+    for b in hasher.finalize() {
+        hex.push_str(&format!("{b:02x}"));
+    }
+    Ok(format!("dir:{hex}"))
+}
+
+/// Finish a successful slot deploy: cut `active_port` over, record history,
+/// refresh the proxy, then drain the previous slot.
+#[allow(clippy::too_many_arguments)]
+async fn cutover(
+    state: &AppState,
+    app: &Application,
+    dep_id: &str,
+    port: i64,
+    artifact_hash: &str,
+    log: &str,
+    previous: Option<AppSpec>,
+    prev_legacy: bool,
+) -> Result<()> {
+    let runtime = runtime_for(&state.cfg, &app.runtime);
     sqlx::query(
         "UPDATE applications SET active_port = ?, status = 'running', updated_at = datetime('now') \
          WHERE id = ?",
@@ -669,9 +884,9 @@ pub async fn deploy_app_source(
         "UPDATE deployments SET status = 'running', artifact_hash = ?, log = ?, \
          finished_at = datetime('now') WHERE id = ?",
     )
-    .bind(&out.artifact_hash)
-    .bind(&out.log)
-    .bind(&dep_id)
+    .bind(artifact_hash)
+    .bind(log)
+    .bind(dep_id)
     .execute(&state.pool)
     .await?;
     let _ = refresh_proxy_routes(state).await;
@@ -686,6 +901,225 @@ pub async fn deploy_app_source(
             let _ = runtime.stop(&prev).await;
         }
     }
+    Ok(())
+}
+
+/// Deploy a `static` app: sync the publish dir into the inactive slot's public
+/// directory, serve it, gate on the always-200 health endpoint, then cut over.
+pub async fn deploy_static(state: &AppState, app: &Application) -> Result<(String, DeployOutcome)> {
+    let publish_dir = app
+        .publish_dir
+        .as_deref()
+        .ok_or_else(|| Error::BadRequest("static app is missing publish_dir".into()))?;
+    let hash = dir_content_hash(publish_dir).await?;
+    let env = load_env(state, &app.id).await?;
+    let runtime = runtime_for(&state.cfg, &app.runtime);
+    let (slot, port, previous, prev_legacy) = pick_inactive_slot(state, app, &runtime).await;
+    let spec = spec_for_slot(&state.cfg, app, Some(slot), port as u16);
+    let dep_id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO deployments (id, application_id, status, started_at) \
+         VALUES (?, ?, 'installing', datetime('now'))",
+    )
+    .bind(&dep_id)
+    .bind(&app.id)
+    .execute(&state.pool)
+    .await?;
+
+    let outcome = Deployer::new(runtime.clone())
+        .deploy_static(&spec, &env)
+        .await;
+    let out = match outcome {
+        Ok(out) => out,
+        Err(e) => {
+            let _ = runtime.stop(&spec).await;
+            fail_deployment(state, app, &dep_id, &format!("start failed: {e}")).await?;
+            return Err(e);
+        }
+    };
+
+    // The file server always answers 200; the gate still proves it serves.
+    if !health_gate(state, app, port).await {
+        let _ = runtime.stop(&spec).await;
+        fail_deployment(state, app, &dep_id, "new slot failed health check").await?;
+        return Err(Error::Internal(
+            "deploy failed health check; previous slot kept".into(),
+        ));
+    }
+
+    let log = format!("static {hash}\nsynced {publish_dir}\n{}", out.log);
+    cutover(
+        state,
+        app,
+        &dep_id,
+        port,
+        &hash,
+        &log,
+        previous,
+        prev_legacy,
+    )
+    .await?;
+    Ok((
+        dep_id,
+        DeployOutcome {
+            artifact_hash: hash,
+            state: RunState::Running,
+            log,
+        },
+    ))
+}
+
+/// Roll back a `static` app by cutting back to the slot whose public
+/// directory still exists (the generic artifact store holds no file trees).
+pub async fn rollback_static(
+    state: &AppState,
+    app: &Application,
+) -> Result<(String, DeployOutcome)> {
+    let offset = state.cfg.runtime.slot_offset as i64;
+    let other = match app.active_port {
+        Some(ap) if ap == app.port + offset => (Slot::A, app.port),
+        Some(_) => (Slot::B, app.port + offset),
+        None => {
+            return Err(Error::BadRequest(
+                "static app was never deployed; nothing to roll back to".into(),
+            ));
+        }
+    };
+    let spec = spec_for_slot(&state.cfg, app, Some(other.0), other.1 as u16);
+    if tokio::fs::metadata(spec.public_dir()).await.is_err() {
+        return Err(Error::BadRequest(
+            "no previous static slot survives to roll back to".into(),
+        ));
+    }
+    let runtime = runtime_for(&state.cfg, &app.runtime);
+    runtime.start(&spec).await?;
+    if !health_gate(state, app, other.1).await {
+        let _ = runtime.stop(&spec).await;
+        return Err(Error::Internal(
+            "previous static slot failed health check".into(),
+        ));
+    }
+    let dep_id = uuid::Uuid::new_v4().to_string();
+    let hash = dir_content_hash(app.publish_dir.as_deref().unwrap_or_default())
+        .await
+        .unwrap_or_else(|_| "dir:unknown".into());
+    sqlx::query(
+        "INSERT INTO deployments (id, application_id, status, artifact_hash, log, started_at, finished_at) \
+         VALUES (?, ?, 'rolled_back', ?, 'cut back to previous static slot', datetime('now'), datetime('now'))",
+    )
+    .bind(&dep_id)
+    .bind(&app.id)
+    .bind(&hash)
+    .execute(&state.pool)
+    .await?;
+    cutover_no_drain(state, app, other.1).await?;
+    Ok((
+        dep_id,
+        DeployOutcome {
+            artifact_hash: hash,
+            state: RunState::Running,
+            log: "cut back to previous static slot".into(),
+        },
+    ))
+}
+
+/// Cut `active_port` over without draining (rollback already runs the target).
+async fn cutover_no_drain(state: &AppState, app: &Application, port: i64) -> Result<()> {
+    sqlx::query(
+        "UPDATE applications SET active_port = ?, status = 'running', updated_at = datetime('now') \
+         WHERE id = ?",
+    )
+    .bind(port)
+    .bind(&app.id)
+    .execute(&state.pool)
+    .await?;
+    let _ = refresh_proxy_routes(state).await;
+    Ok(())
+}
+
+/// Deploy an app from an explicit on-disk artifact `source`, using blue/green
+/// slots: start the inactive slot, health-gate it, then cut the route over and
+/// drain the previous slot. The previous slot is left installed for rollback.
+///
+/// Workers skip the health gate (nothing listens): a clean start is success.
+pub async fn deploy_app_source(
+    state: &AppState,
+    app: &Application,
+    source: String,
+) -> Result<(String, DeployOutcome)> {
+    deploy_artifact(state, app, Artifact::File(source)).await
+}
+
+/// Shared slot-deploy body for stored files and argv identities.
+async fn deploy_artifact(
+    state: &AppState,
+    app: &Application,
+    artifact: Artifact,
+) -> Result<(String, DeployOutcome)> {
+    let env = load_env(state, &app.id).await?;
+
+    // Target the inactive slot; remember the previous slot to drain on success.
+    let runtime = runtime_for(&state.cfg, &app.runtime);
+
+    // (target slot, target port, previous spec, previous is legacy-unslotted)
+    let (slot, port, previous, prev_legacy) = pick_inactive_slot(state, app, &runtime).await;
+
+    let mut spec = spec_for_slot(&state.cfg, app, Some(slot), port as u16);
+    // Files deploy from the stored copy; argv identities keep executing the
+    // command in place (runtimes skip the install for `command` specs).
+    let precomputed_hash = match artifact {
+        Artifact::File(source) => {
+            spec.binary_path = source;
+            None
+        }
+        Artifact::Command(hash) => Some(hash),
+    };
+    let dep_id = uuid::Uuid::new_v4().to_string();
+
+    sqlx::query(
+        "INSERT INTO deployments (id, application_id, status, started_at) \
+         VALUES (?, ?, 'installing', datetime('now'))",
+    )
+    .bind(&dep_id)
+    .bind(&app.id)
+    .execute(&state.pool)
+    .await?;
+
+    let deployer = Deployer::new(runtime.clone());
+    let outcome = match precomputed_hash {
+        Some(hash) => deployer.deploy_with_hash(&spec, &env, hash).await,
+        None => deployer.deploy(&spec, &env).await,
+    };
+    let out = match outcome {
+        Ok(out) => out,
+        Err(e) => {
+            let _ = runtime.stop(&spec).await;
+            fail_deployment(state, app, &dep_id, &format!("start failed: {e}")).await?;
+            return Err(e);
+        }
+    };
+
+    // Health-gate the new slot before cutting over (zero-downtime only if it
+    // is up). Workers bind nothing: a clean start is success.
+    if app.kind != "worker" && !health_gate(state, app, port).await {
+        let _ = runtime.stop(&spec).await;
+        fail_deployment(state, app, &dep_id, "new slot failed health check").await?;
+        return Err(Error::Internal(
+            "deploy failed health check; previous slot kept".into(),
+        ));
+    }
+
+    cutover(
+        state,
+        app,
+        &dep_id,
+        port,
+        &out.artifact_hash,
+        &out.log,
+        previous,
+        prev_legacy,
+    )
+    .await?;
 
     Ok((dep_id, out))
 }
@@ -753,6 +1187,51 @@ pub async fn rollback(
     let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
     let app = fetch_org_app(&state.pool, &org_id, &id).await?;
     ensure_local(&app)?;
+    // Static trees live in the slot directories, not the artifact store.
+    if app.kind == "static" {
+        let (dep_id, out) = rollback_static(&state, &app).await?;
+        audit::record(
+            &state,
+            Some(&org_id),
+            Some(&user),
+            Some(&app.id),
+            "app.rollback",
+            Some("deployment"),
+            Some(&dep_id),
+            Some(&serde_json::json!({"rolled_back_to": out.artifact_hash}).to_string()),
+        )
+        .await?;
+        return Ok(Json(serde_json::json!({
+            "deployment_id": dep_id,
+            "rolled_back_to": out.artifact_hash,
+            "state": out.state,
+            "artifact_hash": out.artifact_hash,
+            "log": out.log,
+        })));
+    }
+    // Command apps version config, not bytes: rolling back means a fresh
+    // restart cutover of the current argv (the store holds no command blob).
+    if app.command.is_some() {
+        let (dep_id, out) = deploy_app(&state, &app).await?;
+        audit::record(
+            &state,
+            Some(&org_id),
+            Some(&user),
+            Some(&app.id),
+            "app.rollback",
+            Some("deployment"),
+            Some(&dep_id),
+            Some(&serde_json::json!({"rolled_back_to": out.artifact_hash}).to_string()),
+        )
+        .await?;
+        return Ok(Json(serde_json::json!({
+            "deployment_id": dep_id,
+            "rolled_back_to": out.artifact_hash,
+            "state": out.state,
+            "artifact_hash": out.artifact_hash,
+            "log": out.log,
+        })));
+    }
     let target = body.and_then(|Json(b)| b.artifact_hash);
     let previous = match target {
         Some(hash) => hash,
@@ -920,7 +1399,12 @@ pub async fn update(
     }
 
     let port = input.port.map(|p| p as i64).unwrap_or(app.port);
-    if port != app.port {
+    if app.kind == "worker" && port != 0 {
+        return Err(Error::BadRequest(
+            "kind: worker takes no port (pass 0 or omit it)".into(),
+        ));
+    }
+    if port != 0 && port != app.port {
         ensure_port_free(&state.pool, port, state.cfg.runtime.slot_offset as i64, &id).await?;
     }
     let mem_limit_mb = input.mem_limit_mb.unwrap_or(app.mem_limit_mb);
@@ -931,14 +1415,55 @@ pub async fn update(
     if domain.as_ref().is_some_and(|d| !d.is_empty()) && domain != app.domain {
         quotas::ensure_domain_capacity(&state.pool, &org_id).await?;
     }
+    // Command/workdir/publish changes take effect on the next deploy. A new
+    // command re-points the executable (binary_path tracks argv[0]).
+    let command: Option<Vec<String>> = match &input.command {
+        Some(None) => None,
+        Some(Some(argv)) => {
+            if argv.is_empty() || argv.iter().any(|a| a.trim().is_empty()) {
+                return Err(Error::BadRequest(
+                    "'command' must be a non-empty argv array".into(),
+                ));
+            }
+            if argv[0].contains(' ') {
+                return Err(Error::BadRequest(
+                    "command[0] must be a binary path without spaces (no shell)".into(),
+                ));
+            }
+            if input.args.is_some() {
+                return Err(Error::BadRequest(
+                    "'args' and 'command' are mutually exclusive (argv carries its own arguments)"
+                        .into(),
+                ));
+            }
+            Some(argv.clone())
+        }
+        None => app
+            .command
+            .as_deref()
+            .and_then(|c| serde_json::from_str(c).ok()),
+    };
+    let workdir = input.workdir.unwrap_or(app.workdir);
+    let publish_dir = input.publish_dir.unwrap_or(app.publish_dir);
+    // Setting a command supersedes flat args (argv carries its own).
+    let args = if matches!(&input.command, Some(Some(_))) {
+        None
+    } else {
+        input.args.or(app.args)
+    };
+    let binary_path = match &command {
+        Some(argv) => argv[0].clone(),
+        None => app.binary_path.clone(),
+    };
     let updated = sqlx::query_as::<_, Application>(
         "UPDATE applications SET description = ?, args = ?, port = ?, health_path = ?, \
          metrics_path = ?, domain = ?, runtime = ?, auto_restart = ?, server_id = ?, \
-         mem_limit_mb = ?, cpu_quota_pct = ?, \
+         mem_limit_mb = ?, cpu_quota_pct = ?, binary_path = ?, command = ?, workdir = ?, \
+         publish_dir = ?, \
          updated_at = datetime('now') WHERE id = ? RETURNING *",
     )
     .bind(input.description.or(app.description))
-    .bind(input.args.or(app.args))
+    .bind(args)
     .bind(port)
     .bind(input.health_path.unwrap_or(app.health_path))
     .bind(input.metrics_path.or(app.metrics_path))
@@ -948,6 +1473,16 @@ pub async fn update(
     .bind(&server_id)
     .bind(mem_limit_mb)
     .bind(cpu_quota_pct)
+    .bind(&binary_path)
+    .bind(
+        command
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| Error::BadRequest(format!("invalid command argv: {e}")))?,
+    )
+    .bind(workdir)
+    .bind(publish_dir)
     .bind(&id)
     .fetch_one(&state.pool)
     .await?;

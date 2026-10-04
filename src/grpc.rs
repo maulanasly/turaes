@@ -169,7 +169,7 @@ pub async fn edge_routes(
          FROM app_servers p \
          JOIN servers s ON s.id = p.server_id \
          JOIN applications a ON a.id = p.application_id \
-         WHERE a.domain IS NOT NULL AND a.domain != ''",
+         WHERE a.kind != 'worker' AND a.domain IS NOT NULL AND a.domain != ''",
     )
     .fetch_all(&state.pool)
     .await
@@ -189,7 +189,8 @@ pub async fn edge_routes(
          FROM domains d \
          JOIN app_servers p ON p.application_id = d.application_id \
          JOIN servers s ON s.id = p.server_id \
-         JOIN applications a ON a.id = p.application_id",
+         JOIN applications a ON a.id = p.application_id \
+         WHERE a.kind != 'worker'",
     )
     .fetch_all(&state.pool)
     .await

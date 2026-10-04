@@ -37,6 +37,16 @@ pub struct Application {
     pub mem_limit_mb: Option<i64>,
     /// CPU ceiling in percent of one core (systemd `CPUQuota=`); unset = unlimited.
     pub cpu_quota_pct: Option<i64>,
+    /// `service` (default), `static` (publish a directory), or `worker`
+    /// (supervised background process, no HTTP surface).
+    pub kind: String,
+    /// JSON argv array for interpreted apps; mutually exclusive with the
+    /// single-binary path at the manifest layer.
+    pub command: Option<String>,
+    /// WorkingDirectory override; defaults to `{state_dir}/{app}`.
+    pub workdir: Option<String>,
+    /// Source directory synced for `static` apps.
+    pub publish_dir: Option<String>,
     /// `systemd` or `proc`.
     pub runtime: String,
     /// Restart on unhealthy.
