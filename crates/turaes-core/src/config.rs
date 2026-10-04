@@ -27,6 +27,9 @@ pub struct Config {
     pub monitor: MonitorConfig,
     /// Process runtime settings.
     pub runtime: RuntimeConfig,
+    /// SQLite backup settings.
+    #[serde(default)]
+    pub backup: BackupConfig,
     /// gRPC control-plane (agent/edge channel) settings.
     #[serde(default)]
     pub grpc: GrpcConfig,
@@ -181,6 +184,34 @@ fn default_slot_offset() -> u16 {
 
 fn default_drain_secs() -> u64 {
     10
+}
+
+/// SQLite backup settings.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BackupConfig {
+    /// Directory for `turaes-*.db` snapshots (created on demand).
+    #[serde(default = "default_backup_dir")]
+    pub dir: String,
+    /// How many recent snapshots to keep (older ones are pruned).
+    #[serde(default = "default_backup_retain")]
+    pub retain: usize,
+}
+
+impl Default for BackupConfig {
+    fn default() -> Self {
+        Self {
+            dir: default_backup_dir(),
+            retain: default_backup_retain(),
+        }
+    }
+}
+
+fn default_backup_dir() -> String {
+    "/var/lib/turaes/backups".to_string()
+}
+
+fn default_backup_retain() -> usize {
+    14
 }
 
 impl Config {
@@ -386,6 +417,9 @@ fn apply_env(cfg: &mut Config) -> Result<()> {
     env_str("TURAES_ARTIFACT_DIR", &mut cfg.runtime.artifact_dir);
     env_parse("TURAES_SLOT_OFFSET", &mut cfg.runtime.slot_offset);
     env_parse("TURAES_DRAIN_SECS", &mut cfg.runtime.drain_secs);
+
+    env_str("TURAES_BACKUP_DIR", &mut cfg.backup.dir);
+    env_parse("TURAES_BACKUP_RETAIN", &mut cfg.backup.retain);
 
     env_bool("TURAES_GRPC_ENABLED", &mut cfg.grpc.enabled);
     env_str("TURAES_GRPC_HOST", &mut cfg.grpc.host);

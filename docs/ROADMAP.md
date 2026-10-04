@@ -46,9 +46,11 @@ Status legend: ✅ done · 🔄 in progress · ⏳ planned
 > [PLAN-ZERO-DOWNTIME.md](./PLAN-ZERO-DOWNTIME.md). Done: control/edge
 > SO_REUSEPORT rolling upgrades + graceful drain, and **app blue/green**
 > (slot A/B, health-gated cutover, drain, legacy unslotted → slot migration,
-> periodic route refresh so CLI deploys propagate). **Backlog:** exposure
-> (Tailscale admin + Cloudflare Tunnel/Access), backups/DR, pre-migration
-> snapshots, patch automation, resource limits, platform `/metrics` + alerting.
+> periodic route refresh so CLI deploys propagate). Done: **automated backups**
+> (`turaes backup`, nightly timer, fail-closed pre-migration snapshot on boot,
+> retention, `turaes restore`, `doctor` freshness). **Backlog:** exposure
+> (Tailscale admin + Cloudflare Tunnel/Access), offsite DR copies, secret
+> separation, patch automation, resource limits, platform `/metrics` + alerting.
 
 ## Timeline
 

@@ -1,0 +1,11 @@
+[Unit]
+Description=turaes daily database snapshot
+Documentation=https://github.com/maulanasly/turaes
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1800
+Persistent=true
+
+[Install]
+WantedBy=timers.target

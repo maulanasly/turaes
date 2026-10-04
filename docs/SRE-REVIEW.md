@@ -48,7 +48,7 @@ systemd services on the same host. Multi-node is built but dormant
 |---|---|
 | Zero-downtime deploys (control/edge, app blue/green) | **in progress** — [PLAN-ZERO-DOWNTIME.md](./PLAN-ZERO-DOWNTIME.md) |
 | Exposure reduction (Tailscale admin + Cloudflare Tunnel/Access, SG lockdown) | **backlog** |
-| Backups/DR + pre-migration snapshot | **backlog** |
+| Backups/DR + pre-migration snapshot | **done (local)** — nightly timer + fail-closed boot snapshot + restore; offsite copies still backlog |
 | Scheduler patching (unattended-upgrades), resource limits, `/metrics`+alerting, log/rate hygiene, artifact GC, secret separation | backlog |
 
 ## Reliability lens
