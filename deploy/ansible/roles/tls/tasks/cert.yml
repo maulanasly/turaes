@@ -27,7 +27,7 @@
   ansible.builtin.assert:
     that:
       - tls_getent.stdout_lines | length > 0
-      - tls_getent.stdout_lines[0].split()[-1] == tls_public_ip.content | trim
+      - tls_getent.stdout_lines[0].split()[0] == tls_public_ip.content | trim
     msg: >-
       {{ turaes_domain }} does not resolve to this host's public IP
       ({{ tls_public_ip.content }}). Point the DNS A record at this host before

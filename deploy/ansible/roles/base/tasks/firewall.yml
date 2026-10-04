@@ -12,15 +12,13 @@
 
 - name: Default deny incoming
   community.general.ufw:
-    rule: default
+    default: deny
     direction: incoming
-    policy: deny
 
 - name: Default allow outgoing
   community.general.ufw:
-    rule: default
+    default: allow
     direction: outgoing
-    policy: allow
 
 - name: Allow SSH
   community.general.ufw:
