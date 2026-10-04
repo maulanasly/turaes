@@ -11,6 +11,7 @@ import { AppsView } from "./views/AppsView.js";
 import { AppDetailView } from "./views/AppDetailView.js";
 import { ServersView } from "./views/ServersView.js";
 import { ServerDetailView } from "./views/ServerDetailView.js";
+import { TokensView } from "./views/TokensView.js";
 import { LoginView } from "./views/LoginView.js";
 
 function useTheme() {
@@ -101,6 +102,7 @@ function Shell() {
       <nav class="nav" aria-label="Primary">
         <${NavLink} route=${route} view="apps" match="app" label="Applications" />
         <${NavLink} route=${route} view="servers" match="server" label="Servers" />
+        <${NavLink} route=${route} view="tokens" label="Tokens" />
       </nav>
       <div class="controls">
         <span class=${"dot " + (health ? "ok" : "bad")}
@@ -125,6 +127,7 @@ function Shell() {
       ${route.view === "app" && html`<${AppDetailView} id=${route.id} tab=${route.tab} user=${user} servers=${servers} />`}
       ${route.view === "servers" && html`<${ServersView} user=${user} onChanged=${loadServers} />`}
       ${route.view === "server" && html`<${ServerDetailView} id=${route.id} />`}
+      ${route.view === "tokens" && html`<${TokensView} user=${user} />`}
     </main>
 
     <${Toasts} />

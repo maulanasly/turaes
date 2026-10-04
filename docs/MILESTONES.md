@@ -207,8 +207,9 @@ org-scoped.
 - [x] **T1c** Audit log writes on all mutations + read API + UI timeline
       (`app.*`, `env.set/unset`, `domain.add/remove`, `server.create/delete/
       bootstrap`; per-app Activity tab; secrets never recorded).
-- [ ] **T1d** Scoped API tokens (hash-only, `read`/`deploy`/`admin`) + bearer
-      auth + UI.
+- [x] **T1d** Scoped API tokens (hash-only, `read`/`deploy`/`admin`) + bearer
+      auth + UI (Tokens page; plaintext shown once; tokens capped by the
+      creator's current role and can never reach `owner`).
 - [ ] **T1e** Org switcher, members/invites, org settings UI.
 
 ### Exit criteria

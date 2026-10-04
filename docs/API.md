@@ -62,6 +62,33 @@ domains) › `admin` (apps, servers, tokens) › `owner` (members, org). The fir
 user to sign in becomes `owner` of the `default` organization; later users
 start as `viewer`.
 
+## API tokens
+
+Programmatic/CI access without SSH or a browser. Send
+`Authorization: Bearer <token>` instead of the session cookie; a bearer token
+always wins when both are present. Tokens are bound to one organization with
+one hierarchical scope — `read` (viewer floor), `deploy` (developer floor) or
+`admin` (admin floor) — and can never reach `owner`. The effective role is
+capped by the creator's *current* membership, so demoting the creator
+attenuates the token. Only the SHA-256 hash is stored; the plaintext (returned
+exactly once) looks like `turaes_…`.
+
+| Method | Path | Role | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/orgs/{org}/tokens` | admin | List live tokens (hashes never included) |
+| `POST` | `/api/v1/orgs/{org}/tokens` | admin | Mint a token (`201` returns `{token, plaintext}`) |
+| `DELETE` | `/api/v1/orgs/{org}/tokens/{id}` | admin | Revoke a token (`204`) |
+
+```bash
+curl -X POST localhost:8787/api/v1/orgs/default/tokens \
+  -H 'content-type: application/json' \
+  -d '{"name": "ci-deploy", "scopes": "deploy"}'
+# → { "token": { "id": "…", "scopes": "deploy", … }, "plaintext": "turaes_…" }
+
+curl localhost:8787/api/v1/orgs/default/apps \
+  -H 'Authorization: Bearer turaes_…'
+```
+
 ## Applications
 
 All app routes are nested under `/api/v1/orgs/{org}/…`, where `{org}` is an

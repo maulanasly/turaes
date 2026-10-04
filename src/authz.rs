@@ -190,6 +190,66 @@ async fn ensure_bootstrap_membership(state: &AppState, user_id: &str) -> Result<
     Ok(())
 }
 
+/// Resolve a bearer API token to a principal restricted to the token's org.
+/// The effective role is capped by both the token scope and the creator's
+/// *current* membership, so demoting or removing the creator attenuates the
+/// token. Revoked tokens, unknown hashes and ownerless tokens are rejected.
+/// Tokens can never reach `owner`: member management stays human-only.
+pub async fn resolve_token(state: &AppState, token: &str) -> Result<CurrentUser> {
+    let hash = turaes_core::crypto::token_hash(token);
+    let row: Option<(String, String, Option<String>, String)> = sqlx::query_as(
+        "SELECT id, org_id, user_id, scopes FROM api_tokens \
+         WHERE token_hash = ? AND revoked_at IS NULL",
+    )
+    .bind(&hash)
+    .fetch_optional(&state.pool)
+    .await?;
+    let (token_id, org_id, user_id, scopes) =
+        row.ok_or_else(|| Error::Unauthorized("invalid API token".into()))?;
+    let cap = match scopes.as_str() {
+        "read" => Role::Viewer,
+        "deploy" => Role::Developer,
+        "admin" => Role::Admin,
+        _ => return Err(Error::Unauthorized("API token has an unknown scope".into())),
+    };
+    let user_id = user_id.ok_or_else(|| Error::Unauthorized("API token owner is gone".into()))?;
+    let user: Option<(String, i64, String, Option<String>)> =
+        sqlx::query_as("SELECT id, github_id, login, name FROM users WHERE id = ?")
+            .bind(&user_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let (uid, github_id, login, name) =
+        user.ok_or_else(|| Error::Unauthorized("API token owner is gone".into()))?;
+    let mem: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT m.role, o.slug, o.name FROM memberships m \
+         JOIN organizations o ON o.id = m.org_id \
+         WHERE m.user_id = ? AND m.org_id = ?",
+    )
+    .bind(&user_id)
+    .bind(&org_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let (role_str, slug, org_name) =
+        mem.ok_or_else(|| Error::Unauthorized("API token owner left the organization".into()))?;
+    let role = std::cmp::min(cap, Role::parse(&role_str)?);
+    sqlx::query("UPDATE api_tokens SET last_used_at = datetime('now') WHERE id = ?")
+        .bind(&token_id)
+        .execute(&state.pool)
+        .await?;
+    Ok(CurrentUser {
+        id: uid,
+        github_id,
+        login,
+        name,
+        orgs: vec![OrgMembership {
+            org_id,
+            slug,
+            name: org_name,
+            role,
+        }],
+    })
+}
+
 /// Resolve an org path segment (id or slug) and enforce a role floor.
 /// Unknown orgs yield `NotFound`; insufficient roles yield `Forbidden`.
 pub async fn authorize_org(

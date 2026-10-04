@@ -12,3 +12,4 @@ pub mod logs;
 pub mod me;
 pub mod servers;
 pub mod static_assets;
+pub mod tokens;
