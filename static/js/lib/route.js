@@ -10,6 +10,9 @@ export function parseRoute(hash) {
   if (parts[0] === "tokens") {
     return { view: "tokens" };
   }
+  if (parts[0] === "org") {
+    return { view: "org" };
+  }
   if (parts[0] === "apps" && parts[1]) {
     const tab = APP_TABS.includes(parts[2]) ? parts[2] : "overview";
     return { view: "app", id: parts[1], tab };
@@ -22,5 +25,6 @@ export function pathFor(route) {
   if (route.view === "servers") return "#/servers";
   if (route.view === "server") return `#/servers/${route.id}`;
   if (route.view === "tokens") return "#/tokens";
+  if (route.view === "org") return "#/org";
   return `#/apps/${route.id}/${route.tab || "overview"}`;
 }

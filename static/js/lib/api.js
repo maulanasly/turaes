@@ -22,6 +22,9 @@ let org = "default";
 export function setOrg(slug) {
   if (slug) org = slug;
 }
+export function getOrg() {
+  return org;
+}
 export function orgPath(path) {
   return `/api/v1/orgs/${org}${path}`;
 }
