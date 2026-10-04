@@ -13,6 +13,7 @@ import { ServersView } from "./views/ServersView.js";
 import { ServerDetailView } from "./views/ServerDetailView.js";
 import { TokensView } from "./views/TokensView.js";
 import { OrgView } from "./views/OrgView.js";
+import { AboutView } from "./views/AboutView.js";
 import { LoginView } from "./views/LoginView.js";
 
 function useTheme() {
@@ -39,6 +40,7 @@ const VIEW_TITLES = {
   server: "Server",
   tokens: "API tokens",
   org: "Organization",
+  about: "About",
   notfound: "Not found",
 };
 
@@ -138,6 +140,7 @@ function Shell() {
         <${NavLink} route=${route} view="servers" match="server" label="Servers" />
         <${NavLink} route=${route} view="tokens" label="Tokens" />
         <${NavLink} route=${route} view="org" label="Organization" />
+        <${NavLink} route=${route} view="about" label="About" />
       </nav>
       <div class="controls">
         <span class=${"dot " + (health ? "ok" : "bad")}
@@ -173,6 +176,7 @@ function Shell() {
       ${route.view === "server" && html`<${ServerDetailView} key=${org} id=${route.id} />`}
       ${route.view === "tokens" && html`<${TokensView} key=${org} user=${user} />`}
       ${route.view === "org" && html`<${OrgView} key=${org} user=${user} onOrgChange=${changeOrg} />`}
+      ${route.view === "about" && html`<${AboutView} health=${health} user=${user} />`}
       ${route.view === "notfound" && html`<section class="panel">
         <h1>Not found</h1>
         <p class="muted">No view matches <span class="mono">${route.path || ""}</span>.</p>

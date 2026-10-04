@@ -81,6 +81,9 @@ h3 { font-size: 13px; margin: 0 0 8px; }
 .card h3 { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 14px; }
 
 .stat { display: flex; justify-content: space-between; padding: 2px 0; font-variant-numeric: tabular-nums; }
+/* Let card stat values (e.g. a long domain) shrink and wrap instead of
+   overflowing the card; the label column stays fixed. */
+.card .stat span:last-child { min-width: 0; overflow-wrap: anywhere; }
 .stat span:first-child { color: var(--muted); }
 
 .notice { border: 1px solid var(--warn); border-radius: 8px; padding: 10px 12px; margin: 0 0 12px; display: grid; gap: 8px; }
