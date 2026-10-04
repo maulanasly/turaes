@@ -28,10 +28,18 @@ test("servers and server detail", () => {
   assert.deepEqual(parseRoute("#/servers/s1"), { view: "server", id: "s1" });
 });
 
+test("about view", () => {
+  assert.deepEqual(parseRoute("#/about"), { view: "about" });
+  assert.equal(pathFor({ view: "about" }), "#/about");
+  assert.deepEqual(parseRoute(pathFor({ view: "about" })), { view: "about" });
+});
+
 test("pathFor round-trips", () => {
   assert.equal(pathFor({ view: "apps" }), "#/apps");
   assert.equal(pathFor({ view: "app", id: "x", tab: "logs" }), "#/apps/x/logs");
   assert.equal(pathFor({ view: "server", id: "s" }), "#/servers/s");
+  assert.equal(pathFor({ view: "tokens" }), "#/tokens");
+  assert.equal(pathFor({ view: "org" }), "#/org");
   for (const tab of APP_TABS) {
     assert.deepEqual(parseRoute(pathFor({ view: "app", id: "id", tab })), { view: "app", id: "id", tab });
   }

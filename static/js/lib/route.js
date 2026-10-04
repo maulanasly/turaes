@@ -48,6 +48,9 @@ export function parseRoute(hash) {
   if (parts[0] === "org") {
     return { view: "org" };
   }
+  if (parts[0] === "about") {
+    return { view: "about" };
+  }
   if (parts[0] === "apps" && parts[1]) {
     // Unknown tabs pass through raw; the detail view names them instead of
     // silently showing the wrong tab. `?range=` is preserved for the overview
@@ -65,6 +68,7 @@ export function pathFor(route) {
   if (route.view === "server") return `#/servers/${route.id}`;
   if (route.view === "tokens") return "#/tokens";
   if (route.view === "org") return "#/org";
+  if (route.view === "about") return "#/about";
   if (route.view === "app") {
     const base = `#/apps/${route.id}/${route.tab || "overview"}`;
     // Only non-default ranges are serialized to keep URLs clean; absence
