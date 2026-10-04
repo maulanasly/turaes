@@ -74,8 +74,20 @@ export function AppsView({ user, servers }) {
   const [alerts, setAlerts] = useState([]);
   const [error, setError] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
-  const [q, setQ] = useState("");
-  const [sortKey, setSortKey] = useState("name");
+  const [q, setQ] = useState(() => {
+    try { return sessionStorage.getItem("turaes-apps-q") || ""; } catch { return ""; }
+  });
+  const [sortKey, setSortKey] = useState(() => {
+    try { return sessionStorage.getItem("turaes-apps-sort") || "name"; } catch { return "name"; }
+  });
+
+  // List state survives list → detail → back (the views unmount on route change).
+  useEffect(() => {
+    try { sessionStorage.setItem("turaes-apps-q", q); } catch {}
+  }, [q]);
+  useEffect(() => {
+    try { sessionStorage.setItem("turaes-apps-sort", sortKey); } catch {}
+  }, [sortKey]);
 
   const load = useCallback(async () => {
     try {
@@ -113,7 +125,7 @@ export function AppsView({ user, servers }) {
       <div class="panel-head">
         <h1>Applications</h1>
         <div class="controls">
-          <input class="search" placeholder="Search…" value=${q}
+          <input class="search" placeholder="Search…" aria-label="Search applications" value=${q}
             onInput=${(e) => setQ(e.target.value)} />
           <select value=${sortKey} onChange=${(e) => setSortKey(e.target.value)} aria-label="Sort by">
             <option value="name">Sort: name</option>
