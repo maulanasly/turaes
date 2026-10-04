@@ -132,7 +132,7 @@ roles yield `403`.
 | `GET` | `/api/v1/orgs/{org}/audit?app=&action=&limit=50` | viewer | Newest-first audit timeline (actor login resolved; `system` actions have none) |
 | `GET` | `/api/v1/orgs/{org}/apps/{id}/logs` | developer | **WebSocket** live logs (`journalctl -f` / `tail -f`; local apps only) |
 | `GET` | `/api/v1/orgs/{org}/apps/{id}/env` | developer | List env var **keys** (values are never returned) |
-| `PUT` | `/api/v1/orgs/{org}/apps/{id}/env/{key}` | developer | Create/replace an env var (AES-256-GCM sealed) |
+| `PUT` | `/api/v1/orgs/{org}/apps/{id}/env/{key}` | developer | Create (`201`) or replace (`204`) an env var (AES-256-GCM sealed) |
 | `DELETE` | `/api/v1/orgs/{org}/apps/{id}/env/{key}` | developer | Remove an env var |
 | `GET` | `/api/v1/artifacts/{hash}` | developer | Download a stored artifact by `sha256:<hex>` — only when the hash backs a deployment of an app in one of the caller's orgs (`404` otherwise) |
 

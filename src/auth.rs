@@ -95,7 +95,7 @@ fn user_from_jar(state: &AppState, jar: &CookieJar) -> Result<AuthUser> {
     let token = jar
         .get(SESSION_COOKIE)
         .map(|c| c.value().to_string())
-        .ok_or_else(|| Error::Unauthorized("no session".into()))?;
+        .ok_or_else(|| Error::Unauthorized("no session (sign in at /auth/login)".into()))?;
     let claims = state.issuer.verify(&token)?;
     Ok(AuthUser {
         id: claims.sub.parse().unwrap_or(0),

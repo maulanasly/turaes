@@ -25,7 +25,12 @@ pub enum Command {
     /// Apply database migrations and exit.
     Migrate,
     /// Print resolved configuration (secrets redacted) and capability checks.
-    Doctor,
+    /// Exits non-zero when a check fails; `--json` emits machine output.
+    Doctor {
+        /// Emit the report (and check results) as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Take a timestamped SQLite snapshot into the backup dir (and prune).
     Backup,
     /// Restore the database from a snapshot file. Stop turaes first and pass
@@ -50,17 +55,27 @@ pub enum Command {
         dry_run: bool,
     },
     /// One-shot app operations against the local database (bootstrap/ops; no
-    /// HTTP auth required).
+    /// HTTP auth required). Names are globally unique; `--org` scopes lookups
+    /// to one organization (default `default`).
     App {
         /// Which app operation to run.
         #[command(subcommand)]
         cmd: AppCommand,
+        /// Organization id or slug to scope the operation to.
+        #[arg(long)]
+        org: Option<String>,
+        /// Emit list/show output as JSON.
+        #[arg(long)]
+        json: bool,
     },
-    /// Fleet node registry operations (local database).
+    /// Fleet node registry operations (local database; nodes are platform-global).
     Server {
         /// Which server operation to run.
         #[command(subcommand)]
         cmd: ServerCommand,
+        /// Emit list output as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Run as a node agent: register with the control plane and heartbeat.
     Agent {
@@ -182,6 +197,11 @@ pub enum AppCommand {
     },
     /// Roll back an application to its previous artifact.
     Rollback {
+        /// Application name.
+        name: String,
+    },
+    /// Remove an application: stop its runtime units and delete it.
+    Remove {
         /// Application name.
         name: String,
     },

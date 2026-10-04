@@ -33,7 +33,9 @@ fn validate_domain(domain: &str) -> Result<String> {
     if ok {
         Ok(d)
     } else {
-        Err(Error::BadRequest("invalid domain".into()))
+        Err(Error::BadRequest(format!(
+            "invalid domain '{domain}': use a lowercase FQDN like www.example.com"
+        )))
     }
 }
 

@@ -260,8 +260,18 @@ The generated unit matches the fleet's hardened shape (`ProtectSystem=strict`,
 systemctl status turaes
 journalctl -u turaes -f          # dashboard/API logs
 journalctl -u beruang -f         # an app's logs (systemd runtime)
-turaes doctor                    # resolved config + capability report
+turaes doctor                    # resolved config + capability report (exits non-zero on failure)
+turaes doctor --json             # same report as JSON (for monitoring/scripts)
 turaes migrate                   # apply migrations (also runs on boot)
+```
+
+Local app commands talk to the database directly (no OAuth) and take `--org`
+to scope by organization (default `default`; names stay globally unique):
+
+```bash
+turaes app list [--org acme] [--json]
+turaes app show beruang [--json]
+turaes app remove beruang        # stops its units, then deletes it
 ```
 
 ### Backup

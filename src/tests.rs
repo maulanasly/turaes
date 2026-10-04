@@ -42,6 +42,7 @@ enabled = false
 http_port = 80
 https_port = 443
 cert_dir = "{base}/certs"
+acme_webroot = "{base}/acme"
 
 [monitor]
 interval_secs = 15
@@ -617,7 +618,7 @@ async fn env_crud_does_not_leak_values() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
-    // set
+    // set (fresh key → 201)
     let resp = router
         .clone()
         .oneshot(
@@ -626,6 +627,21 @@ async fn env_crud_does_not_leak_values() {
                 .uri(format!("/api/v1/orgs/default/apps/{id}/env/API_KEY"))
                 .header("content-type", "application/json")
                 .body(Body::from(json!({"value": "secret123"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // replace (existing key → 204)
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/v1/orgs/default/apps/{id}/env/API_KEY"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"value": "secret456"}).to_string()))
                 .unwrap(),
         )
         .await
@@ -1329,7 +1345,7 @@ async fn audit_records_mutations_without_secrets() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    assert_eq!(resp.status(), StatusCode::CREATED);
 
     let router = test_router(dir.path()).await;
     let body = body_json(
@@ -2377,4 +2393,98 @@ async fn alerts_backup_stale_resolves_on_fresh_snapshot() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn cli_org_scoping_and_remove() {
+    use crate::cli::AppCommand;
+
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+
+    // Unknown orgs are rejected, not silently defaulted.
+    let err = crate::commands::run(&state, AppCommand::List, Some("nope"), false)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("unknown organization"));
+
+    // Add + show + remove round-trip inside the default org.
+    crate::commands::run(
+        &state,
+        AppCommand::Add {
+            name: "cliapp".into(),
+            binary: "/bin/true".into(),
+            port: 9800,
+            domain: None,
+            health: "/health".into(),
+            metrics: "/metrics".into(),
+            runtime: "proc".into(),
+            args: None,
+        },
+        Some("default"),
+        false,
+    )
+    .await
+    .unwrap();
+    crate::commands::run(
+        &state,
+        AppCommand::Show {
+            name: "cliapp".into(),
+        },
+        Some("default"),
+        true,
+    )
+    .await
+    .unwrap();
+
+    // A second org cannot see the app by name.
+    sqlx::query("INSERT INTO organizations (id, slug, name) VALUES ('other', 'other', 'Other')")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    let err = crate::commands::run(
+        &state,
+        AppCommand::Show {
+            name: "cliapp".into(),
+        },
+        Some("other"),
+        false,
+    )
+    .await
+    .unwrap_err();
+    assert!(err.to_string().contains("no application named"));
+
+    crate::commands::run(
+        &state,
+        AppCommand::Remove {
+            name: "cliapp".into(),
+        },
+        Some("default"),
+        false,
+    )
+    .await
+    .unwrap();
+    let err = crate::commands::run(
+        &state,
+        AppCommand::Show {
+            name: "cliapp".into(),
+        },
+        Some("default"),
+        false,
+    )
+    .await
+    .unwrap_err();
+    assert!(err.to_string().contains("no application named"));
+}
+
+#[tokio::test]
+async fn doctor_passes_and_fails_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("sqlite://{}/test.db?mode=rwc", dir.path().display());
+    let cfg = test_config(dir.path(), &url);
+    crate::doctor(&cfg, true).await.unwrap();
+
+    let mut bad = test_config(dir.path(), &url);
+    bad.database.url = "sqlite:///proc/definitely-not-here/t.db?mode=rwc".into();
+    assert!(crate::doctor(&bad, true).await.is_err());
 }

@@ -2,6 +2,7 @@
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use serde::Deserialize;
 
@@ -56,17 +57,25 @@ pub async fn list(
     Ok(Json(serde_json::json!({ "env": keys })))
 }
 
-/// `PUT /api/v1/orgs/{org}/apps/{id}/env/{key}` — create or replace a variable.
+/// `PUT /api/v1/orgs/{org}/apps/{id}/env/{key}` — create (`201`) or replace
+/// (`204`) a variable.
 pub async fn put(
     State(state): State<AppState>,
     Extension(user): Extension<CurrentUser>,
     Path((org, id, key)): Path<(String, String, String)>,
     Json(body): Json<PutEnv>,
-) -> Result<StatusCode> {
+) -> Result<Response> {
     validate_key(&key)?;
     let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
     fetch_org_app(&state.pool, &org_id, &id).await?;
     let sealed = state.secrets.seal(&body.value)?;
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM env_vars WHERE application_id = ? AND key = ?)",
+    )
+    .bind(&id)
+    .bind(&key)
+    .fetch_one(&state.pool)
+    .await?;
     sqlx::query(
         "INSERT INTO env_vars (id, application_id, key, value_enc) VALUES (?, ?, ?, ?) \
          ON CONFLICT(application_id, key) DO UPDATE SET value_enc = excluded.value_enc",
@@ -89,7 +98,11 @@ pub async fn put(
         Some(&serde_json::json!({"key": key}).to_string()),
     )
     .await?;
-    Ok(StatusCode::NO_CONTENT)
+    if exists {
+        Ok(StatusCode::NO_CONTENT.into_response())
+    } else {
+        Ok((StatusCode::CREATED, Json(serde_json::json!({ "key": key }))).into_response())
+    }
 }
 
 /// `DELETE /api/v1/orgs/{org}/apps/{id}/env/{key}`
