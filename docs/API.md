@@ -286,15 +286,18 @@ nest and require an operator (`admin` or above in any organization).
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/v1/servers` | List nodes (local first) |
+| `GET` | `/api/v1/servers` | List nodes (local first); each carries a `capacity` sample or `null` |
 | `POST` | `/api/v1/servers` | Register a node (`name`, `address`, optional `ssh_*`) |
 | `GET` | `/api/v1/servers/{id}` | Fetch one |
+| `GET` | `/api/v1/servers/{id}/stats?hours=` | Host CPU/memory history (minutes; default 24h, max 720h) |
 | `DELETE` | `/api/v1/servers/{id}` | Remove a node (not `local`; refuses if apps are placed) |
 | `POST` | `/api/v1/servers/{id}/validate` | Reachability (TCP to SSH for remote) |
 | `POST` | `/api/v1/servers/{id}/bootstrap` | SSH: install + start the turaes agent on the node |
 
-SSH keys are sealed at rest and never returned. See
-[PLAN-MULTINODE.md](./PLAN-MULTINODE.md).
+SSH keys are sealed at rest and never returned. Capacity is the control plane
+sampling its own host (`cpu_pct` normalised 0–100, `mem_bytes`/`mem_total_bytes`);
+remote nodes report no host stats yet, so their capacity reads back as `null`.
+See [PLAN-MULTINODE.md](./PLAN-MULTINODE.md).
 
 ## Conventions
 

@@ -4,7 +4,7 @@
 //! without configuring GitHub OAuth first. Conventions match the HTTP API.
 
 use turaes_core::db::Pool;
-use turaes_core::models::{Application, Server};
+use turaes_core::models::{Application, Server, ServerMetric};
 use turaes_core::{Error, Result};
 
 use crate::audit;
@@ -314,21 +314,62 @@ async fn server_add(
     Ok(())
 }
 
+/// Human memory size for the CLI capacity column (`512M`, `1.5G`).
+fn fmt_mem(bytes: i64) -> String {
+    let mib = bytes.max(0) as f64 / (1024.0 * 1024.0);
+    if mib >= 1024.0 {
+        format!("{:.1}G", mib / 1024.0)
+    } else {
+        format!("{mib:.0}M")
+    }
+}
+
 async fn server_list(pool: &Pool, json: bool) -> Result<()> {
     let servers =
         sqlx::query_as::<_, Server>("SELECT * FROM servers ORDER BY is_local DESC, name ASC")
             .fetch_all(pool)
             .await?;
+    let capacity = sqlx::query_as::<_, ServerMetric>(
+        "SELECT sm.* FROM server_metrics sm \
+         JOIN (SELECT server_id, MAX(recorded_at) AS recorded_at \
+               FROM server_metrics GROUP BY server_id) latest \
+           ON sm.server_id = latest.server_id AND sm.recorded_at = latest.recorded_at",
+    )
+    .fetch_all(pool)
+    .await?;
+    let cap_for = |id: &str| capacity.iter().find(|m| m.server_id == id);
     if json {
-        println!("{}", serde_json::json!({ "servers": servers }));
+        let items: Vec<serde_json::Value> = servers
+            .iter()
+            .map(|s| {
+                let mut v = serde_json::to_value(s).unwrap_or(serde_json::Value::Null);
+                v["capacity"] = match cap_for(&s.id) {
+                    Some(c) => serde_json::to_value(c).unwrap_or(serde_json::Value::Null),
+                    None => serde_json::Value::Null,
+                };
+                v
+            })
+            .collect();
+        println!("{}", serde_json::json!({ "servers": items }));
         return Ok(());
     }
-    println!("NAME             STATUS     ADDRESS                  LOCAL  ID");
-    for s in servers {
+    println!(
+        "NAME             STATUS     CPU     MEM            ADDRESS                  LOCAL  ID"
+    );
+    for s in &servers {
+        let (cpu, mem) = match cap_for(&s.id) {
+            Some(c) => (
+                format!("{:.1}%", c.cpu_pct.clamp(0.0, 100.0)),
+                format!("{}/{}", fmt_mem(c.mem_bytes), fmt_mem(c.mem_total_bytes)),
+            ),
+            None => ("—".to_string(), "—".to_string()),
+        };
         println!(
-            "{:<16} {:<10} {:<24} {:<6} {}",
+            "{:<16} {:<10} {:<7} {:<14} {:<24} {:<6} {}",
             s.name,
             s.status,
+            cpu,
+            mem,
             s.address,
             if s.is_local { "yes" } else { "no" },
             s.id

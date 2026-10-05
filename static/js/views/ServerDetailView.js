@@ -2,8 +2,12 @@ import { html } from "../lib/html.js";
 import { useEffect, useState } from "preact/hooks";
 import { api, oapi } from "../lib/api.js";
 import { toast } from "../lib/toast.js";
-import { fmtTime, serverName } from "../lib/format.js";
+import { fmtTime, fmtBytes, parseTs, fmtRangeLabel } from "../lib/format.js";
 import { StatusBadge } from "../components/StatusBadge.js";
+import { Chart } from "../components/Chart.js";
+
+const RANGES = [["1h", 1], ["6h", 6], ["24h", 24], ["7d", 168]];
+const rangeHours = (r) => (RANGES.find(([k]) => k === r) || [null, 24])[1];
 
 export function ServerDetailView({ id }) {
   const [server, setServer] = useState(null);
@@ -11,6 +15,9 @@ export function ServerDetailView({ id }) {
   const [missing, setMissing] = useState(false);
   const [error, setError] = useState(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [metrics, setMetrics] = useState([]);
+  const [range, setRange] = useState("24h");
+  const [statsErr, setStatsErr] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -30,6 +37,24 @@ export function ServerDetailView({ id }) {
     return () => { cancelled = true; };
   }, [id, reloadKey]);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await api(`/api/v1/servers/${id}/stats?hours=${rangeHours(range)}`);
+        if (cancelled) return;
+        setMetrics(r.metrics || []);
+        setStatsErr(null);
+      } catch (e) {
+        if (cancelled) return;
+        if (e.status === 403) setStatsErr("operator access required");
+        else if (e.status === 401) setStatsErr(null);
+        else setStatsErr(e.message);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [id, range]);
+
   const retry = () => {
     setError(null);
     setMissing(false);
@@ -47,6 +72,11 @@ export function ServerDetailView({ id }) {
       <a href="#/servers">← Back to servers</a></div></section>`;
   }
   if (!server) return html`<section class="panel"><p class="muted">Loading…</p></section>`;
+
+  const cpu = metrics.map((m) => ({ x: parseTs(m.recorded_at), y: m.cpu_pct }));
+  const mem = metrics.map((m) => ({ x: parseTs(m.recorded_at), y: m.mem_bytes }));
+  const latest = metrics[metrics.length - 1];
+  const emptyHint = `No host samples in the ${fmtRangeLabel(range)}${server.is_local ? "" : " — remote nodes report capacity once their agent lands"}.`;
 
   return html`
     <section class="panel">
@@ -68,5 +98,23 @@ export function ServerDetailView({ id }) {
             <tbody>${apps.map((a) => html`<tr>
               <td data-label="Name"><a class="mono" href=${`#/apps/${a.id}/overview`}>${a.name}</a></td>
               <td data-label="Status"><${StatusBadge} status=${a.status} /></td></tr>`)}</tbody></table></div>`}
+      <h2 style="margin-top:16px">Capacity <span class="muted small">· host CPU / memory</span></h2>
+      <div class="range-bar">
+        <div class="seg" role="radiogroup" aria-label="Capacity range">
+          ${RANGES.map(([k]) => html`<button type="button" role="radio" aria-checked=${k === range}
+            class=${k === range ? "active" : ""} onClick=${() => setRange(k)}>${k}</button>`)}
+        </div>
+        <span class="muted small" role="status">
+          ${latest ? `latest ${latest.cpu_pct.toFixed(1)}% CPU · ${fmtBytes(latest.mem_bytes)} / ${fmtBytes(latest.mem_total_bytes)}` : "no samples"}
+        </span>
+      </div>
+      ${statsErr
+        ? html`<p class="muted">Capacity unavailable: ${statsErr}.</p>`
+        : html`<div class="charts">
+            <${Chart} title="CPU %" points=${cpu} color="var(--cpu)" formatY=${(v) => v.toFixed(1)}
+              subtitle=${fmtRangeLabel(range)} rangeHours=${rangeHours(range)} emptyHint=${emptyHint} />
+            <${Chart} title="Memory" points=${mem} color="var(--mem)" formatY=${fmtBytes}
+              subtitle=${fmtRangeLabel(range)} rangeHours=${rangeHours(range)} emptyHint=${emptyHint} />
+          </div>`}
     </section>`;
 }
