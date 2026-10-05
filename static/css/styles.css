@@ -103,6 +103,13 @@ a:hover { text-decoration: underline; }
 .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
 .dot.ok { background: var(--ok); }
 .dot.bad { background: var(--bad); }
+.dot.muted { background: var(--muted); }
+.server-block { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px;
+  background: var(--panel-2); min-width: 0; }
+.server-block.offline { border-color: var(--bad); }
+.server-apps { display: grid; gap: 6px; margin-top: 8px; }
+.server-app { display: flex; align-items: center; gap: 8px; font-size: 13px; min-width: 0; }
+.server-app a { overflow-wrap: anywhere; }
 
 main { max-width: 1180px; margin: 22px auto; padding: 0 20px; display: grid; gap: 18px; }
 

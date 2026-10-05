@@ -225,7 +225,11 @@ export function AppsView({ user, servers }) {
           : filtered.length === 0
           ? html`<p class="muted">No applications match this filter.</p>`
           : view === "list"
-          ? html`<${AppList} apps=${filtered} servers=${servers} />`
+          ? (grouped
+            ? html`${grouped.map(([server, items]) => html`
+                <div class="section-band"><h2>${server}</h2><span class="muted small">${items.length} app${items.length === 1 ? "" : "s"}</span></div>
+                <${AppList} apps=${items} servers=${servers} />`)}`
+            : html`<${AppList} apps=${filtered} servers=${servers} />`)
           : grouped
           ? html`${grouped.map(([server, items]) => html`
               <div class="section-band"><h2>${server}</h2><span class="muted small">${items.length} app${items.length === 1 ? "" : "s"}</span></div>
