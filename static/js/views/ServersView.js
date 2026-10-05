@@ -112,7 +112,7 @@ export function ServersView({ user, onChanged }) {
             <tbody>
               ${servers.map((s) => html`
                 <tr>
-                  <td data-label="Name"><a class="mono" href=${`#/servers/${s.id}`}>${s.name}</a>${s.is_local ? html` <span class="pill">local</span>` : null}</td>
+                  <td data-label="Name"><a class="mono" href=${`#/servers/${s.id}`}>${s.name}</a>${s.is_local ? html`<span class="muted small"> · local</span>` : null}</td>
                   <td data-label="Address" class="mono">${s.address}</td>
                   <td data-label="Status"><span class=${"badge " + statusClass(s.status)}>${s.status}</span></td>
                   <td data-label="Last seen" class="muted">${s.last_seen_at ? fmtTime(s.last_seen_at) : "—"}</td>
