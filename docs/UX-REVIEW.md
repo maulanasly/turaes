@@ -71,6 +71,7 @@ Hand-rolled hash router (`lib/router.js`), deep-link/back/refresh safe.
 | **UX-P2** | Servers list + detail (agent version/last-seen), placement select, Validate/Bootstrap UI, lifecycle (stop/start/restart/delete/edit), domain aliases | ✅ |
 | **UX-P3** | search/filter/sort, responsive, favicon/theme-color, build-id detail | ✅ |
 | **UX-P3 guided forms** | stepped create wizard (workload → process → placement → review), review-before-create summary, plain-language native-process constraints, explicit deploy/restart consequences | ✅ |
+| **UX-P4 mobile & a11y** | nav disclosure focus/Escape, scrollable key-value tables, route/tab focus restore, toast live-region severity, skeleton `role=status`, 44px tap targets, AA contrast tokens enforced by `tests/frontend/contrast.test.mjs` | ✅ |
 | **UX-1 control room** | signal-amber primary actions (blue reserved for links/telemetry), identity typography + status strips/resource rows/timelines, global org switcher + fleet summary + labeled health, grouped nav (Operate/Access/System), app attention filter + server grouping, app header with last deploy + grouped tabs + activity preview, server fleet strip, guided create form | ✅ |
 | **UX-2 polish** | mobile nav drawer, 44px coarse-pointer targets, skip link, focus-into-view on route change | ✅ |
 | **UX-3 responsive tables** | stacked resource rows (`data-label`) for all data tables under 640px, headers kept for AT | ✅ |
@@ -82,7 +83,7 @@ Hand-rolled hash router (`lib/router.js`), deep-link/back/refresh safe.
 | ~~Server-capacity telemetry (per-server CPU/mem in fleet view)~~ | **done** — `server_metrics` + fleet/detail views (PR #83) | — |
 | Cursor pagination (`?limit`/`?cursor` on all lists) | backend API change; current caps suffice at this scale | API milestone |
 | ISO-8601 `Z` timestamp storage migration | UTC-naive TEXT across tables with string-compared rollups; string-munging handlers would fake a standard | storage migration PR |
-| Tap-target enlargement pass | changes visual density; needs its own design pass | design review |
+| ~~Tap-target enlargement pass~~ | **done** — coarse-pointer ≥44px targets incl. toast dismiss + wizard steps | — |
 | Mobile bottom navigation | drawer (UX-2) covers wayfinding; bottom nav is a bigger IA change | design review |
 
 ## Sign-in page

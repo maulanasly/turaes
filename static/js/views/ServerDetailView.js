@@ -82,15 +82,15 @@ export function ServerDetailView({ id }) {
     <section class="panel">
       <a href="#/servers" class="muted">← Servers</a>
       <h1 class="mono">${server.name}</h1>
-      <table>
+      <div class="table-wrap"><table>
         <tbody>
-          <tr><th>Address</th><td class="mono">${server.address}</td></tr>
+          <tr><th>Address</th><td class="mono break">${server.address}</td></tr>
           <tr><th>Status</th><td>${server.status}</td></tr>
           <tr><th>Last seen</th><td>${server.last_seen_at ? fmtTime(server.last_seen_at) : "—"}</td></tr>
           <tr><th>Agent version</th><td class="mono">${server.agent_version || "—"}</td></tr>
           <tr><th>Role</th><td>${server.is_local ? "control plane" : "worker"}</td></tr>
         </tbody>
-      </table>
+      </table></div>
       <h2 style="margin-top:16px">Applications on this server</h2>
       ${apps.length === 0
         ? html`<p class="muted">No apps placed here.</p>`

@@ -377,12 +377,12 @@ function Settings({ app, servers, user, onSaved }) {
   };
   return html`
     ${user ? html`<${EditForm} app=${app} servers=${servers} onSaved=${onSaved} />` : null}
-    <table>
+    <div class="table-wrap"><table>
       <tbody>
         <tr><th>Name</th><td class="mono">${app.name}</td></tr>
-        <tr><th>Binary</th><td class="mono">${app.binary_path}</td></tr>
+        <tr><th>Binary</th><td class="mono break">${app.binary_path}</td></tr>
       </tbody>
-    </table>
+    </table></div>
     ${user ? html`<${Domains} appId=${app.id} />` : null}
     ${user && html`<div class="danger-zone">
       <h3>Danger zone</h3>

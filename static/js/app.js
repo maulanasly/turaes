@@ -57,17 +57,36 @@ function Shell() {
   const [orgs, setOrgs] = useState([]);
   const [menuOpen, setMenuOpen] = useState(false);
   const mainRef = useRef(null);
+  const menuBtnRef = useRef(null);
+  const navRef = useRef(null);
 
   // Screen-reader and tab users learn where they are on every navigation.
   // Close the mobile menu and move focus into the new view (without
-  // scrolling) so keyboard/SR users land on fresh content.
+  // scrolling) so keyboard/SR users land on fresh content. Keyed on id/tab as
+  // well as view so app→app and tab→tab moves are announced too.
   useEffect(() => {
     document.title = `turaes — ${VIEW_TITLES[route.view] || "Applications"}`;
     setMenuOpen(false);
     if (mainRef.current) {
       try { mainRef.current.focus({ preventScroll: true }); } catch (e) {}
     }
-  }, [route.view]);
+  }, [route.view, route.id, route.tab]);
+
+  // Mobile nav is a disclosure: focus the first link when it opens, let Escape
+  // close it from anywhere, and return focus to the toggle.
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const first = navRef.current && navRef.current.querySelector("a");
+    if (first && first.focus) first.focus();
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        setMenuOpen(false);
+        if (menuBtnRef.current) menuBtnRef.current.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [menuOpen]);
 
   const loadUser = useCallback(async () => {
     try {
@@ -168,11 +187,11 @@ function Shell() {
     }}>Skip to content</a>
     <header class="topbar">
       <div class="brand">turaes <span class="muted small">· deploy your apps — no containers</span></div>
-      <button class="btn small ghost menu-toggle" aria-expanded=${menuOpen} aria-controls="primary-nav"
-        onClick=${() => setMenuOpen((v) => !v)}
-        onKeyDown=${(e) => { if (e.key === "Escape") setMenuOpen(false); }}>
+      <button ref=${menuBtnRef} class="btn small ghost menu-toggle" aria-expanded=${menuOpen} aria-controls="primary-nav"
+        onClick=${() => setMenuOpen((v) => !v)}>
         ${menuOpen ? "Close" : "Menu"}</button>
-      <nav class=${"nav" + (menuOpen ? " open" : "")} id="primary-nav" aria-label="Primary">
+      <nav ref=${navRef} class=${"nav" + (menuOpen ? " open" : "")} id="primary-nav" aria-label="Primary"
+        onClick=${() => setMenuOpen(false)}>
         <span class="nav-group"><span class="nav-label">Operate</span>
           <${NavLink} route=${route} view="apps" match="app" label="Applications" />
           <${NavLink} route=${route} view="servers" match="server" label="Servers" />
