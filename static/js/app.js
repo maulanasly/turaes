@@ -144,6 +144,7 @@ function Shell() {
 
   const attention = alerts.length;
   const onlineServers = servers.filter((s) => s.status === "online").length;
+  const offlineServers = servers.filter((s) => s.status !== "online").length;
   const crits = alerts.filter((a) => a.severity === "critical");
   const warns = alerts.filter((a) => a.severity !== "critical");
 
@@ -190,7 +191,7 @@ function Shell() {
           ${orgs.map((o) => html`<option value=${o.slug}>${o.slug} (${o.role})</option>`)}
         </select>` : orgs.length === 1 ? html`<span class="muted small" title="Active organization">${orgs[0].slug}</span>` : null}
         <span class="fleet-summary" title="Fleet status">
-          <strong>${servers.length}</strong>&nbsp;servers · <strong>${onlineServers}</strong>&nbsp;online${attention > 0 ? html` · <strong>${attention}</strong>&nbsp;attention` : null}
+          <strong>${servers.length}</strong>&nbsp;servers · <strong>${onlineServers}</strong>&nbsp;online${offlineServers > 0 ? html` · <strong>${offlineServers}</strong>&nbsp;offline` : null}${attention > 0 ? html` · <strong>${attention}</strong>&nbsp;attention` : null}
         </span>
         <span class=${"dot " + (health ? "ok" : "bad")} aria-hidden="true"></span>
         <span class="small" role="status">${health ? "Healthy" : "Unreachable"}</span>
