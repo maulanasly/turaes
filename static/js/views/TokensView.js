@@ -91,16 +91,16 @@ export function TokensView({ user }) {
           ? html`<p class="muted">Token management needs an admin of this organization.</p>`
           : tokens.length === 0
           ? html`<p class="muted">No tokens yet — create one below for CI access.</p>`
-          : html`<div class="table-wrap"><table>
+          : html`<div class="table-wrap"><table class="stacked">
               <thead><tr><th>Name</th><th>Scope</th><th>Created</th><th>Last used</th><th></th></tr></thead>
               <tbody>
                 ${tokens.map((t) => html`
                   <tr>
-                    <td class="mono">${t.name}</td>
-                    <td><span class="pill">${t.scopes}</span></td>
-                    <td class="muted">${t.created_at ? fmtTime(t.created_at) : "—"}</td>
-                    <td class="muted">${t.last_used_at ? fmtTime(t.last_used_at) : "never"}</td>
-                    <td class="controls">
+                    <td data-label="Name" class="mono">${t.name}</td>
+                    <td data-label="Scope"><span class="pill">${t.scopes}</span></td>
+                    <td data-label="Created" class="muted">${t.created_at ? fmtTime(t.created_at) : "—"}</td>
+                    <td data-label="Last used" class="muted">${t.last_used_at ? fmtTime(t.last_used_at) : "never"}</td>
+                    <td class="controls no-label">
                       ${user && html`<button class="btn small ghost" disabled=${busy !== null} onClick=${() => revoke(t)}>Revoke</button>`}
                     </td>
                   </tr>`)}

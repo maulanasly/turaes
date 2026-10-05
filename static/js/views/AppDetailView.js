@@ -24,15 +24,15 @@ function Activity({ entries }) {
   if (!entries) return html`<p class="muted">Loading…</p>`;
   if (!entries.length) return html`<p class="muted">No recorded actions yet.</p>`;
   return html`
-    <table class="table">
+    <table class="table stacked">
       <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Detail</th></tr></thead>
       <tbody>
         ${entries.map((e) => html`
           <tr>
-            <td class="mono small">${fmtTime(e.created_at)}</td>
-            <td>${e.actor_login || "system"}</td>
-            <td class="mono">${e.action}</td>
-            <td class="mono small muted">${e.metadata || "—"}</td>
+            <td data-label="When" class="mono small">${fmtTime(e.created_at)}</td>
+            <td data-label="Actor">${e.actor_login || "system"}</td>
+            <td data-label="Action" class="mono">${e.action}</td>
+            <td data-label="Detail" class="mono small muted">${e.metadata || "—"}</td>
           </tr>`)}
       </tbody>
     </table>`;
@@ -137,9 +137,9 @@ function Overview({ data, range, onRange, updatedAt, loading, onRefresh, activit
         <h2>Visitors by region <span class="muted small">· ${rangeLabel}, unique is latest per region (never summed)</span></h2>
         ${regions.length === 0
           ? html`<p class="muted">No visits recorded in the ${rangeLabel}.</p>`
-          : html`<table><thead><tr><th>Region</th><th>Visits</th><th>Unique (latest)</th></tr></thead>
+          : html`<table class="stacked"><thead><tr><th>Region</th><th>Visits</th><th>Unique (latest)</th></tr></thead>
               <tbody>${regions.map(([region, r]) => html`
-                <tr><td class="mono">${region}</td><td>${r.visits}</td><td>${r.uniques}</td></tr>`)}
+                <tr><td data-label="Region" class="mono">${region}</td><td data-label="Visits">${r.visits}</td><td data-label="Unique (latest)">${r.uniques}</td></tr>`)}
               </tbody></table>`}
       </div>
     </div>`;
@@ -150,13 +150,13 @@ function Deployments({ deployments, onRollbackTo }) {
   if (deployments.length === 0) return html`<p class="muted">No builds yet.</p>`;
   return html`
     <div class="table-wrap">
-    <table>
+    <table class="stacked">
       <thead><tr><th>Status</th><th>Build</th><th>Started</th><th>Finished</th><th></th></tr></thead>
       <tbody>
         ${deployments.map((d) => html`
           <tr>
-            <td><${StatusBadge} status=${d.status} /></td>
-            <td>
+            <td data-label="Status"><${StatusBadge} status=${d.status} /></td>
+            <td data-label="Build">
               <span class="mono">${shortHash(d.artifact_hash)}</span>
               ${d.artifact_hash && html`<button class="btn small ghost" onClick=${async () => {
                 try {
@@ -169,9 +169,9 @@ function Deployments({ deployments, onRollbackTo }) {
               ${d.artifact_hash && html`<details><summary class="muted small">full id</summary>
                 <div class="mono small break">${d.artifact_hash}</div></details>`}
             </td>
-            <td class="muted">${fmtTime(d.started_at)}</td>
-            <td class="muted">${fmtTime(d.finished_at)}</td>
-            <td class="controls">
+            <td data-label="Started" class="muted">${fmtTime(d.started_at)}</td>
+            <td data-label="Finished" class="muted">${fmtTime(d.finished_at)}</td>
+            <td class="controls no-label">
               ${d.artifact_hash && html`<button class="btn small" onClick=${() => onRollbackTo(d.artifact_hash)}>
                 Roll back to this
               </button>`}
@@ -223,10 +223,10 @@ function Environment({ env, appId, reload }) {
     <div>
       ${!env || env.length === 0
         ? html`<p class="muted">No variables.</p>`
-        : html`<table><thead><tr><th>Key</th><th>Created</th><th></th></tr></thead>
+        : html`<table class="stacked"><thead><tr><th>Key</th><th>Created</th><th></th></tr></thead>
             <tbody>${env.map((e) => html`
-              <tr><td class="mono">${e.key}</td><td class="muted">${fmtTime(e.created_at)}</td>
-              <td><button class="btn small ghost" disabled=${busy} onClick=${() => remove(e.key)}>Remove</button></td></tr>`)}
+              <tr><td data-label="Key" class="mono">${e.key}</td><td data-label="Created" class="muted">${fmtTime(e.created_at)}</td>
+              <td class="no-label"><button class="btn small ghost" disabled=${busy} onClick=${() => remove(e.key)}>Remove</button></td></tr>`)}
             </tbody></table>`}
       <form class="form" style="margin-top:12px" onSubmit=${save}>
         <div class="row">
@@ -286,9 +286,9 @@ function Domains({ appId }) {
       <p class="muted small">The primary domain lives in Settings; aliases route here in addition.</p>
       ${!domains || domains.length === 0
         ? html`<p class="muted">No aliases.</p>`
-        : html`<table><tbody>${domains.map((d) => html`
-            <tr><td class="mono">${d.domain}</td>
-            <td><button class="btn small ghost" disabled=${busy} onClick=${() => remove(d.domain)}>Remove</button></td></tr>`)}
+        : html`<table class="stacked"><tbody>${domains.map((d) => html`
+            <tr><td data-label="Domain" class="mono">${d.domain}</td>
+            <td class="no-label"><button class="btn small ghost" disabled=${busy} onClick=${() => remove(d.domain)}>Remove</button></td></tr>`)}
           </tbody></table>`}
       <form class="form" style="margin-top:10px" onSubmit=${add}>
         <div class="row">

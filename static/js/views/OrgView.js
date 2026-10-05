@@ -142,21 +142,21 @@ export function OrgView({ user, onOrgChange }) {
         ? html`<p class="muted">Loading…</p>`
         : members === "denied"
           ? html`<p class="muted">You are not a member of this organization.</p>`
-          : html`<div class="table-wrap"><table>
+          : html`<div class="table-wrap"><table class="stacked">
               <thead><tr><th>Login</th><th>Role</th><th>Since</th><th></th></tr></thead>
               <tbody>
                 ${members.map((m) => html`
                   <tr>
-                    <td class="mono">${m.login}</td>
-                    <td>
+                    <td data-label="Login" class="mono">${m.login}</td>
+                    <td data-label="Role">
                       ${isOwner
                         ? html`<select value=${m.role} disabled=${busy !== null} onChange=${(e) => changeRole(m, e.target.value)}>
                             ${ROLES.map((r) => html`<option value=${r}>${r}</option>`)}
                           </select>`
                         : html`<span class="pill">${m.role}</span>`}
                     </td>
-                    <td class="muted">${m.created_at ? fmtTime(m.created_at) : "—"}</td>
-                    <td class="controls">
+                    <td data-label="Since" class="muted">${m.created_at ? fmtTime(m.created_at) : "—"}</td>
+                    <td class="controls no-label">
                       ${isOwner && html`<button class="btn small ghost" disabled=${busy !== null} onClick=${() => remove(m)}>Remove</button>`}
                     </td>
                   </tr>`)}
