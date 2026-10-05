@@ -129,6 +129,9 @@ h3 { font-size: 13px; margin: 0 0 8px; }
 .stat span:first-child { color: var(--muted); }
 
 .notice { border: 1px solid var(--warn); border-radius: 8px; padding: 10px 12px; margin: 0 0 12px; display: grid; gap: 8px; }
+.notice-warning { border-color: var(--warn); }
+.notice-critical { border-color: var(--bad); }
+.notice-critical .panel-head strong { color: var(--bad); }
 
 /* Control-room primitives: status strips, resource rows, timelines and
    section bands replace generic cards where runtime state is the subject. */
