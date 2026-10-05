@@ -42,13 +42,16 @@ function NewAppForm({ servers, onCreated }) {
   };
   return html`
     <form class="form" onSubmit=${submit}>
+      <div class="section-band"><h2>Identity</h2><span class="muted small">name becomes the unit + install name</span></div>
       <div class="row">
         <label>Name <input name="name" placeholder="beruang" required /></label>
         <label>Port <input name="port" type="number" placeholder="8000" required /></label>
       </div>
       <label>Binary path on the server
         <input name="binary_path" placeholder="/srv/beruang/target/release/beruang-gateway" required />
+        <span class="muted small">A prebuilt binary — turaes never builds or containers anything.</span>
       </label>
+      <div class="section-band"><h2>Placement</h2><span class="muted small">where it runs and how it is reached</span></div>
       <div class="row">
         <label>Domain <input name="domain" placeholder="app.rayakala.ink" /></label>
         <label>Server
@@ -57,6 +60,7 @@ function NewAppForm({ servers, onCreated }) {
           </select>
         </label>
       </div>
+      <div class="section-band"><h2>Runtime</h2><span class="muted small">supervision behavior</span></div>
       <div class="row">
         <label>Managed by
           <select name="runtime">
@@ -79,6 +83,10 @@ export function AppsView({ user, servers }) {
   const [sortKey, setSortKey] = useState(() => {
     try { return sessionStorage.getItem("turaes-apps-sort") || "name"; } catch { return "name"; }
   });
+  const [filter, setFilter] = useState("all");
+
+  const needsAttention = (a) =>
+    a.status === "unhealthy" || a.status === "failed" || a.status === "deploying" || a.status === "unknown";
 
   // List state survives list → detail → back (the views unmount on route change).
   useEffect(() => {
@@ -113,13 +121,31 @@ export function AppsView({ user, servers }) {
     filterApps(apps, q),
     sortKey,
     (id) => serverName(servers, id),
-  );
+  ).filter((a) => filter === "all" || (filter === "attention" && needsAttention(a)));
+  const attentionCount = (apps || []).filter(needsAttention).length;
+
+  const grouped = sortKey === "server" ? (() => {
+    const groups = new Map();
+    for (const a of filtered) {
+      const key = serverName(servers, a.server_id);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(a);
+    }
+    return [...groups.entries()];
+  })() : null;
 
   return html`
     <section class="panel">
       <div class="panel-head">
         <h1>Applications</h1>
         <div class="controls">
+          <div class="seg" role="radiogroup" aria-label="Application filter">
+            <button type="button" role="radio" aria-checked=${filter === "all"}
+              class=${filter === "all" ? "active" : ""} onClick=${() => setFilter("all")}>All</button>
+            <button type="button" role="radio" aria-checked=${filter === "attention"}
+              class=${filter === "attention" ? "active" : ""} onClick=${() => setFilter("attention")}>
+              Attention${attentionCount > 0 ? ` (${attentionCount})` : ""}</button>
+          </div>
           <input class="search" placeholder="Search…" aria-label="Search applications" value=${q}
             onInput=${(e) => setQ(e.target.value)} />
           <select value=${sortKey} onChange=${(e) => setSortKey(e.target.value)} aria-label="Sort by">
@@ -142,6 +168,14 @@ export function AppsView({ user, servers }) {
         ? html`<${Skeleton} lines={4} height=${64} />`
         : apps.length === 0
           ? html`<p class="muted">No applications yet.${user ? "" : " Sign in to create one."}</p>`
+          : filtered.length === 0
+          ? html`<p class="muted">No applications match this filter.</p>`
+          : grouped
+          ? html`${grouped.map(([server, items]) => html`
+              <div class="section-band"><h2>${server}</h2><span class="muted small">${items.length} app${items.length === 1 ? "" : "s"}</span></div>
+              <div class="grid">
+                ${items.map((a) => html`<${AppCard} app=${a} servers=${servers} />`)}
+              </div>`)}`
           : html`<div class="grid">
               ${filtered.map((a) => html`<${AppCard} app=${a} servers=${servers} />`)}
             </div>`}
