@@ -229,6 +229,79 @@ async fn create_and_delete_server() {
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 }
 
+#[tokio::test]
+async fn server_capacity_is_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+
+    let now = chrono::Utc::now();
+    let older = (now - chrono::Duration::hours(2))
+        .format("%Y-%m-%d %H:%M:00")
+        .to_string();
+    let recent = (now - chrono::Duration::hours(1))
+        .format("%Y-%m-%d %H:%M:00")
+        .to_string();
+    // Same minute twice: the minute-bucket upsert keeps one row.
+    crate::monitor::upsert_host_metrics(
+        &state.pool,
+        "local",
+        12.5,
+        1_073_741_824,
+        4_294_967_296,
+        &older,
+    )
+    .await
+    .unwrap();
+    crate::monitor::upsert_host_metrics(
+        &state.pool,
+        "local",
+        40.0,
+        2_147_483_648,
+        4_294_967_296,
+        &recent,
+    )
+    .await
+    .unwrap();
+    crate::monitor::upsert_host_metrics(&state.pool, "local", 20.0, 1000, 4_294_967_296, &recent)
+        .await
+        .unwrap();
+
+    let router = app::build_router(state.clone());
+    // Fleet list carries the latest sample.
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/servers")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let cap = &body["servers"][0]["capacity"];
+    assert_eq!(cap["cpu_pct"].as_f64().unwrap(), 20.0);
+    assert_eq!(cap["mem_bytes"].as_i64().unwrap(), 1000);
+
+    // History returns both distinct minutes, oldest first.
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/servers/local/stats?hours=720")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let metrics = body["metrics"].as_array().unwrap();
+    assert_eq!(metrics.len(), 2);
+    assert_eq!(metrics[0]["cpu_pct"].as_f64().unwrap(), 12.5);
+    assert_eq!(metrics[1]["cpu_pct"].as_f64().unwrap(), 20.0);
+}
+
 async fn create_app(router: &axum::Router, name: &str, binary: &str, port: u16) -> String {
     let payload = json!({"name": name, "binary_path": binary, "port": port});
     let resp = router

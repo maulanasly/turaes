@@ -98,6 +98,86 @@ pub fn proc_to_stats(stat: ProcStat, ticks_per_sec: u64, page_size: u64) -> Reso
     }
 }
 
+/// A host-level resource reading (whole machine, not one unit).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct HostStats {
+    /// Cumulative CPU ticks across all modes (for utilization ratios).
+    pub cpu_total_ticks: u64,
+    /// Cumulative idle (+iowait) CPU ticks.
+    pub cpu_idle_ticks: u64,
+    /// Used memory in bytes (`MemTotal - MemAvailable`).
+    pub mem_bytes: u64,
+    /// Total memory in bytes.
+    pub mem_total_bytes: u64,
+}
+
+/// Parse the aggregate `cpu ` line of `/proc/stat`.
+///
+/// Returns `(idle_ticks, total_ticks)` over user/nice/system/idle/iowait/irq/
+/// softirq/steal. Guest times are already included in user/nice, so the first
+/// eight fields suffice.
+pub fn parse_proc_stat_total(body: &str) -> Option<(u64, u64)> {
+    let line = body.lines().find(|l| l.starts_with("cpu "))?;
+    let fields: Vec<u64> = line
+        .split_whitespace()
+        .skip(1)
+        .take(8)
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .ok()?;
+    if fields.len() < 8 {
+        return None;
+    }
+    let idle = fields[3] + fields[4];
+    let total: u64 = fields.iter().sum();
+    Some((idle, total))
+}
+
+/// Host CPU percent between two `/proc/stat` readings, normalized 0-100
+/// across all cores (unlike [`cpu_percent`], which is per-process and not
+/// normalised, so capacity bars stay bounded).
+pub fn host_cpu_percent(prev_idle: u64, prev_total: u64, cur_idle: u64, cur_total: u64) -> f64 {
+    let idle_delta = cur_idle.saturating_sub(prev_idle);
+    let total_delta = cur_total.saturating_sub(prev_total);
+    if total_delta == 0 {
+        return 0.0;
+    }
+    ((total_delta.saturating_sub(idle_delta)) as f64 / total_delta as f64 * 100.0).clamp(0.0, 100.0)
+}
+
+/// Parse `MemTotal`/`MemAvailable` (kB) from a `/proc/meminfo` body.
+/// Returns `(total_bytes, available_bytes)`.
+pub fn parse_meminfo(body: &str) -> Option<(u64, u64)> {
+    fn kb(body: &str, key: &str) -> Option<u64> {
+        body.lines().find_map(|l| {
+            let (k, rest) = l.split_once(':')?;
+            if k.trim() != key {
+                return None;
+            }
+            rest.split_whitespace().next()?.parse::<u64>().ok()
+        })
+    }
+    Some((
+        kb(body, "MemTotal")? * 1024,
+        kb(body, "MemAvailable")? * 1024,
+    ))
+}
+
+/// Read host CPU + memory. Linux only; `None` elsewhere (mirrors
+/// [`read_cgroup`]).
+pub async fn read_host() -> Option<HostStats> {
+    let stat = tokio::fs::read_to_string("/proc/stat").await.ok()?;
+    let mem = tokio::fs::read_to_string("/proc/meminfo").await.ok()?;
+    let (idle, total) = parse_proc_stat_total(&stat)?;
+    let (mem_total, mem_avail) = parse_meminfo(&mem)?;
+    Some(HostStats {
+        cpu_total_ticks: total,
+        cpu_idle_ticks: idle,
+        mem_bytes: mem_total.saturating_sub(mem_avail),
+        mem_total_bytes: mem_total,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,6 +205,34 @@ mod tests {
         assert_eq!(stat.utime, 7);
         assert_eq!(stat.stime, 3);
         assert_eq!(stat.rss_pages, 250);
+    }
+
+    #[test]
+    fn parses_proc_stat_aggregate() {
+        let body = "cpu  100 20 30 800 40 5 3 2 0 0\ncpu0 50 10 15 400 20 2 1 1 0 0\n";
+        assert_eq!(parse_proc_stat_total(body), Some((840, 1000)));
+        assert_eq!(parse_proc_stat_total("cpu0 1 2 3 4 5 6 7 8\n"), None);
+        assert_eq!(parse_proc_stat_total(""), None);
+    }
+
+    #[test]
+    fn host_cpu_percent_math() {
+        // 100 of 1000 ticks busy -> 10%.
+        assert!((host_cpu_percent(8000, 9000, 8900, 10000) - 10.0).abs() < 1e-9);
+        // Idle-only delta -> 0%.
+        assert_eq!(host_cpu_percent(0, 0, 500, 500), 0.0);
+        // No movement at all -> 0%, never NaN.
+        assert_eq!(host_cpu_percent(100, 1000, 100, 1000), 0.0);
+        // Backwards counters (reboot/remount) saturate to 0%.
+        assert_eq!(host_cpu_percent(900, 1000, 100, 200), 0.0);
+    }
+
+    #[test]
+    fn parses_meminfo() {
+        let body =
+            "MemTotal:        4024548 kB\nMemFree:          123 kB\nMemAvailable:    3608236 kB\n";
+        assert_eq!(parse_meminfo(body), Some((4024548 * 1024, 3608236 * 1024)));
+        assert_eq!(parse_meminfo("MemTotal: 100 kB\n"), None);
     }
 
     #[test]

@@ -111,6 +111,14 @@ a:hover { text-decoration: underline; }
 .server-app { display: flex; align-items: center; gap: 8px; font-size: 13px; min-width: 0; }
 .server-app a { overflow-wrap: anywhere; }
 
+.capacity { display: grid; gap: 4px; margin-top: 8px; }
+.cap-row { display: grid; grid-template-columns: 30px 1fr auto; align-items: center; gap: 6px; font-size: 11px; }
+.cap-track { height: 6px; border-radius: 999px; background: var(--border); overflow: hidden; }
+.cap-fill { height: 100%; background: var(--cpu); border-radius: 999px; }
+.cap-fill.mem { background: var(--mem); }
+.cap-fill.warn { background: var(--warn, #d97706); }
+.cap-fill.bad { background: var(--bad); }
+
 main { max-width: 1180px; margin: 22px auto; padding: 0 20px; display: grid; gap: 18px; }
 
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; }

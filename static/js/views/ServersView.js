@@ -3,10 +3,37 @@ import { useState, useEffect, useCallback } from "preact/hooks";
 import { api, oapi } from "../lib/api.js";
 import { dismiss, toast } from "../lib/toast.js";
 import { confirmAction } from "../lib/confirm.js";
-import { fmtTime } from "../lib/format.js";
+import { fmtTime, fmtBytes } from "../lib/format.js";
 
 function statusClass(s) {
   return s === "online" ? "running" : s === "offline" ? "failed" : "stopped";
+}
+
+// Host capacity sample attached by the API (`null` until the node is sampled).
+function loadClass(pct) {
+  return pct >= 90 ? "bad" : pct >= 75 ? "warn" : "";
+}
+
+function capSummary(cap) {
+  if (!cap) return "—";
+  const cpu = Math.max(0, Math.min(100, cap.cpu_pct || 0));
+  return `${cpu.toFixed(0)}% · ${fmtBytes(cap.mem_bytes)}/${fmtBytes(cap.mem_total_bytes)}`;
+}
+
+function Capacity({ cap }) {
+  if (!cap) return html`<span class="muted small">no sample</span>`;
+  const cpu = Math.max(0, Math.min(100, cap.cpu_pct || 0));
+  const memPct = cap.mem_total_bytes > 0
+    ? Math.max(0, Math.min(100, (cap.mem_bytes / cap.mem_total_bytes) * 100))
+    : 0;
+  return html`<div class="capacity" title=${`CPU ${cpu.toFixed(1)}% · Memory ${fmtBytes(cap.mem_bytes)}/${fmtBytes(cap.mem_total_bytes)}`}>
+    <div class="cap-row"><span class="muted">CPU</span>
+      <div class="cap-track"><div class=${"cap-fill " + loadClass(cpu)} style=${`width:${cpu.toFixed(1)}%`}></div></div>
+      <span class="mono">${cpu.toFixed(0)}%</span></div>
+    <div class="cap-row"><span class="muted">MEM</span>
+      <div class="cap-track"><div class=${"cap-fill mem " + loadClass(memPct)} style=${`width:${memPct.toFixed(1)}%`}></div></div>
+      <span class="mono">${fmtBytes(cap.mem_bytes)}</span></div>
+  </div>`;
 }
 
 export function ServersView({ user, onChanged }) {
@@ -131,6 +158,7 @@ export function ServersView({ user, onChanged }) {
             <div class=${"server-block" + (s.status !== "online" ? " offline" : "")}>
               <div><a class="mono" href=${`#/servers/${s.id}`}><strong>${s.name}</strong></a>${s.is_local ? html`<span class="muted small"> · local</span>` : null}</div>
               <div class="muted small">${s.status}${appsOn(s.id).length > 0 ? ` · ${appsOn(s.id).length} app${appsOn(s.id).length === 1 ? "" : "s"}` : " · empty"}</div>
+              <${Capacity} cap=${s.capacity} />
               ${appsOn(s.id).length > 0 ? html`<div class="server-apps">
                 ${appsOn(s.id).map((a) => html`<div class="server-app">
                   <span class=${"dot " + appDot(a)} aria-hidden="true"></span>
@@ -145,13 +173,14 @@ export function ServersView({ user, onChanged }) {
           ? html`<p class="muted">No servers yet.</p>`
           : html`<div class="section-band"><h2>All servers</h2></div>
             <div class="table-wrap"><table class="stacked">
-            <thead><tr><th>Status</th><th>Name</th><th>Apps</th><th>Agent</th><th>Last seen</th><th></th></tr></thead>
+            <thead><tr><th>Status</th><th>Name</th><th>Apps</th><th>Load</th><th>Agent</th><th>Last seen</th><th></th></tr></thead>
             <tbody>
               ${servers.map((s) => html`
                 <tr>
                   <td data-label="Status"><span class=${"badge " + statusClass(s.status)}>${s.status}</span></td>
                   <td data-label="Name"><a class="mono" href=${`#/servers/${s.id}`}>${s.name}</a>${s.is_local ? html`<span class="muted small"> · local</span>` : null}</td>
                   <td data-label="Apps"><strong>${appsOn(s.id).length}</strong></td>
+                  <td data-label="Load" class="mono small">${capSummary(s.capacity)}</td>
                   <td data-label="Agent" class="muted mono">${s.agent_version || "—"}</td>
                   <td data-label="Last seen" class="muted">${s.last_seen_at ? fmtTime(s.last_seen_at) : "—"}</td>
                   <td class="controls no-label">

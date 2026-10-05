@@ -6,9 +6,9 @@ use std::time::Duration;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::{Extension, Json};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-use turaes_core::models::Server;
+use turaes_core::models::{Server, ServerMetric};
 use turaes_core::{Error, Result};
 
 use crate::audit;
@@ -32,7 +32,16 @@ pub struct CreateServer {
     pub ssh_key: Option<String>,
 }
 
+/// A server plus its most recent capacity sample (`null` until sampled).
+#[derive(Debug, Serialize)]
+struct ServerWithCapacity {
+    #[serde(flatten)]
+    server: Server,
+    capacity: Option<ServerMetric>,
+}
+
 /// `GET /api/v1/servers` — fleet nodes (operator only; nodes are platform-global).
+/// Each node carries its latest host capacity sample, when one exists.
 pub async fn list(
     State(state): State<AppState>,
     Extension(user): Extension<CurrentUser>,
@@ -45,7 +54,28 @@ pub async fn list(
     .bind(super::LimitQuery::effective(q.limit))
     .fetch_all(&state.pool)
     .await?;
+    let capacity = latest_capacity(&state).await?;
+    let servers: Vec<ServerWithCapacity> = servers
+        .into_iter()
+        .map(|server| {
+            let capacity = capacity.iter().find(|m| m.server_id == server.id).cloned();
+            ServerWithCapacity { server, capacity }
+        })
+        .collect();
     Ok(Json(serde_json::json!({ "servers": servers })))
+}
+
+/// Latest capacity row per server (newest `recorded_at` wins).
+async fn latest_capacity(state: &AppState) -> Result<Vec<ServerMetric>> {
+    let rows = sqlx::query_as::<_, ServerMetric>(
+        "SELECT sm.* FROM server_metrics sm \
+         JOIN (SELECT server_id, MAX(recorded_at) AS recorded_at \
+               FROM server_metrics GROUP BY server_id) latest \
+           ON sm.server_id = latest.server_id AND sm.recorded_at = latest.recorded_at",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(rows)
 }
 
 /// `POST /api/v1/servers`
@@ -114,6 +144,28 @@ pub async fn get(
     authz::require_operator(&user)?;
     let server = fetch_server(&state, &id).await?;
     Ok(Json(serde_json::json!({ "server": server })))
+}
+
+/// `GET /api/v1/servers/{id}/stats` — host CPU/memory history (operator only).
+pub async fn stats(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    Path(id): Path<String>,
+    Query(q): Query<super::apps::StatsQuery>,
+) -> Result<Json<serde_json::Value>> {
+    authz::require_operator(&user)?;
+    fetch_server(&state, &id).await?;
+    let hours = q.hours.unwrap_or(24).clamp(1, 720);
+    let rows = sqlx::query_as::<_, ServerMetric>(
+        "SELECT * FROM server_metrics \
+         WHERE server_id = ? AND recorded_at >= datetime('now', ?) \
+         ORDER BY recorded_at ASC",
+    )
+    .bind(&id)
+    .bind(format!("-{hours} hours"))
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(serde_json::json!({ "metrics": rows })))
 }
 
 /// `DELETE /api/v1/servers/{id}`

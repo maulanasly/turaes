@@ -197,6 +197,24 @@ pub struct AppMetric {
     pub recorded_at: String,
 }
 
+/// One sampled host resource reading for a server (local control plane only).
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ServerMetric {
+    /// UUID.
+    pub id: String,
+    /// Owning server (`local` for control-plane self-samples).
+    pub server_id: String,
+    /// CPU percent, normalized 0-100 across all cores (unlike per-app
+    /// readings, which are not normalised, so bars stay bounded).
+    pub cpu_pct: f64,
+    /// Used memory in bytes (`MemTotal - MemAvailable`).
+    pub mem_bytes: i64,
+    /// Total memory in bytes (so the UI can render `used/total`).
+    pub mem_total_bytes: i64,
+    /// Sample timestamp.
+    pub recorded_at: String,
+}
+
 /// One visitor rollup bucket for an application/region.
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct VisitMetric {

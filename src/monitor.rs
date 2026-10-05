@@ -49,16 +49,21 @@ pub async fn run(state: AppState) {
     let secs = state.cfg.monitor.interval_secs.max(1);
     let interval = Duration::from_secs(secs);
     let mut memo: HashMap<String, AppMemo> = HashMap::new();
+    let mut host_cpu: Option<(u64, u64)> = None;
     tracing::info!(interval_secs = secs, "monitor started");
     loop {
-        if let Err(e) = tick(&state, &mut memo).await {
+        if let Err(e) = tick(&state, &mut memo, &mut host_cpu).await {
             tracing::warn!(error = %e, "monitor tick failed");
         }
         tokio::time::sleep(interval).await;
     }
 }
 
-async fn tick(state: &AppState, memo: &mut HashMap<String, AppMemo>) -> turaes_core::Result<()> {
+async fn tick(
+    state: &AppState,
+    memo: &mut HashMap<String, AppMemo>,
+    host_cpu: &mut Option<(u64, u64)>,
+) -> turaes_core::Result<()> {
     // Only monitor apps on this host. Remote apps are supervised (health,
     // restart) by their node's agent; the control plane can't reach or restart
     // them locally. (Cross-node metrics land in N2.)
@@ -79,8 +84,67 @@ async fn tick(state: &AppState, memo: &mut HashMap<String, AppMemo>) -> turaes_c
 
     cleanup(state).await?;
 
+    sample_host(state, host_cpu).await;
+
     // Alert rules run last: they read the statuses this tick just wrote.
     crate::alerts::evaluate(state).await;
+    Ok(())
+}
+
+/// Sample this host's CPU/memory into `server_metrics` for the local node.
+/// Silent on non-Linux hosts (no `/proc`): remote capacity simply reads back
+/// as unknown until agents report host stats.
+async fn sample_host(state: &AppState, prev: &mut Option<(u64, u64)>) {
+    let Some(reading) = stats::read_host().await else {
+        return;
+    };
+    let cpu_pct = match prev.replace((reading.cpu_idle_ticks, reading.cpu_total_ticks)) {
+        Some((prev_idle, prev_total)) => stats::host_cpu_percent(
+            prev_idle,
+            prev_total,
+            reading.cpu_idle_ticks,
+            reading.cpu_total_ticks,
+        ),
+        None => 0.0,
+    };
+    if let Err(e) = upsert_host_metrics(
+        &state.pool,
+        "local",
+        cpu_pct,
+        reading.mem_bytes as i64,
+        reading.mem_total_bytes as i64,
+        &current_minute(),
+    )
+    .await
+    {
+        tracing::warn!(error = %e, "failed to upsert server_metrics");
+    }
+}
+
+/// Minute-bucket upsert shared by the monitor tick (and tests).
+pub(crate) async fn upsert_host_metrics(
+    pool: &turaes_core::db::Pool,
+    server_id: &str,
+    cpu_pct: f64,
+    mem_bytes: i64,
+    mem_total_bytes: i64,
+    minute: &str,
+) -> turaes_core::Result<()> {
+    sqlx::query(
+        "INSERT INTO server_metrics (id, server_id, cpu_pct, mem_bytes, mem_total_bytes, recorded_at) \
+         VALUES (?, ?, ?, ?, ?, ?) \
+         ON CONFLICT(server_id, recorded_at) DO UPDATE SET \
+           cpu_pct = excluded.cpu_pct, mem_bytes = excluded.mem_bytes, \
+           mem_total_bytes = excluded.mem_total_bytes",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(server_id)
+    .bind(cpu_pct)
+    .bind(mem_bytes)
+    .bind(mem_total_bytes)
+    .bind(minute)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -400,6 +464,7 @@ async fn cleanup(state: &AppState) -> turaes_core::Result<()> {
         ("app_metrics", "recorded_at"),
         ("visit_metrics", "recorded_at"),
         ("health_results", "checked_at"),
+        ("server_metrics", "recorded_at"),
     ] {
         let sql = format!("DELETE FROM {table} WHERE {ts} < datetime('now', ?)");
         sqlx::query(&sql).bind(&cutoff).execute(&state.pool).await?;

@@ -83,6 +83,7 @@ pub fn build_router(state: AppState) -> Router {
             "/servers/{id}",
             get(routes::servers::get).delete(routes::servers::delete),
         )
+        .route("/servers/{id}/stats", get(routes::servers::stats))
         .route("/servers/{id}/validate", post(routes::servers::validate))
         .route("/servers/{id}/bootstrap", post(routes::servers::bootstrap))
         .layer(axum::middleware::from_fn_with_state(
