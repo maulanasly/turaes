@@ -3,6 +3,7 @@
   --panel: #171a21;
   --panel-2: #12141a;
   --border: #262b36;
+  --control-border: #6b7280;
   --text: #e6e8ee;
   --muted: #8b93a7;
   --accent: #6ea8fe;
@@ -23,6 +24,7 @@
   --panel: #ffffff;
   --panel-2: #f1f3f6;
   --border: #d9dee6;
+  --control-border: #78828f;
   --text: #191c23;
   --muted: #5b6472;
   --accent: #2563eb;
@@ -86,6 +88,8 @@ a:hover { text-decoration: underline; }
   .nav a { padding: 10px 14px; }
   .tabs a { padding: 10px 14px; }
   .seg button { padding: 8px 14px; }
+  .wizard-steps button { min-height: 44px; }
+  .toast-x { min-width: 44px; min-height: 44px; }
   input, select { min-height: 44px; }
 }
 
@@ -187,12 +191,12 @@ h3 { font-size: 13px; margin: 0 0 8px; }
 .badge.unhealthy, .badge.failed { color: var(--bad); border-color: var(--bad); }
 
 .btn { background: var(--signal); color: var(--signal-ink); border: 0; border-radius: 6px; padding: 7px 13px; font: inherit; font-weight: 700; cursor: pointer; }
-.btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+.btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--control-border); }
 .btn.small { padding: 4px 10px; font-size: 12px; }
 .btn.danger { background: var(--bad); }
 .btn:disabled { opacity: .6; cursor: default; }
 
-input, select { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; color: var(--text); font: inherit; }
+input, select { background: var(--bg); border: 1px solid var(--control-border); border-radius: 6px; padding: 8px 10px; color: var(--text); font: inherit; }
 .search { padding: 6px 10px; }
 
 .form { display: grid; gap: 10px; max-width: 620px; }
@@ -215,7 +219,7 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 .wizard-steps li.done button { color: var(--ok); }
 .wizard-steps button:disabled { cursor: default; opacity: .7; }
 .wizard-num { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px;
-  border-radius: 50%; border: 1px solid var(--border); font-size: 11px; }
+  border-radius: 50%; border: 1px solid var(--control-border); font-size: 11px; }
 .wizard-steps li.active .wizard-num { border-color: var(--signal); background: var(--signal); color: var(--signal-ink); }
 .wizard-steps li.done .wizard-num { border-color: var(--ok); color: var(--ok); }
 .wizard-nav { justify-content: flex-end; }
@@ -242,7 +246,7 @@ input, select { background: var(--bg); border: 1px solid var(--border); border-r
 
 .detail { display: grid; gap: 14px; }
 .range-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.seg { display: inline-flex; gap: 2px; border: 1px solid var(--border); border-radius: 8px; padding: 2px; background: var(--panel-2); }
+.seg { display: inline-flex; gap: 2px; border: 1px solid var(--control-border); border-radius: 8px; padding: 2px; background: var(--panel-2); }
 .seg button { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12px; font-weight: 600;
   padding: 4px 10px; border-radius: 6px; cursor: pointer; }
 .seg button:hover { color: var(--text); }
@@ -281,6 +285,7 @@ summary { cursor: pointer; color: var(--muted); }
 .danger-zone { margin-top: 18px; border: 1px solid var(--bad); border-radius: var(--radius); padding: 12px; }
 
 .skeleton-wrap { display: grid; gap: 10px; }
+.skeleton-bars { display: grid; gap: 10px; }
 .skeleton { background: linear-gradient(90deg, var(--panel-2), var(--border), var(--panel-2)); background-size: 200% 100%; animation: shimmer 1.2s infinite; border-radius: 6px; }
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
@@ -290,7 +295,8 @@ summary { cursor: pointer; color: var(--muted); }
 .toast.success { border-left-color: var(--ok); }
 .toast.error { border-left-color: var(--bad); }
 .toast.info { border-left-color: var(--signal); }
-.toast-x { background: none; border: 0; color: var(--muted); font-size: 16px; cursor: pointer; }
+.toast-x { background: none; border: 0; color: var(--muted); font-size: 16px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; min-width: 32px; min-height: 32px; }
 
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 30; padding: 20px; }
 .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px; max-width: 460px; width: 100%; }

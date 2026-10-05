@@ -13,14 +13,14 @@ export function AboutView({ health, user }) {
       <div class="panel-head"><h1>About</h1></div>
       <div class="brand" style="font-size:20px;font-weight:700">turaes</div>
       <p class="muted small">Deploy your apps — no containers.</p>
-      <table>
+      <div class="table-wrap"><table>
         <tbody>
           <tr><th>Version</th><td class="mono">${version}</td></tr>
           <tr><th>Runtime</th><td class="mono">${runtime}</td></tr>
           <tr><th>Proxy</th><td>${proxy}</td></tr>
           <tr><th>Status</th><td>${ok}</td></tr>
-          <tr><th>Signed in as</th><td class="mono">${user && user.login ? user.login : "—"}</td></tr>
+          <tr><th>Signed in as</th><td class="mono break">${user && user.login ? user.login : "—"}</td></tr>
         </tbody>
-      </table>
+      </table></div>
     </section>`;
 }
