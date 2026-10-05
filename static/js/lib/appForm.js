@@ -61,30 +61,66 @@ export function emptyDraft(serverId = "local") {
   };
 }
 
-// First blocking error for a step, or null. Mirrors the server's validation so
-// the form never submits something the API will reject.
-export function stepError(draft, step) {
+export function resourceLimitErrors(runtime, memLimit, cpuLimit) {
+  const errors = {};
+  const hasMemLimit = memLimit !== "" && memLimit !== null && memLimit !== undefined;
+  const hasCpuLimit = cpuLimit !== "" && cpuLimit !== null && cpuLimit !== undefined;
+  if (runtime !== "systemd" && runtime !== "proc") errors.runtime = "Choose systemd or turaes (proc).";
+  if (hasMemLimit) {
+    const mem = Number(memLimit);
+    if (!Number.isInteger(mem) || mem < 16 || mem > 65536) {
+      errors.mem_limit_mb = "Enter a whole number from 16 to 65536 MiB.";
+    }
+  }
+  if (hasCpuLimit) {
+    const cpu = Number(cpuLimit);
+    if (!Number.isInteger(cpu) || cpu < 1 || cpu > 6400) {
+      errors.cpu_quota_pct = "Enter a whole number from 1 to 6400 percent.";
+    }
+  }
+  if (runtime === "proc" && (hasMemLimit || hasCpuLimit)) {
+    errors.runtime = "Resource limits require systemd; choose systemd or clear both limits.";
+  }
+  return errors;
+}
+
+// Blocking errors keyed by payload field. Ranges and kind/runtime constraints
+// mirror the API so review never knowingly submits an invalid draft.
+export function stepErrors(draft, step) {
+  const errors = {};
   if (step === 0) {
-    return draft.kind ? null : "Choose a workload type.";
+    if (!KINDS.some((k) => k.id === draft.kind)) errors.kind = "Choose a workload type.";
+    return errors;
   }
   if (step === 1) {
     const name = draft.name.trim();
-    if (!name) return "Name is required.";
-    if (name.length > 64 || !/^[a-z0-9-]+$/.test(name) || name.startsWith("-") || name.endsWith("-")) {
-      return "Name must be a lowercase slug of a-z, 0-9 and '-'.";
+    if (!name) errors.name = "Name is required.";
+    else if (name.length > 64 || !/^[a-z0-9-]+$/.test(name) || name.startsWith("-") || name.endsWith("-")) {
+      errors.name = "Use up to 64 lowercase letters, digits or dashes; do not start or end with a dash.";
     }
     if (draft.kind === "static") {
-      if (!draft.publish_dir.trim()) return "A source directory is required for a static site.";
+      if (!draft.publish_dir.trim()) errors.publish_dir = "A source directory is required for a static site.";
     } else if (!draft.binary_path.trim()) {
-      return "A binary path is required.";
+      errors.binary_path = "A prebuilt binary path is required.";
     }
     if (draft.kind !== "worker") {
       const port = Number(draft.port);
-      if (!Number.isInteger(port) || port < 1 || port > 65535) return "Enter a port between 1 and 65535.";
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        errors.port = "Enter a whole-number port from 1 to 65535.";
+      }
     }
-    return null;
+    return errors;
   }
-  return null;
+  if (step === 2) {
+    if (!draft.server_id) errors.server_id = "Choose a server.";
+    Object.assign(errors, resourceLimitErrors(draft.runtime, draft.mem_limit_mb, draft.cpu_quota_pct));
+  }
+  return errors;
+}
+
+// First blocking error for callers that only need a single summary message.
+export function stepError(draft, step) {
+  return Object.values(stepErrors(draft, step))[0] || null;
 }
 
 // API payload for POST /apps. Only sends fields that apply to the workload.
@@ -144,55 +180,99 @@ export function reviewGroups(draft, serverLabel) {
 }
 
 // What creating the app does (it does not start anything yet).
-export function createConsequences(kind) {
+export function createConsequences(kind, domain = "") {
   const notes = ["Creating only records the app — it starts as stopped and is not reachable until you deploy."];
   if (kind === "static") {
-    notes.push("On deploy, turaes serves the files through the proxy — no build runs.");
+    notes.push(domain
+      ? "On deploy, turaes serves the files and routes this domain — no build runs."
+      : "On deploy, turaes serves the files; no public domain route is configured and no build runs.");
   } else if (kind === "worker") {
     notes.push("On deploy, turaes installs the binary and starts the process; there is no port or route to swap.");
   } else {
-    notes.push("On deploy, turaes installs the binary, starts the process, then routes the domain once a health check passes.");
+    notes.push(domain
+      ? "On deploy, turaes installs the binary, starts the process, then routes this domain once a health check passes."
+      : "On deploy, turaes installs the binary and health-checks the process; no public domain route is configured.");
   }
   return notes;
 }
 
 // Consequences shown when confirming lifecycle actions.
 export function deployConsequences(app) {
-  const notes = ["Installs the app's current binary and starts a new version on a spare port."];
-  if (app && app.domain) {
-    notes.push("Re-points the proxy route to the new process only after it passes its health check — no downtime.");
-  } else {
-    notes.push("Keeps the previous process serving until the new one passes its health check.");
+  if (app && app.kind === "static") {
+    const route = app.domain
+      ? "Checks the new file server, then moves the configured domain route."
+      : "Starts the new file server; no public domain route is configured.";
+    return ["Copies the source directory into the inactive slot and starts the built-in file server.", route,
+      "The previous slot remains available for rollback."];
   }
-  notes.push("The previous build is retained, so you can roll back.");
-  return notes;
+  if (app && app.kind === "worker") {
+    return [
+      "Starts the new worker in the inactive slot; workers have no HTTP port or health check.",
+      "After the new worker starts, the previous slot is stopped and retained for rollback.",
+    ];
+  }
+  const launch = app && app.command
+    ? "Starts the configured argv in a new slot; the executable runs in place and is not copied."
+    : "Copies the current binary into the inactive slot and starts it on the paired port.";
+  const route = app && app.domain
+    ? "Moves the domain route only after its health check passes; the previous process keeps serving meanwhile."
+    : "Health-checks the new process before replacing the previous slot.";
+  return [launch, route, "The previous slot remains available for rollback."];
 }
 
-export function restartConsequences() {
+export function restartConsequences(app) {
+  if (app && app.kind === "worker") {
+    return ["Stops and starts the active worker in place.", "Background processing pauses briefly during the restart."];
+  }
   return [
     "Restarts the active process on the same port.",
     "Expect a brief interruption while it comes back up.",
   ];
 }
 
-export function stopConsequences() {
+export function stopConsequences(app) {
+  if (app && app.kind === "worker") return ["Stops the background process; there is no HTTP route."];
   return [
-    "Stops the process and removes its route.",
-    "Traffic drops immediately until you start or redeploy it.",
+    "Stops the process. Its configured route remains, but requests fail until the app starts again.",
   ];
 }
 
-export function startConsequences() {
+export function startConsequences(app) {
+  if (app && app.kind === "worker") return ["Starts the background process; there is no HTTP route or health check."];
   return [
-    "Starts the process and re-adds its route.",
-    "Traffic returns only after a successful health check.",
+    "Starts the process on its active port. The configured route remains in place.",
+    "Requests can succeed once the process is listening and ready.",
   ];
 }
 
-export function rollbackConsequences(hash) {
+export function lifecycleSummary(app) {
+  if (app.kind === "worker") return "Deploy starts a replacement worker; restart pauses background work briefly. Workers have no HTTP route.";
+  if (app.kind === "static") {
+    const route = app.domain
+      ? "switches the configured route after the file server is ready"
+      : "starts a new slot without a public route";
+    return `Deploy syncs files into a new slot and ${route}. Restart briefly interrupts the active file server.`;
+  }
+  const route = app.domain ? "switching the configured route" : "replacing the active slot";
+  return `Deploy health-checks a new process before ${route}. Restart briefly interrupts the active process; Stop leaves the route configured but requests fail until Start.`;
+}
+
+export function rollbackConsequences(app, hash) {
+  if (app && app.kind === "static") {
+    return [app.domain
+      ? "Switches the configured domain route back to the previous static slot and its files."
+      : "Switches the active static version back to the previous retained slot; no public route is configured."];
+  }
+  if (app && app.kind === "worker") {
+    return [
+      `Starts the previous worker version${hash ? ` (${hash})` : ""} in the inactive slot; no HTTP health check is used.`,
+      "Stops the current worker after the replacement starts.",
+    ];
+  }
   return [
     hash
-      ? `Redeploys build ${hash} on a spare port, then swaps the route when it is healthy.`
-      : "Redeploys the previous build on a spare port, then swaps the route when it is healthy.",
+      ? `Deploys build ${hash} to the inactive slot, health-checks it, then switches traffic.`
+      : "Deploys the previous build to the inactive slot, health-checks it, then switches traffic.",
+    "Keeps the currently active slot serving if the replacement fails its health check.",
   ];
 }

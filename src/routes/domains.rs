@@ -21,7 +21,7 @@ pub struct AddDomain {
     pub domain: String,
 }
 
-fn validate_domain(domain: &str) -> Result<String> {
+pub(crate) fn validate_domain(domain: &str) -> Result<String> {
     let d = domain.trim().to_ascii_lowercase();
     let ok = !d.is_empty()
         && d.len() <= 253
@@ -33,9 +33,10 @@ fn validate_domain(domain: &str) -> Result<String> {
     if ok {
         Ok(d)
     } else {
-        Err(Error::BadRequest(format!(
-            "invalid domain '{domain}': use a lowercase FQDN like www.example.com"
-        )))
+        Err(Error::FieldValidation {
+            field: "domain".into(),
+            detail: format!("'{domain}' is invalid; use a hostname like www.example.com"),
+        })
     }
 }
 
@@ -47,7 +48,13 @@ pub async fn list(
     Query(q): Query<super::LimitQuery>,
 ) -> Result<Json<serde_json::Value>> {
     let org_id = authz::authorize_org(&state, &user, &org, Role::Viewer).await?;
-    fetch_org_app(&state.pool, &org_id, &id).await?;
+    let app = fetch_org_app(&state.pool, &org_id, &id).await?;
+    if app.kind == "worker" {
+        return Err(Error::FieldValidation {
+            field: "domain".into(),
+            detail: "background workers do not have HTTP routes".into(),
+        });
+    }
     let domains = sqlx::query_as::<_, Domain>(
         "SELECT * FROM domains WHERE application_id = ? ORDER BY domain ASC LIMIT ?",
     )
@@ -66,8 +73,22 @@ pub async fn add(
     Json(input): Json<AddDomain>,
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
     let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
-    fetch_org_app(&state.pool, &org_id, &id).await?;
-    quotas::ensure_domain_capacity(&state.pool, &org_id).await?;
+    let app = fetch_org_app(&state.pool, &org_id, &id).await?;
+    if app.kind == "worker" {
+        return Err(Error::FieldValidation {
+            field: "domain".into(),
+            detail: "background workers do not have HTTP routes".into(),
+        });
+    }
+    quotas::ensure_domain_capacity(&state.pool, &org_id)
+        .await
+        .map_err(|error| match error {
+            Error::Conflict(detail) => Error::FieldConflict {
+                field: "domain".into(),
+                detail,
+            },
+            other => other,
+        })?;
     let domain = validate_domain(&input.domain)?;
     let row = sqlx::query_as::<_, Domain>(
         "INSERT INTO domains (id, application_id, domain, is_primary) \
@@ -81,7 +102,10 @@ pub async fn add(
     .map_err(|e| {
         if let sqlx::Error::Database(db) = &e {
             if db.message().contains("UNIQUE") {
-                return Error::Conflict(format!("domain '{domain}' is already in use"));
+                return Error::FieldConflict {
+                    field: "domain".into(),
+                    detail: format!("domain '{domain}' is already in use"),
+                };
             }
         }
         Error::Db(e)

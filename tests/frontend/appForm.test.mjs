@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  KINDS, STEPS, emptyDraft, kindInfo, stepError, buildPayload, reviewGroups,
+  KINDS, STEPS, emptyDraft, kindInfo, stepError, stepErrors, buildPayload, reviewGroups,
   createConsequences, deployConsequences, restartConsequences, stopConsequences,
-  startConsequences, rollbackConsequences,
+  startConsequences, rollbackConsequences, lifecycleSummary,
 } from "../../static/js/lib/appForm.js";
 
 test("kinds cover the three workload shapes", () => {
@@ -32,7 +32,7 @@ test("stepError enforces name and per-kind required fields", () => {
   assert.match(stepError(d, 1), /Name/);
 
   d.name = "Beruang";
-  assert.match(stepError(d, 1), /lowercase slug/);
+  assert.match(stepError(d, 1), /lowercase letters/);
   d.name = "beruang";
   assert.match(stepError(d, 1), /binary path/);
 
@@ -50,6 +50,24 @@ test("stepError enforces name and per-kind required fields", () => {
   // Workers need no port.
   const w = { ...emptyDraft(), kind: "worker", name: "jobs", binary_path: "/srv/jobs/run" };
   assert.equal(stepError(w, 1), null);
+});
+
+test("placement validation points to invalid limits and runtime combinations", () => {
+  const d = {
+    ...emptyDraft(),
+    mem_limit_mb: "8",
+    cpu_quota_pct: "6401",
+  };
+  assert.match(stepErrors(d, 2).mem_limit_mb, /16 to 65536/);
+  assert.match(stepErrors(d, 2).cpu_quota_pct, /1 to 6400/);
+
+  d.mem_limit_mb = "256";
+  d.cpu_quota_pct = "50";
+  d.runtime = "proc";
+  assert.match(stepErrors(d, 2).runtime, /require systemd/);
+
+  d.runtime = "systemd";
+  assert.deepEqual(stepErrors(d, 2), {});
 });
 
 test("buildPayload sends only kind-relevant fields", () => {
@@ -92,11 +110,16 @@ test("reviewGroups summarises identity, process and placement", () => {
 
 test("lifecycle consequences are always explained", () => {
   assert.ok(createConsequences("service").length >= 2);
+  assert.match(createConsequences("service").join(" "), /no public domain route/);
   assert.match(createConsequences("worker").join(" "), /no port or route/);
-  assert.ok(deployConsequences({ domain: "a.example" }).join(" ").includes("no downtime"));
+  assert.ok(deployConsequences({ kind: "service", domain: "a.example" }).join(" ").includes("health check"));
+  assert.match(deployConsequences({ kind: "static" }).join(" "), /source directory/);
+  assert.match(deployConsequences({ kind: "worker" }).join(" "), /no HTTP port or health check/);
   assert.ok(restartConsequences().join(" ").includes("interruption"));
-  assert.ok(stopConsequences().join(" ").includes("immediately"));
-  assert.ok(startConsequences().join(" ").includes("health check"));
-  assert.ok(rollbackConsequences().join(" ").includes("previous build"));
-  assert.ok(rollbackConsequences("deadbeef").join(" ").includes("deadbeef"));
+  assert.ok(stopConsequences().join(" ").includes("route remains"));
+  assert.ok(startConsequences().join(" ").includes("listening"));
+  assert.ok(rollbackConsequences({ kind: "service" }).join(" ").includes("previous build"));
+  assert.ok(rollbackConsequences({ kind: "service" }, "deadbeef").join(" ").includes("deadbeef"));
+  assert.match(rollbackConsequences({ kind: "worker" }).join(" "), /no HTTP health check/);
+  assert.match(lifecycleSummary({ kind: "worker" }), /no HTTP route/);
 });

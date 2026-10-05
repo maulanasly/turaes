@@ -857,13 +857,21 @@ async fn update_app_patches_fields() {
     let id = create_app(&router, "uapp", "/usr/bin/true", 9800).await;
 
     let resp = router
+        .clone()
         .oneshot(
             Request::builder()
                 .method("PATCH")
                 .uri(format!("/api/v1/orgs/default/apps/{id}"))
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    json!({"port": 9801, "domain": "u.test"}).to_string(),
+                    json!({
+                        "port": 9801,
+                        "domain": "u.test",
+                        "runtime": "systemd",
+                        "mem_limit_mb": 256,
+                        "cpu_quota_pct": 50
+                    })
+                    .to_string(),
                 ))
                 .unwrap(),
         )
@@ -873,6 +881,45 @@ async fn update_app_patches_fields() {
     let body = body_json(resp).await;
     assert_eq!(body["application"]["port"], 9801);
     assert_eq!(body["application"]["domain"], "u.test");
+    assert_eq!(body["application"]["mem_limit_mb"], 256);
+    assert_eq!(body["application"]["cpu_quota_pct"], 50);
+
+    // Omitted nullable fields preserve their current values.
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/orgs/default/apps/{id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"domain": "u.test"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert_eq!(body["application"]["mem_limit_mb"], 256);
+    assert_eq!(body["application"]["cpu_quota_pct"], 50);
+
+    // Explicit null clears both limits to unlimited.
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/orgs/default/apps/{id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"mem_limit_mb": null, "cpu_quota_pct": null}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert!(body["application"]["mem_limit_mb"].is_null());
+    assert!(body["application"]["cpu_quota_pct"].is_null());
 }
 
 #[tokio::test]
@@ -1141,6 +1188,79 @@ async fn deploy_health_failure_keeps_previous() {
 }
 
 #[tokio::test]
+async fn failed_redeploy_preserves_the_serving_slot_status() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+    let binary = write_health_server(dir.path());
+    let id = create_app(&router, "keepapp", &binary, 9261).await;
+
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/default/apps/{id}/deploy"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let active_before: i64 =
+        sqlx::query_scalar("SELECT active_port FROM applications WHERE id = ?")
+            .bind(&id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+
+    // Replace the source with a process that exits instead of serving health.
+    sqlx::query("UPDATE applications SET binary_path = '/usr/bin/true' WHERE id = ?")
+        .bind(&id)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/default/apps/{id}/deploy"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(!resp.status().is_success());
+
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/orgs/default/apps/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let application = body_json(resp).await["application"].clone();
+    assert_eq!(application["status"], "running");
+    assert_eq!(application["active_port"], active_before);
+
+    let app: turaes_core::models::Application =
+        sqlx::query_as("SELECT * FROM applications WHERE id = ?")
+            .bind(&id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    let runtime = crate::routes::apps::runtime_for(&state.cfg, &app.runtime);
+    runtime
+        .stop(&crate::routes::apps::active_spec(&state.cfg, &app))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn invalid_name_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let router = test_router(dir.path()).await;
@@ -1157,6 +1277,34 @@ async fn invalid_name_is_rejected() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = body_json(resp).await;
+    assert_eq!(body["field"], "name");
+    assert_eq!(body["code"], "bad_request");
+}
+
+#[tokio::test]
+async fn invalid_primary_domain_is_rejected_on_its_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let payload = json!({
+        "name": "badomain",
+        "binary_path": "/bin/true",
+        "port": 9370,
+        "domain": "not a hostname",
+    });
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/apps")
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body_json(resp).await["field"], "domain");
 }
 
 #[tokio::test]
@@ -1353,6 +1501,9 @@ async fn duplicate_and_paired_ports_conflict() {
     let router = test_router(dir.path()).await;
     let resp = router.oneshot(mk("qapp", 9100)).await.unwrap();
     assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let body = body_json(resp).await;
+    assert_eq!(body["field"], "port");
+    assert_eq!(body["code"], "conflict");
 
     // The blue/green pair port (slot_offset is 1000 in tests) clashes too.
     let router = test_router(dir.path()).await;
@@ -2005,9 +2156,15 @@ async fn limits_stored_and_validated() {
     assert_eq!(body["application"]["cpu_quota_pct"], 50);
 
     // Out-of-range values are rejected.
-    for bad in [
-        json!({"name": "b1", "binary_path": "/bin/true", "port": 9501, "mem_limit_mb": 8}),
-        json!({"name": "b2", "binary_path": "/bin/true", "port": 9502, "cpu_quota_pct": 0}),
+    for (bad, field) in [
+        (
+            json!({"name": "b1", "binary_path": "/bin/true", "port": 9501, "mem_limit_mb": 8}),
+            "mem_limit_mb",
+        ),
+        (
+            json!({"name": "b2", "binary_path": "/bin/true", "port": 9502, "cpu_quota_pct": 0}),
+            "cpu_quota_pct",
+        ),
     ] {
         let router = test_router(dir.path()).await;
         let resp = router
@@ -2022,6 +2179,7 @@ async fn limits_stored_and_validated() {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body_json(resp).await["field"], field);
     }
 
     // The proc runtime cannot confine: limits with it are rejected, not
@@ -2044,6 +2202,7 @@ async fn limits_stored_and_validated() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body_json(resp).await["field"], "runtime");
 }
 
 #[tokio::test]
@@ -2950,6 +3109,161 @@ async fn api_rejects_kind_mismatches() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn worker_settings_reject_web_only_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/apps")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"name": "jobs", "binary_path": "/bin/sleep", "kind": "worker"})
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let id = body_json(resp).await["application"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    for (uri, payload, field) in [
+        (
+            format!("/api/v1/orgs/default/apps/{id}"),
+            json!({"domain": "jobs.example.test"}),
+            "domain",
+        ),
+        (
+            format!("/api/v1/orgs/default/apps/{id}"),
+            json!({"metrics_path": "/metrics"}),
+            "metrics_path",
+        ),
+        (
+            format!("/api/v1/orgs/default/apps/{id}/domains"),
+            json!({"domain": "jobs.example.test"}),
+            "domain",
+        ),
+    ] {
+        let method = if uri.ends_with("/domains") {
+            "POST"
+        } else {
+            "PATCH"
+        };
+        let resp = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body_json(resp).await["field"], field);
+    }
+}
+
+#[tokio::test]
+async fn command_app_rollback_returns_a_clear_field_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let payload = json!({
+        "name": "argvapp",
+        "command": ["/usr/bin/true"],
+        "port": 9943,
+    });
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/apps")
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let id = body_json(resp).await["application"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/default/apps/{id}/rollback"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = body_json(resp).await;
+    assert_eq!(body["field"], "command");
+    assert!(body["detail"]
+        .as_str()
+        .unwrap()
+        .contains("do not retain previous argv"));
+}
+
+#[tokio::test]
+async fn static_rollback_rejects_unsupported_explicit_targets() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/apps")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "staticrollback",
+                        "kind": "static",
+                        "publish_dir": "/tmp/not-deployed",
+                        "port": 9944
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let id = body_json(resp).await["application"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/default/apps/{id}/rollback"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"artifact_hash": "dir:old"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body_json(resp).await["field"], "artifact_hash");
 }
 
 #[tokio::test]

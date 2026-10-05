@@ -72,7 +72,7 @@ Hand-rolled hash router (`lib/router.js`), deep-link/back/refresh safe.
 | **UX-P1** | app detail tabs (Overview/Deployments/Environment/Logs/Settings), env editor, logs controls, chart a11y, timestamp consistency | 🔄 |
 | **UX-P2** | Servers list + detail (agent version/last-seen), placement select, Validate/Bootstrap UI, lifecycle (stop/start/restart/delete/edit), domain aliases | ✅ |
 | **UX-P3** | search/filter/sort, responsive, favicon/theme-color, build-id detail | ✅ |
-| **UX-P3 guided forms** | stepped create wizard (workload → process → placement → review), review-before-create summary, plain-language native-process constraints, explicit deploy/restart consequences | ✅ |
+| **UX-P3 guided forms** | stepped create wizard (workload → process → placement → review), review-before-create summary, plain-language native-process constraints, field-linked API errors, workload-specific lifecycle consequences | ✅ |
 | **UX-P4 mobile & a11y** | nav disclosure focus/Escape, scrollable key-value tables, route/tab focus restore, toast live-region severity, skeleton `role=status`, 44px tap targets, AA contrast tokens enforced by `tests/frontend/contrast.test.mjs` | ✅ |
 | **UX-1 control room** | indigo primary actions (cyan reserved for links/telemetry), amber warnings, identity typography + status strips/resource rows/timelines, global org switcher + fleet summary + labeled health, grouped nav (Operate/Access/System), app attention filter + server grouping, app header with last deploy + grouped tabs + activity preview, server fleet strip, guided create form | ✅ |
 | **UX-2 polish** | mobile nav drawer, 44px coarse-pointer targets, skip link, focus-into-view on route change | ✅ |

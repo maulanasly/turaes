@@ -1,9 +1,8 @@
 //! The single error type crossing turaes boundaries.
 //!
-//! Every variant maps to a JSON body `{"detail": "...", "code": "..."}` — the
-//! same `detail` shape beruang and monthly-logs use, plus a stable
-//! machine-readable code so clients never parse human text. Bad input is 422
-//! (not 400) to stay consistent across the fleet.
+//! Errors map to a JSON body with a stable machine-readable `code`; validation
+//! responses may also include `field` so forms can put feedback next to input.
+//! Bad input is 422 (not 400) to stay consistent across the fleet.
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -31,9 +30,15 @@ pub enum Error {
     /// Input failed validation.
     #[error("invalid input: {0}")]
     BadRequest(String),
+    /// Input failed validation for a specific request field.
+    #[error("invalid input: {detail}")]
+    FieldValidation { field: String, detail: String },
     /// The request conflicts with current state.
     #[error("conflict: {0}")]
     Conflict(String),
+    /// The request conflicts with current state for a specific field.
+    #[error("conflict: {detail}")]
+    FieldConflict { field: String, detail: String },
     /// A storage layer failure.
     #[error("database error: {0}")]
     Db(#[from] sqlx::Error),
@@ -52,8 +57,10 @@ impl Error {
             Error::NotFound(_) => StatusCode::NOT_FOUND,
             Error::Unauthorized(_) => StatusCode::UNAUTHORIZED,
             Error::Forbidden(_) => StatusCode::FORBIDDEN,
-            Error::BadRequest(_) => StatusCode::UNPROCESSABLE_ENTITY,
-            Error::Conflict(_) => StatusCode::CONFLICT,
+            Error::BadRequest(_) | Error::FieldValidation { .. } => {
+                StatusCode::UNPROCESSABLE_ENTITY
+            }
+            Error::Conflict(_) | Error::FieldConflict { .. } => StatusCode::CONFLICT,
             Error::Config(_) | Error::Db(_) | Error::Io(_) | Error::Internal(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
@@ -68,8 +75,8 @@ impl Error {
             Error::NotFound(_) => "not_found",
             Error::Unauthorized(_) => "unauthorized",
             Error::Forbidden(_) => "forbidden",
-            Error::BadRequest(_) => "bad_request",
-            Error::Conflict(_) => "conflict",
+            Error::BadRequest(_) | Error::FieldValidation { .. } => "bad_request",
+            Error::Conflict(_) | Error::FieldConflict { .. } => "conflict",
             Error::Db(_) => "db",
             Error::Io(_) => "io",
             Error::Internal(_) => "internal",
@@ -83,10 +90,12 @@ impl IntoResponse for Error {
         if status.is_server_error() {
             tracing::error!(error = %self, "request failed");
         }
-        (
-            status,
-            Json(json!({ "detail": self.to_string(), "code": self.code() })),
-        )
-            .into_response()
+        let body = match &self {
+            Error::FieldValidation { field, .. } | Error::FieldConflict { field, .. } => {
+                json!({ "detail": self.to_string(), "code": self.code(), "field": field })
+            }
+            _ => json!({ "detail": self.to_string(), "code": self.code() }),
+        };
+        (status, Json(body)).into_response()
     }
 }
