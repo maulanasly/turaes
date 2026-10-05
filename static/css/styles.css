@@ -60,6 +60,38 @@ a:hover { text-decoration: underline; }
 .nav { display: flex; gap: 10px; margin-right: auto; align-items: center; flex-wrap: wrap; }
 .nav a { padding: 5px 10px; border-radius: 6px; color: var(--muted); }
 .nav a.active { color: var(--text); background: var(--panel-2); box-shadow: inset 0 -2px 0 var(--signal); }
+.menu-toggle { display: none; }
+.skip-link { position: absolute; left: 12px; top: -48px; z-index: 50; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 6px; padding: 8px 14px; transition: top .15s ease; }
+.skip-link:focus { top: 8px; }
+
+/* Narrow screens: collapse the nav groups behind a menu button instead of
+   wrapping the whole topbar into a multi-row header. */
+@media (max-width: 760px) {
+  .topbar { gap: 10px; padding: 10px 14px; }
+  .menu-toggle { display: inline-block; }
+  .nav { display: none; width: 100%; margin-right: 0; flex-direction: column;
+    align-items: stretch; gap: 2px; order: 5; }
+  .nav.open { display: flex; }
+  .nav-group { flex-direction: column; align-items: stretch; }
+  .nav a { padding: 10px 12px; }
+  .topbar .controls { width: 100%; }
+}
+
+/* Coarse pointers (touch): meet the 44px minimum target size without
+   changing desktop density. */
+@media (pointer: coarse) {
+  .btn { min-height: 44px; }
+  .btn.small { min-height: 40px; padding: 8px 14px; }
+  .nav a { padding: 10px 14px; }
+  .tabs a { padding: 10px 14px; }
+  .seg button { padding: 8px 14px; }
+  input, select { min-height: 44px; }
+}
+
+/* Programmatic focus target for route changes (tabindex=-1 keeps it out of
+   the tab order, so no visible outline is needed). */
+#main:focus { outline: none; }
 .nav-group { display: flex; align-items: center; gap: 4px; }
 .nav-label { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 2px; }
 

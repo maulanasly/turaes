@@ -1,6 +1,6 @@
 // turaes dashboard — zero-build Preact + HTM (vendored), no bundler, no CDN.
 import { render } from "preact";
-import { useEffect, useState, useCallback } from "preact/hooks";
+import { useEffect, useState, useCallback, useRef } from "preact/hooks";
 import { html } from "./lib/html.js";
 import { api, setOrg, getOrg, oapi } from "./lib/api.js";
 import { toast } from "./lib/toast.js";
@@ -55,10 +55,18 @@ function Shell() {
   // (via `key`) instead of a full page reload.
   const [org, setOrgState] = useState(() => getOrg() || "default");
   const [orgs, setOrgs] = useState([]);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const mainRef = useRef(null);
 
   // Screen-reader and tab users learn where they are on every navigation.
+  // Close the mobile menu and move focus into the new view (without
+  // scrolling) so keyboard/SR users land on fresh content.
   useEffect(() => {
     document.title = `turaes — ${VIEW_TITLES[route.view] || "Applications"}`;
+    setMenuOpen(false);
+    if (mainRef.current) {
+      try { mainRef.current.focus({ preventScroll: true }); } catch (e) {}
+    }
   }, [route.view]);
 
   const loadUser = useCallback(async () => {
@@ -138,9 +146,18 @@ function Shell() {
   const onlineServers = servers.filter((s) => s.status === "online").length;
 
   return html`
+    <a class="skip-link" href="#main" onClick=${(e) => {
+      // Focus without touching the hash: "#main" is not a route.
+      e.preventDefault();
+      if (mainRef.current) { try { mainRef.current.focus(); } catch (err) {} }
+    }}>Skip to content</a>
     <header class="topbar">
       <div class="brand">turaes <span class="muted small">· deploy your apps — no containers</span></div>
-      <nav class="nav" aria-label="Primary">
+      <button class="btn small ghost menu-toggle" aria-expanded=${menuOpen} aria-controls="primary-nav"
+        onClick=${() => setMenuOpen((v) => !v)}
+        onKeyDown=${(e) => { if (e.key === "Escape") setMenuOpen(false); }}>
+        ${menuOpen ? "Close" : "Menu"}</button>
+      <nav class=${"nav" + (menuOpen ? " open" : "")} id="primary-nav" aria-label="Primary">
         <span class="nav-group"><span class="nav-label">Operate</span>
           <${NavLink} route=${route} view="apps" match="app" label="Applications" />
           <${NavLink} route=${route} view="servers" match="server" label="Servers" />
@@ -178,7 +195,7 @@ function Shell() {
       </div>
     </header>
 
-    <main>
+    <main id="main" tabindex="-1" ref=${mainRef}>
       ${alerts.length > 0 && html`<section class="panel notice" role="alert">
         <div class="panel-head"><strong>Firing alerts</strong></div>
         ${alerts.map((a) => html`<div>
