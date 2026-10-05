@@ -3,10 +3,27 @@ import { useEffect, useState, useCallback } from "preact/hooks";
 import { navigate } from "../lib/router.js";
 import { oapi } from "../lib/api.js";
 import { toast } from "../lib/toast.js";
-import { serverName, runtimeLabel } from "../lib/format.js";
+import { serverName, runtimeLabel, fmtTime } from "../lib/format.js";
 import { sortApps, filterApps } from "../lib/sort.js";
 import { StatusBadge } from "../components/StatusBadge.js";
 import { Skeleton } from "../components/Skeleton.js";
+
+function AppList({ apps, servers }) {
+  return html`
+    <div class="table-wrap"><table class="stacked">
+      <thead><tr><th>Status</th><th>Name</th><th>Server</th><th>Route</th><th>Updated</th></tr></thead>
+      <tbody>
+        ${apps.map((a) => html`
+          <tr>
+            <td data-label="Status"><${StatusBadge} status=${a.status} /></td>
+            <td data-label="Name"><a class="mono" href=${`#/apps/${a.id}/overview`}>${a.name}</a></td>
+            <td data-label="Server">${serverName(servers, a.server_id)}</td>
+            <td data-label="Route" class="mono small break">${a.domain || "—"}</td>
+            <td data-label="Updated" class="muted">${fmtTime(a.updated_at)}</td>
+          </tr>`)}
+      </tbody>
+    </table></div>`;
+}
 
 function AppCard({ app, servers }) {
   return html`
@@ -109,6 +126,9 @@ export function AppsView({ user, servers }) {
     try { return sessionStorage.getItem("turaes-apps-sort") || "name"; } catch { return "name"; }
   });
   const [filter, setFilter] = useState("all");
+  const [view, setView] = useState(() => {
+    try { return sessionStorage.getItem("turaes-apps-view") || "list"; } catch { return "list"; }
+  });
 
   const needsAttention = (a) =>
     a.status === "unhealthy" || a.status === "failed" || a.status === "deploying" || a.status === "unknown";
@@ -120,6 +140,9 @@ export function AppsView({ user, servers }) {
   useEffect(() => {
     try { sessionStorage.setItem("turaes-apps-sort", sortKey); } catch {}
   }, [sortKey]);
+  useEffect(() => {
+    try { sessionStorage.setItem("turaes-apps-view", view); } catch {}
+  }, [view]);
 
   const load = useCallback(async () => {
     try {
@@ -171,6 +194,12 @@ export function AppsView({ user, servers }) {
               class=${filter === "attention" ? "active" : ""} onClick=${() => setFilter("attention")}>
               Attention${attentionCount > 0 ? ` (${attentionCount})` : ""}</button>
           </div>
+          <div class="seg" role="radiogroup" aria-label="Applications view">
+            <button type="button" role="radio" aria-checked=${view === "list"}
+              class=${view === "list" ? "active" : ""} onClick=${() => setView("list")}>List</button>
+            <button type="button" role="radio" aria-checked=${view === "cards"}
+              class=${view === "cards" ? "active" : ""} onClick=${() => setView("cards")}>Cards</button>
+          </div>
           <input class="search" placeholder="Search…" aria-label="Search applications" value=${q}
             onInput=${(e) => setQ(e.target.value)} />
           <select value=${sortKey} onChange=${(e) => setSortKey(e.target.value)} aria-label="Sort by">
@@ -195,6 +224,8 @@ export function AppsView({ user, servers }) {
           ? html`<p class="muted">No applications yet.${user ? "" : " Sign in to create one."}</p>`
           : filtered.length === 0
           ? html`<p class="muted">No applications match this filter.</p>`
+          : view === "list"
+          ? html`<${AppList} apps=${filtered} servers=${servers} />`
           : grouped
           ? html`${grouped.map(([server, items]) => html`
               <div class="section-band"><h2>${server}</h2><span class="muted small">${items.length} app${items.length === 1 ? "" : "s"}</span></div>
