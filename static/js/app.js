@@ -210,7 +210,13 @@ function Shell() {
           ${orgs.map((o) => html`<option value=${o.slug}>${o.slug} (${o.role})</option>`)}
         </select>` : orgs.length === 1 ? html`<span class="muted small" title="Active organization">${orgs[0].slug}</span>` : null}
         <span class="fleet-summary" title="Fleet status">
-          <strong>${servers.length}</strong>&nbsp;servers · <strong>${onlineServers}</strong>&nbsp;online${offlineServers > 0 ? html` · <strong>${offlineServers}</strong>&nbsp;offline` : null}${attention > 0 ? html` · <strong>${attention}</strong>&nbsp;attention` : null}
+          <span class="fleet-item"><strong>${servers.length}</strong><span>servers</span></span>
+          <span class="fleet-separator" aria-hidden="true">·</span>
+          <span class="fleet-item"><strong>${onlineServers}</strong><span>online</span></span>
+          ${offlineServers > 0 ? html`<span class="fleet-separator" aria-hidden="true">·</span>
+            <span class="fleet-item"><strong>${offlineServers}</strong><span>offline</span></span>` : null}
+          ${attention > 0 ? html`<span class="fleet-separator" aria-hidden="true">·</span>
+            <span class="fleet-item"><strong>${attention}</strong><span>attention</span></span>` : null}
         </span>
         <span class=${"dot " + (health ? "ok" : "bad")} aria-hidden="true"></span>
         <span class="small" role="status">${health ? "Healthy" : "Unreachable"}</span>

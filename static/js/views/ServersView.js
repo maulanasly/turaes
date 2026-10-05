@@ -139,10 +139,10 @@ export function ServersView({ user, onChanged }) {
       <div class="panel-head"><h1>Servers</h1></div>
       ${servers !== null && !error ? html`
         <div class="status-strip" aria-label="Fleet status">
-          <div class="stat"><span>Fleet</span><span><strong>${servers.length}</strong>&nbsp;server${servers.length === 1 ? "" : "s"}</span></div>
-          <div class="stat"><span>Reachable</span><span><strong>${online}</strong>&nbsp;online</span></div>
+          <div class="stat"><span>Fleet</span><span class="stat-value"><strong>${servers.length}</strong><span>server${servers.length === 1 ? "" : "s"}</span></span></div>
+          <div class="stat"><span>Reachable</span><span class="stat-value"><strong>${online}</strong><span>online</span></span></div>
           <div class="stat"><span>Placed apps</span><span><strong>${apps.length}</strong></span></div>
-          ${offline.length > 0 ? html`<div class="stat"><span>Offline</span><span><strong>${offline.length}</strong>&nbsp;server${offline.length === 1 ? "" : "s"}</span></div>` : null}
+          ${offline.length > 0 ? html`<div class="stat"><span>Offline</span><span class="stat-value"><strong>${offline.length}</strong><span>server${offline.length === 1 ? "" : "s"}</span></span></div>` : null}
         </div>` : null}
       ${offline.length > 0 ? html`<section class="panel notice notice-critical" role="alert" aria-label="Offline servers">
         <div class="panel-head"><strong>Offline: ${offline.map((s) => s.name).join(", ")}</strong></div>
