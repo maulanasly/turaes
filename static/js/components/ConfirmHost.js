@@ -46,6 +46,11 @@ export function ConfirmHost() {
         aria-label=${c.title || "Are you sure?"} onClick=${(e) => e.stopPropagation()}>
         <h3>${c.title || "Are you sure?"}</h3>
         ${c.body && html`<p class="muted">${c.body}</p>`}
+        ${c.consequences && c.consequences.length > 0 && html`
+          <div class="confirm-consequences">
+            <strong>What happens</strong>
+            <ul>${c.consequences.map((n) => html`<li>${n}</li>`)}</ul>
+          </div>`}
         <div class="modal-actions">
           <button ref=${cancelRef} class="btn ghost" onClick=${() => settleConfirm(false)}>Cancel</button>
           <button class=${"btn" + (c.danger ? " danger" : "")} onClick=${() => settleConfirm(true)}>

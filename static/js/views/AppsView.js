@@ -5,6 +5,9 @@ import { oapi } from "../lib/api.js";
 import { toast } from "../lib/toast.js";
 import { serverName, runtimeLabel, fmtTime } from "../lib/format.js";
 import { sortApps, filterApps } from "../lib/sort.js";
+import {
+  KINDS, STEPS, emptyDraft, kindInfo, stepError, buildPayload, reviewGroups, createConsequences,
+} from "../lib/appForm.js";
 import { StatusBadge } from "../components/StatusBadge.js";
 import { Skeleton } from "../components/Skeleton.js";
 
@@ -39,79 +42,168 @@ function AppCard({ app, servers }) {
     </a>`;
 }
 
+// Static constraints/consequences explainer reused across steps.
+function Callout({ title, notes }) {
+  return html`
+    <div class="callout" role="note">
+      ${title ? html`<strong>${title}</strong>` : null}
+      <ul>${notes.map((n) => html`<li>${n}</li>`)}</ul>
+    </div>`;
+}
+
 function NewAppForm({ servers, onCreated }) {
+  const [draft, setDraft] = useState(() => emptyDraft(servers[0] ? servers[0].id : "local"));
+  const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
-  const [review, setReview] = useState(null);
-  const startReview = (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    const payload = Object.fromEntries([...fd.entries()].filter(([, v]) => v !== ""));
-    if (payload.port) payload.port = Number(payload.port);
-    setReview(payload);
+  const [error, setError] = useState(null);
+
+  const set = (patch) => setDraft((d) => ({ ...d, ...patch }));
+  const kind = kindInfo(draft.kind);
+  const lastStep = STEPS.length - 1;
+
+  const next = () => {
+    const err = stepError(draft, step);
+    if (err) { setError(err); return; }
+    setError(null);
+    setStep((s) => Math.min(s + 1, lastStep));
   };
+  const back = () => { setError(null); setStep((s) => Math.max(s - 1, 0)); };
+
   const confirm = async () => {
     setBusy(true);
     try {
-      const r = await oapi("/apps", { method: "POST", body: JSON.stringify(review) });
+      const r = await oapi("/apps", { method: "POST", body: JSON.stringify(buildPayload(draft)) });
       toast.success(`Created ${r.application.name}`);
-      setReview(null);
       onCreated(r.application);
     } catch (err) {
       toast.error(err.message);
+      setError(err.message);
     } finally {
       setBusy(false);
     }
   };
-  if (review) {
-    const server = servers.find((s) => s.id === review.server_id);
-    return html`
-      <div>
-        <div class="section-band"><h2>Review</h2><span class="muted small">check before creating</span></div>
-        <table><tbody>
-          <tr><th>Name</th><td class="mono">${review.name}</td></tr>
-          <tr><th>Binary</th><td class="mono break">${review.binary_path}</td></tr>
-          <tr><th>Port</th><td class="mono">${review.port}</td></tr>
-          <tr><th>Domain</th><td class="mono">${review.domain || "—"}</td></tr>
-          <tr><th>Server</th><td>${server ? server.name : review.server_id || "—"}</td></tr>
-          <tr><th>Managed by</th><td>${runtimeLabel(review.runtime)}</td></tr>
-        </tbody></table>
-        <p class="muted small">This creates the app record; deploy it from its detail page to start it.</p>
-        <div class="controls">
-          <button class="btn ghost" disabled=${busy} onClick=${() => setReview(null)}>Back</button>
-          <button class="btn" disabled=${busy} onClick=${confirm}>${busy ? "Creating…" : "Create app"}</button>
-        </div>
-      </div>`;
-  }
+
   return html`
-    <form class="form" onSubmit=${startReview}>
-      <div class="section-band"><h2>Identity</h2><span class="muted small">name becomes the unit + install name</span></div>
-      <div class="row">
-        <label>Name <input name="name" placeholder="beruang" required /></label>
-        <label>Port <input name="port" type="number" placeholder="8000" required /></label>
+    <form class="wizard" onSubmit=${(e) => { e.preventDefault(); step < lastStep ? next() : confirm(); }}>
+      <ol class="wizard-steps" aria-label="Create app steps">
+        ${STEPS.map((label, i) => html`
+          <li class=${i === step ? "active" : i < step ? "done" : ""}>
+            <button type="button" disabled=${i > step} aria-current=${i === step ? "step" : null}
+              onClick=${() => { setError(null); setStep(i); }}>
+              <span class="wizard-num" aria-hidden="true">${i < step ? "✓" : i + 1}</span>
+              <span>${label}</span>
+            </button>
+          </li>`)}
+      </ol>
+
+      ${step === 0 ? html`
+        <div class="section-band"><h2>What kind of workload?</h2><span class="muted small">this decides which fields you need</span></div>
+        <div class="kind-grid" role="radiogroup" aria-label="Workload type">
+          ${KINDS.map((k) => html`
+            <button type="button" role="radio" aria-checked=${draft.kind === k.id}
+              class=${"kind-card" + (draft.kind === k.id ? " active" : "")}
+              onClick=${() => { set({ kind: k.id }); setError(null); }}>
+              <strong>${k.label}</strong>
+              <span class="muted small">${k.blurb}</span>
+            </button>`)}
+        </div>
+        <${Callout} title=${`How ${kind.label.toLowerCase()}s run`} notes=${kind.constraints} />` : null}
+
+      ${step === 1 ? html`
+        <div class="section-band"><h2>Process</h2><span class="muted small">${kind.label}</span></div>
+        <div class="row">
+          <label>Name <input placeholder="beruang" value=${draft.name} required
+            onInput=${(e) => set({ name: e.target.value })} />
+            <span class="muted small">Lowercase slug — becomes the service name on the server.</span>
+          </label>
+          <label>Description (optional) <input placeholder="What this app does" value=${draft.description}
+            onInput=${(e) => set({ description: e.target.value })} /></label>
+        </div>
+        ${draft.kind === "static" ? html`
+          <label>Source directory on the server
+            <input placeholder="/srv/beruang/dist" value=${draft.publish_dir}
+              onInput=${(e) => set({ publish_dir: e.target.value })} />
+            <span class="muted small">The files turaes serves. No build runs — sync them yourself before deploying.</span>
+          </label>` : html`
+          <label>Binary path on the server
+            <input placeholder="/srv/beruang/target/release/beruang-gateway" value=${draft.binary_path}
+              onInput=${(e) => set({ binary_path: e.target.value })} />
+            <span class="muted small">A prebuilt binary already on the server. turaes never builds or containers it.</span>
+          </label>`}
+        ${draft.kind !== "static" ? html`
+          <label>Arguments (optional)
+            <input placeholder="--listen :8000 --config /etc/beruang.toml" value=${draft.args}
+              onInput=${(e) => set({ args: e.target.value })} />
+            <span class="muted small">Passed as separate words, literally — no shell, so no pipes, globs or quoting.</span>
+          </label>` : null}
+        ${draft.kind !== "worker" ? html`
+          <div class="row">
+            <label>Port <input type="number" min="1" max="65535" placeholder="8000" value=${draft.port} required
+              onInput=${(e) => set({ port: e.target.value })} />
+              <span class="muted small">Must be free on the chosen server; turaes checks before deploying.</span>
+            </label>
+            <label>Health path <input placeholder="/health" value=${draft.health_path}
+              onInput=${(e) => set({ health_path: e.target.value })} />
+              <span class="muted small">Polled after start; traffic waits for a healthy response.</span>
+            </label>
+          </div>` : null}
+        <${Callout} title="Native-process constraints" notes=${kind.constraints} />` : null}
+
+      ${step === 2 ? html`
+        <div class="section-band"><h2>Placement</h2><span class="muted small">where it runs and how it is reached</span></div>
+        <div class="row">
+          <label>Server
+            <select value=${draft.server_id} onChange=${(e) => set({ server_id: e.target.value })}>
+              ${servers.map((s) => html`<option value=${s.id}>${s.name}</option>`)}
+            </select>
+          </label>
+          ${draft.kind !== "worker" ? html`
+            <label>Domain (optional) <input placeholder="app.rayakala.ink" value=${draft.domain}
+              onInput=${(e) => set({ domain: e.target.value })} />
+              <span class="muted small">Routes public traffic here. Leave blank to run with no public route.</span>
+            </label>` : null}
+        </div>
+        <div class="row">
+          <label>Managed by
+            <select value=${draft.runtime} onChange=${(e) => set({ runtime: e.target.value })}>
+              <option value="systemd">systemd (default)</option>
+              <option value="proc">turaes (proc)</option>
+            </select>
+          </label>
+          <label class="inline" style="align-self:end">
+            <input type="checkbox" checked=${draft.auto_restart}
+              onChange=${(e) => set({ auto_restart: e.target.checked })} /> Restart when unhealthy
+          </label>
+        </div>
+        <div class="section-band"><h2>Resource limits <span class="muted small">optional</span></h2><span class="muted small">systemd only</span></div>
+        <div class="row">
+          <label>Memory limit (MiB) <input type="number" min="16" max="65536" placeholder="512" value=${draft.mem_limit_mb}
+            onInput=${(e) => set({ mem_limit_mb: e.target.value })} /></label>
+          <label>CPU limit (% of one core) <input type="number" min="1" placeholder="100" value=${draft.cpu_quota_pct}
+            onInput=${(e) => set({ cpu_quota_pct: e.target.value })} /></label>
+        </div>
+        <span class="muted small">Enforced by systemd. The proc runtime cannot confine, so leave these blank there.</span>` : null}
+
+      ${step === 3 ? html`
+        <div class="section-band"><h2>Review before you create</h2><span class="muted small">nothing has been created yet</span></div>
+        <div class="review">
+          ${reviewGroups(draft, serverName(servers, draft.server_id)).map((g) => html`
+            <div class="review-group">
+              <h3>${g.title}</h3>
+              <table><tbody>
+                ${g.rows.map(([label, value]) => html`<tr><th>${label}</th><td class="mono break">${value}</td></tr>`)}
+              </tbody></table>
+            </div>`)}
+        </div>
+        <${Callout} title="What happens when you create" notes=${createConsequences(draft.kind)} />` : null}
+
+      ${error ? html`<p class="form-error" role="alert">${error}</p>` : null}
+      <div class="controls wizard-nav">
+        ${step > 0 ? html`<button type="button" class="btn ghost" disabled=${busy} onClick=${back}>Back</button>` : null}
+        ${step < lastStep
+          ? html`<button type="submit" class="btn">Next</button>`
+          : html`<button type="submit" class="btn" disabled=${busy}>${busy ? "Creating…" : "Create app"}</button>`}
       </div>
-      <label>Binary path on the server
-        <input name="binary_path" placeholder="/srv/beruang/target/release/beruang-gateway" required />
-        <span class="muted small">A prebuilt binary — turaes never builds or containers anything.</span>
-      </label>
-      <div class="section-band"><h2>Placement</h2><span class="muted small">where it runs and how it is reached</span></div>
-      <div class="row">
-        <label>Domain <input name="domain" placeholder="app.rayakala.ink" /></label>
-        <label>Server
-          <select name="server_id">
-            ${servers.map((s) => html`<option value=${s.id}>${s.name}</option>`)}
-          </select>
-        </label>
-      </div>
-      <div class="section-band"><h2>Runtime</h2><span class="muted small">supervision behavior</span></div>
-      <div class="row">
-        <label>Managed by
-          <select name="runtime">
-            <option value="systemd">systemd</option>
-            <option value="proc">turaes (proc)</option>
-          </select>
-        </label>
-      </div>
-      <div><button class="btn" type="submit" disabled=${busy}>${busy ? "Creating…" : "Create"}</button></div>
     </form>`;
 }
 
