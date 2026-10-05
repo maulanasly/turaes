@@ -1,9 +1,9 @@
 import { html } from "../lib/html.js";
-import { useEffect, useState, useCallback, useMemo } from "preact/hooks";
+import { useEffect, useState, useCallback, useMemo, useRef } from "preact/hooks";
 import { oapi } from "../lib/api.js";
 import { toast } from "../lib/toast.js";
 import { confirmAction } from "../lib/confirm.js";
-import { deployConsequences, restartConsequences, stopConsequences, startConsequences, rollbackConsequences } from "../lib/appForm.js";
+import { deployConsequences, restartConsequences, stopConsequences, startConsequences, rollbackConsequences, lifecycleSummary, resourceLimitErrors } from "../lib/appForm.js";
 import { fmtBytes, parseTs, fmtTime, fmtRangeLabel, timeAgo, shortHash, serverName, runtimeLabel } from "../lib/format.js";
 import { APP_TABS, navigate } from "../lib/router.js";
 import { RANGES, DEFAULT_RANGE, normalizeRange, rangeToHours } from "../lib/route.js";
@@ -20,6 +20,12 @@ const TAB_LABEL = {
   logs: "Logs",
   settings: "Settings",
 };
+
+function FieldError({ errors, name }) {
+  return errors[name]
+    ? html`<span class="form-error" id=${`field-error-${name}`}>${errors[name]}</span>`
+    : null;
+}
 
 function Activity({ entries }) {
   if (!entries) return html`<p class="muted">Loading…</p>`;
@@ -146,23 +152,24 @@ function Overview({ data, range, onRange, updatedAt, loading, onRefresh, activit
     </div>`;
 }
 
-function Deployments({ deployments, onRollbackTo }) {
+function Deployments({ deployments, onRollbackTo, rollbackNote }) {
   if (!deployments) return html`<${Skeleton} lines={3} />`;
-  if (deployments.length === 0) return html`<p class="muted">No builds yet.</p>`;
+  if (deployments.length === 0) return html`<p class="muted">No deployments yet.</p>`;
   return html`
     <div class="table-wrap">
+    ${rollbackNote && html`<p class="muted small">${rollbackNote}</p>`}
     <table class="stacked">
-      <thead><tr><th>Status</th><th>Build</th><th>Started</th><th>Finished</th><th></th></tr></thead>
+      <thead><tr><th>Status</th><th>Version</th><th>Started</th><th>Finished</th><th></th></tr></thead>
       <tbody>
         ${deployments.map((d) => html`
           <tr>
             <td data-label="Status"><${StatusBadge} status=${d.status} /></td>
-            <td data-label="Build">
+            <td data-label="Version">
               <span class="mono">${shortHash(d.artifact_hash)}</span>
               ${d.artifact_hash && html`<button class="btn small ghost" onClick=${async () => {
                 try {
                   await navigator.clipboard.writeText(d.artifact_hash);
-                  toast.success("Build id copied");
+                  toast.success("Version id copied");
                 } catch {
                   toast.error("Copy failed — select the id manually");
                 }
@@ -173,7 +180,7 @@ function Deployments({ deployments, onRollbackTo }) {
             <td data-label="Started" class="muted">${fmtTime(d.started_at)}</td>
             <td data-label="Finished" class="muted">${fmtTime(d.finished_at)}</td>
             <td class="controls no-label">
-              ${d.artifact_hash && html`<button class="btn small" onClick=${() => onRollbackTo(d.artifact_hash)}>
+              ${d.artifact_hash && onRollbackTo && html`<button class="btn small" onClick=${() => onRollbackTo(d.artifact_hash)}>
                 Roll back to this
               </button>`}
               ${d.log && html`<details><summary class="muted">log</summary><pre class="log">${d.log}</pre></details>`}
@@ -249,6 +256,8 @@ function Environment({ env, appId, reload }) {
 function Domains({ appId }) {
   const [domains, setDomains] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [domainError, setDomainError] = useState(null);
+  const domainInput = useRef(null);
   const load = useCallback(async () => {
     try {
       const r = await oapi(`/apps/${appId}/domains`);
@@ -260,6 +269,7 @@ function Domains({ appId }) {
   const add = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
+    setDomainError(null);
     setBusy(true);
     try {
       await oapi(`/apps/${appId}/domains`, {
@@ -269,7 +279,13 @@ function Domains({ appId }) {
       toast.success("Domain added");
       e.target.reset();
       load();
-    } catch (err) { toast.error(err.message); } finally { setBusy(false); }
+    } catch (err) {
+      if (err.field === "domain") {
+        setDomainError(err.message);
+        domainInput.current?.focus();
+      }
+      else toast.error(err.message);
+    } finally { setBusy(false); }
   };
   const remove = async (d) => {
     if (!(await confirmAction({ title: `Remove ${d}?`, danger: true, confirmLabel: "Remove" }))) return;
@@ -293,7 +309,12 @@ function Domains({ appId }) {
           </tbody></table>`}
       <form class="form" style="margin-top:10px" onSubmit=${add}>
         <div class="row">
-          <label>Alias domain <input name="domain" placeholder="www.example.com" required /></label>
+          <label>Alias domain <input ref=${domainInput} name="domain" placeholder="www.example.com" required
+            aria-invalid=${domainError ? "true" : null}
+            aria-describedby=${domainError ? "alias-domain-error" : null}
+            onInput=${() => setDomainError(null)} />
+            ${domainError && html`<span class="form-error" id="alias-domain-error" role="alert">${domainError}</span>`}
+          </label>
         </div>
         <div><button class="btn" type="submit" disabled=${busy}>${busy ? "Saving…" : "Add alias"}</button></div>
       </form>
@@ -302,6 +323,17 @@ function Domains({ appId }) {
 
 function EditForm({ app, servers, onSaved }) {
   const [busy, setBusy] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [formError, setFormError] = useState(null);
+  const [focusField, setFocusField] = useState(null);
+  const formRef = useRef(null);
+
+  useEffect(() => {
+    if (!focusField || !formRef.current) return;
+    formRef.current.elements.namedItem(focusField)?.focus();
+    setFocusField(null);
+  }, [focusField]);
+
   const submit = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -318,43 +350,102 @@ function EditForm({ app, servers, onSaved }) {
       mem_limit_mb: mem === "" ? null : Number(mem),
       cpu_quota_pct: cpu === "" ? null : Number(cpu),
     };
+    const errors = resourceLimitErrors(payload.runtime, mem, cpu);
+    if (app.kind !== "worker") {
+      const port = Number(payload.port);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        errors.port = "Enter a whole-number port from 1 to 65535.";
+      }
+    }
+    if (!payload.server_id) errors.server_id = "Choose a server.";
+    if (Object.keys(errors).length > 0) {
+      const first = Object.keys(errors)[0];
+      setFieldErrors(errors);
+      setFormError("Correct the highlighted fields before saving.");
+      setFocusField(first);
+      return;
+    }
+    setFieldErrors({});
+    setFormError(null);
     setBusy(true);
     try {
       await oapi(`/apps/${app.id}`, { method: "PATCH", body: JSON.stringify(payload) });
       toast.success("Saved");
       onSaved();
-    } catch (err) { toast.error(err.message); } finally { setBusy(false); }
+    } catch (err) {
+      if (err.field) {
+        setFieldErrors({ [err.field]: err.message });
+        setFormError("Correct the highlighted field and try again.");
+        setFocusField(err.field);
+      } else {
+        toast.error(err.message);
+        setFormError(err.message);
+      }
+    } finally { setBusy(false); }
   };
   return html`
-    <form class="form" onSubmit=${submit}>
+    <form ref=${formRef} class="form" noValidate onSubmit=${submit}>
       <h2>Settings</h2>
       <div class="row">
-        <label>Port <input name="port" type="number" value=${app.port} required /></label>
+        ${app.kind !== "worker" ? html`
+          <label>Port <input name="port" type="number" min="1" max="65535" value=${app.port} required
+            aria-invalid=${fieldErrors.port ? "true" : null}
+            aria-describedby=${fieldErrors.port ? "field-error-port" : null} />
+            <${FieldError} errors=${fieldErrors} name="port" />
+          </label>` : null}
         <label>Server
-          <select name="server_id">
+          <select name="server_id" aria-invalid=${fieldErrors.server_id ? "true" : null}
+            aria-describedby=${fieldErrors.server_id ? "field-error-server_id" : null}>
             ${servers.map((s) => html`<option value=${s.id} selected=${s.id === app.server_id}>${s.name}</option>`)}
           </select>
+          <${FieldError} errors=${fieldErrors} name="server_id" />
         </label>
       </div>
-      <label>Primary domain <input name="domain" value=${app.domain || ""} /></label>
+      ${app.kind !== "worker" ? html`
+        <label>Primary domain <input name="domain" value=${app.domain || ""}
+          aria-invalid=${fieldErrors.domain ? "true" : null}
+          aria-describedby=${fieldErrors.domain ? "field-error-domain" : null} />
+          <${FieldError} errors=${fieldErrors} name="domain" />
+        </label>` : null}
       <div class="row">
         <label>Managed by
-          <select name="runtime">
+          <select name="runtime" aria-invalid=${fieldErrors.runtime ? "true" : null}
+            aria-describedby=${fieldErrors.runtime ? "field-error-runtime" : null}>
             <option value="systemd" selected=${app.runtime === "systemd"}>systemd</option>
             <option value="proc" selected=${app.runtime === "proc"}>turaes (proc)</option>
           </select>
+          <${FieldError} errors=${fieldErrors} name="runtime" />
         </label>
-        <label>Health path <input name="health_path" value=${app.health_path || "/health"} /></label>
+        ${app.kind !== "worker" ? html`
+          <label>Health path <input name="health_path" value=${app.health_path || "/health"}
+            aria-invalid=${fieldErrors.health_path ? "true" : null}
+            aria-describedby=${fieldErrors.health_path ? "field-error-health_path" : null} />
+            <${FieldError} errors=${fieldErrors} name="health_path" />
+          </label>` : null}
       </div>
       <div class="row">
-        <label>Metrics path <input name="metrics_path" value=${app.metrics_path || ""} /></label>
+        ${app.kind !== "worker" ? html`
+          <label>Metrics path <input name="metrics_path" value=${app.metrics_path || ""}
+            aria-invalid=${fieldErrors.metrics_path ? "true" : null}
+            aria-describedby=${fieldErrors.metrics_path ? "field-error-metrics_path" : null} />
+            <${FieldError} errors=${fieldErrors} name="metrics_path" />
+          </label>` : null}
         <label class="inline"><input type="checkbox" name="auto_restart" checked=${app.auto_restart} /> Restart when unhealthy</label>
       </div>
       <div class="row">
-        <label>Memory limit (MB) <input name="mem_limit_mb" type="number" min="16" max="65536" value=${app.mem_limit_mb ?? ""} placeholder="unlimited" /></label>
-        <label>CPU limit (% of one core) <input name="cpu_quota_pct" type="number" min="1" max="6400" value=${app.cpu_quota_pct ?? ""} placeholder="unlimited" /></label>
+        <label>Memory limit (MiB) <input name="mem_limit_mb" type="number" min="16" max="65536" value=${app.mem_limit_mb ?? ""} placeholder="unlimited"
+          aria-invalid=${fieldErrors.mem_limit_mb ? "true" : null}
+          aria-describedby=${fieldErrors.mem_limit_mb ? "field-error-mem_limit_mb" : null} />
+          <${FieldError} errors=${fieldErrors} name="mem_limit_mb" />
+        </label>
+        <label>CPU limit (% of one core) <input name="cpu_quota_pct" type="number" min="1" max="6400" value=${app.cpu_quota_pct ?? ""} placeholder="unlimited"
+          aria-invalid=${fieldErrors.cpu_quota_pct ? "true" : null}
+          aria-describedby=${fieldErrors.cpu_quota_pct ? "field-error-cpu_quota_pct" : null} />
+          <${FieldError} errors=${fieldErrors} name="cpu_quota_pct" />
+        </label>
       </div>
       <p class="muted small">Limits need the systemd runtime and take effect on the next deploy or restart.</p>
+      ${formError ? html`<p class="form-error" role="alert">${formError}</p>` : null}
       <div><button class="btn" type="submit" disabled=${busy}>${busy ? "Saving…" : "Save settings"}</button></div>
     </form>`;
 }
@@ -383,7 +474,7 @@ function Settings({ app, servers, user, onSaved }) {
         <tr><th>Binary</th><td class="mono break">${app.binary_path}</td></tr>
       </tbody>
     </table></div>
-    ${user ? html`<${Domains} appId=${app.id} />` : null}
+    ${user && app.kind !== "worker" ? html`<${Domains} appId=${app.id} />` : null}
     ${user && html`<div class="danger-zone">
       <h3>Danger zone</h3>
       <button class="btn danger" onClick=${del}>Delete application</button>
@@ -507,18 +598,23 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
   const deploy = async () => {
     if (!(await confirmAction({
       title: `Deploy ${app.name}?`,
-      body: "Installs the current binary and starts a new version, then moves traffic to it.",
+      body: "Applies the current app version using its workload-specific deployment process.",
       consequences: deployConsequences(app),
       confirmLabel: "Deploy",
     }))) return;
     setBusy(true);
     try {
-      await oapi(`/apps/${id}/deploy`, { method: "POST" });
-      toast.success("Deploy started");
+      const result = await oapi(`/apps/${id}/deploy`, { method: "POST" });
+      if (result.state === "unknown") toast.info(`Deploy queued for ${serverName(servers, app.server_id)}`);
+      else toast.success(`Deployed ${app.name}`);
       loadApp();
       loadDeployments();
+      loadLatest();
     } catch (e) {
       toast.error(e.message);
+      loadApp();
+      loadDeployments();
+      loadLatest();
     } finally {
       setBusy(false);
     }
@@ -527,8 +623,8 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
   const rollback = async () => {
     if (!(await confirmAction({
       title: `Roll back ${app.name}?`,
-      body: "Redeploys the previous build.",
-      consequences: rollbackConsequences(),
+      body: "Reverts this app to a previous deployed version.",
+      consequences: rollbackConsequences(app),
       confirmLabel: "Roll back",
     }))) return;
     setBusy(true);
@@ -537,8 +633,12 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
       toast.success("Rolled back");
       loadApp();
       loadDeployments();
+      loadLatest();
     } catch (e) {
       toast.error(e.message);
+      loadApp();
+      loadDeployments();
+      loadLatest();
     } finally {
       setBusy(false);
     }
@@ -547,8 +647,8 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
   const rollbackTo = async (hash) => {
     if (!(await confirmAction({
       title: `Roll back ${app.name}?`,
-      body: `Redeploy build ${shortHash(hash)}.`,
-      consequences: rollbackConsequences(shortHash(hash)),
+      body: `Reverts this app to build ${shortHash(hash)}.`,
+      consequences: rollbackConsequences(app, shortHash(hash)),
       confirmLabel: "Roll back",
     }))) return;
     setBusy(true);
@@ -560,17 +660,21 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
       toast.success("Rolled back");
       loadApp();
       loadDeployments();
+      loadLatest();
     } catch (e) {
       toast.error(e.message);
+      loadApp();
+      loadDeployments();
+      loadLatest();
     } finally {
       setBusy(false);
     }
   };
 
   const action = async (a) => {
-    const consequences = a === "stop" ? stopConsequences()
-      : a === "restart" ? restartConsequences()
-      : startConsequences();
+    const consequences = a === "stop" ? stopConsequences(app)
+      : a === "restart" ? restartConsequences(app)
+      : startConsequences(app);
     if (!(await confirmAction({
       title: `${a[0].toUpperCase()}${a.slice(1)} ${app.name}?`,
       body: a === "stop"
@@ -585,7 +689,7 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
     setBusy(true);
     try {
       await oapi(`/apps/${id}/${a}`, { method: "POST" });
-      toast.success(`${a[0].toUpperCase()}${a.slice(1)} requested`);
+      toast.success(`${a[0].toUpperCase()}${a.slice(1)} ${app.name}`);
       loadApp();
     } catch (e) {
       toast.error(e.message);
@@ -617,8 +721,10 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
           <h1 class="identity"><span class="mono">${app.name}</span> <${StatusBadge} status=${app.status} /></h1>
           <div class="status-strip" aria-label="Application status">
             <div class="stat"><span>Server</span><span class="mono">${serverName(servers, app.server_id)}</span></div>
-            <div class="stat"><span>Route</span><span class="mono">${app.domain || "—"}</span></div>
-            <div class="stat"><span>Port</span><span class="mono">:${app.port}</span></div>
+            ${app.kind === "worker"
+              ? html`<div class="stat"><span>Workload</span><span>Background worker</span></div>`
+              : html`<div class="stat"><span>Route</span><span class="mono">${app.domain || "—"}</span></div>
+                <div class="stat"><span>Port</span><span class="mono">:${app.port}</span></div>`}
             <div class="stat"><span>Managed by</span><span>${runtimeLabel(app.runtime)}</span></div>
             <div class="stat"><span>Last deploy</span><span>${latest
               ? html`<span class="mono" title=${latest.artifact_hash || ""}>${shortHash(latest.artifact_hash)} · ${timeAgo(Date.now() - parseTs(latest.started_at))}</span>`
@@ -633,13 +739,13 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
             <details class="menu">
               <summary class="btn small ghost" aria-label="More actions">More</summary>
               <div class="menu-list">
-                <button class="btn small ghost" disabled=${busy} onClick=${rollback}>Rollback</button>
+                ${!app.command && html`<button class="btn small ghost" disabled=${busy} onClick=${rollback}>Rollback</button>`}
                 <button class="btn small ghost" disabled=${busy} onClick=${() => action("start")}>Start</button>
               </div>
             </details>`}
         </div>
       </div>
-      <p class="action-note muted small">Deploy installs the current binary and swaps the route with no downtime. Restart briefly interrupts; Stop drops traffic immediately.</p>
+      <p class="action-note muted small">${lifecycleSummary(app)}</p>
       <nav class="tabs" role="tablist" aria-label="Application sections">
         ${TAB_GROUPS.map((g) => html`<span class="tab-group"><span class="tab-label" aria-hidden="true">${g.label}</span>${
           g.tabs.map((t) => {
@@ -656,7 +762,13 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
         ${tab === "overview" && html`<${Overview} data=${data} range=${range} onRange=${changeRange}
           updatedAt=${metricsAt} loading=${metricsLoading} onRefresh=${refreshMetrics}
           activity=${activity} appId=${id} />`}
-        ${tab === "deployments" && html`<${Deployments} deployments=${deployments} onRollbackTo=${rollbackTo} />`}
+        ${tab === "deployments" && html`<${Deployments} deployments=${deployments}
+          onRollbackTo=${app.command || app.kind === "static" ? null : rollbackTo}
+          rollbackNote=${app.command
+            ? "Command apps do not retain prior argv configurations. Restore the desired command in turaes.yaml, run turaes apply, then deploy."
+            : app.kind === "static"
+            ? "Static rollback switches to the previous retained slot; selecting an arbitrary older deployment is not supported."
+            : null} />`}
         ${tab === "activity" && html`<${Activity} entries=${activity} />`}
         ${tab === "environment" && html`<${Environment} env=${env} appId=${id} reload=${loadEnv} />`}
         ${tab === "logs" && html`<${LogViewer} appId=${id} />`}

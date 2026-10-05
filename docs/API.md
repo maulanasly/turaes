@@ -4,10 +4,12 @@ Base path: `/` on the configured port (default `8787`). All `/api/*` routes
 require a session cookie except `/health` and the OAuth handshake. Errors are
 JSON `{"detail": "...", "code": "..."}` — switch on the stable `code`
 (`config`, `not_found`, `unauthorized`, `forbidden`, `bad_request`,
-`conflict`, `db`, `io`, `internal`), never on the human `detail` text.
+`conflict`, `db`, `io`, `internal`), never on the human `detail` text. App
+validation/conflict responses include `field` when the issue maps to one input
+(for example, a reserved port); non-field errors omit it.
 
 Status codes: `200` ok · `201` created · `204` no content · `401` unauthenticated ·
-`403` not on allowlist · `404` unknown id · `409` name conflict · `422` bad input ·
+`403` not on allowlist · `404` unknown id · `409` resource conflict · `422` bad input ·
 `500` internal.
 
 Conventions: every list endpoint accepts `?limit` (client cap, clamped to
@@ -127,8 +129,8 @@ roles yield `403`.
 | `GET` | `/api/v1/orgs/{org}/apps/{id}` | viewer | Fetch one |
 | `PATCH` | `/api/v1/orgs/{org}/apps/{id}` | admin | Edit fields + placement |
 | `DELETE` | `/api/v1/orgs/{org}/apps/{id}` | admin | Remove app + stop it (`204`) |
-| `POST` | `/api/v1/orgs/{org}/apps/{id}/deploy` | developer | Install + restart the prebuilt binary |
-| `POST` | `/api/v1/orgs/{org}/apps/{id}/rollback` | developer | Redeploy the previous build, or `{artifact_hash}` target |
+| `POST` | `/api/v1/orgs/{org}/apps/{id}/deploy` | developer | Apply a workload version (binary, static files, or worker) using slots |
+| `POST` | `/api/v1/orgs/{org}/apps/{id}/rollback` | developer | Roll back a binary build or previous static slot; command apps do not retain prior argv for rollback |
 | `POST` | `/api/v1/orgs/{org}/apps/{id}/{stop,start,restart}` | developer | Lifecycle (local apps) |
 | `GET/POST` | `/api/v1/orgs/{org}/apps/{id}/domains` | viewer / developer | List / add domain aliases |
 | `DELETE` | `/api/v1/orgs/{org}/apps/{id}/domains/{domain}` | developer | Remove an alias |

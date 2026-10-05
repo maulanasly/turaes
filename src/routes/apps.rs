@@ -6,7 +6,7 @@ use std::sync::Arc;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::{Extension, Json};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use sha2::{Digest, Sha256};
 
 use turaes_core::config::Config;
@@ -102,15 +102,78 @@ pub struct UpdateApp {
     pub server_id: Option<String>,
     /// Resident memory ceiling in MiB (systemd only). Absent keeps, `null`
     /// clears, a number sets.
-    pub mem_limit_mb: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "deserialize_patch_value")]
+    pub mem_limit_mb: PatchValue<i64>,
     /// CPU ceiling in percent of one core (systemd only). Same tri-state.
-    pub cpu_quota_pct: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "deserialize_patch_value")]
+    pub cpu_quota_pct: PatchValue<i64>,
     /// Exec argv for interpreted apps (absent keeps, `null` clears).
-    pub command: Option<Option<Vec<String>>>,
+    #[serde(default, deserialize_with = "deserialize_patch_value")]
+    pub command: PatchValue<Vec<String>>,
     /// Working directory override (absent keeps, `null` clears).
-    pub workdir: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_patch_value")]
+    pub workdir: PatchValue<String>,
     /// Source directory synced for `static` apps (absent keeps, `null` clears).
-    pub publish_dir: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_patch_value")]
+    pub publish_dir: PatchValue<String>,
+}
+
+/// Tri-state PATCH value: omitted preserves, JSON null clears, a value replaces.
+#[derive(Debug, Default, PartialEq)]
+pub enum PatchValue<T> {
+    #[default]
+    Missing,
+    Null,
+    Value(T),
+}
+
+impl<T> PatchValue<T> {
+    fn apply(self, current: Option<T>) -> Option<T> {
+        match self {
+            Self::Missing => current,
+            Self::Null => None,
+            Self::Value(value) => Some(value),
+        }
+    }
+}
+
+fn deserialize_patch_value<'de, D, T>(
+    deserializer: D,
+) -> std::result::Result<PatchValue<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(match Option::<T>::deserialize(deserializer)? {
+        Some(value) => PatchValue::Value(value),
+        None => PatchValue::Null,
+    })
+}
+
+fn at_field(error: Error, field: &str) -> Error {
+    match error {
+        Error::BadRequest(detail) => Error::FieldValidation {
+            field: field.into(),
+            detail,
+        },
+        Error::Conflict(detail) => Error::FieldConflict {
+            field: field.into(),
+            detail,
+        },
+        other => other,
+    }
+}
+
+fn quota_field(error: Error) -> Error {
+    match error {
+        Error::Conflict(detail) if detail.starts_with("memory quota") => {
+            at_field(Error::Conflict(detail), "mem_limit_mb")
+        }
+        Error::Conflict(detail) if detail.starts_with("CPU quota") => {
+            at_field(Error::Conflict(detail), "cpu_quota_pct")
+        }
+        other => other,
+    }
 }
 
 /// Body for rollback (optional explicit target).
@@ -148,22 +211,25 @@ pub(crate) fn validate_limits(
 ) -> Result<()> {
     if let Some(m) = mem_mb {
         if !(16..=65536).contains(&m) {
-            return Err(Error::BadRequest(
-                "mem_limit_mb must be between 16 and 65536".into(),
-            ));
+            return Err(Error::FieldValidation {
+                field: "mem_limit_mb".into(),
+                detail: "must be between 16 and 65536 MiB".into(),
+            });
         }
     }
     if let Some(c) = cpu_pct {
         if !(1..=6400).contains(&c) {
-            return Err(Error::BadRequest(
-                "cpu_quota_pct must be between 1 and 6400".into(),
-            ));
+            return Err(Error::FieldValidation {
+                field: "cpu_quota_pct".into(),
+                detail: "must be between 1 and 6400 percent".into(),
+            });
         }
     }
     if (mem_mb.is_some() || cpu_pct.is_some()) && runtime == "proc" {
-        return Err(Error::BadRequest(
-            "resource limits require the systemd runtime".into(),
-        ));
+        return Err(Error::FieldValidation {
+            field: "runtime".into(),
+            detail: "resource limits require systemd; choose systemd or clear both limits".into(),
+        });
     }
     Ok(())
 }
@@ -380,14 +446,17 @@ pub async fn list(
 pub(crate) async fn resolve_kind_shape(input: &CreateApp) -> Result<(String, i64, String)> {
     let kind = input.kind.clone().unwrap_or_else(|| "service".into());
     if !matches!(kind.as_str(), "service" | "static" | "worker") {
-        return Err(Error::BadRequest(
-            "kind must be 'service', 'static' or 'worker'".into(),
-        ));
+        return Err(Error::FieldValidation {
+            field: "kind".into(),
+            detail: "choose service, static or worker".into(),
+        });
     }
     if input.args.is_some() && input.command.is_some() {
-        return Err(Error::BadRequest(
-            "'args' and 'command' are mutually exclusive (argv carries its own arguments)".into(),
-        ));
+        return Err(Error::FieldValidation {
+            field: "args".into(),
+            detail: "cannot be combined with command; command already contains its arguments"
+                .into(),
+        });
     }
     if input
         .binary_path
@@ -395,26 +464,29 @@ pub(crate) async fn resolve_kind_shape(input: &CreateApp) -> Result<(String, i64
         .is_some_and(|b| !b.trim().is_empty())
         && input.command.is_some()
     {
-        return Err(Error::BadRequest(
-            "'binary_path' and 'command' are mutually exclusive (argv[0] is the binary)".into(),
-        ));
+        return Err(Error::FieldValidation {
+            field: "binary_path".into(),
+            detail: "cannot be combined with command; command[0] is the executable".into(),
+        });
     }
     if let Some(argv) = &input.command {
         if argv.is_empty() || argv.iter().any(|a| a.trim().is_empty()) {
-            return Err(Error::BadRequest(
-                "'command' must be a non-empty argv array".into(),
-            ));
+            return Err(Error::FieldValidation {
+                field: "command".into(),
+                detail: "must contain a non-empty executable and arguments".into(),
+            });
         }
         if argv[0].contains(' ') {
-            return Err(Error::BadRequest(
-                "command[0] must be a binary path without spaces (no shell)".into(),
-            ));
+            return Err(Error::FieldValidation {
+                field: "command".into(),
+                detail: "the executable path cannot contain spaces; no shell is used".into(),
+            });
         }
         if tokio::fs::metadata(&argv[0]).await.is_err() {
-            return Err(Error::BadRequest(format!(
-                "command binary '{}' does not exist or is not readable",
-                argv[0]
-            )));
+            return Err(Error::FieldValidation {
+                field: "command".into(),
+                detail: format!("executable '{}' does not exist or is not readable", argv[0]),
+            });
         }
     }
     let binary_path = if let Some(argv) = &input.command {
@@ -423,53 +495,67 @@ pub(crate) async fn resolve_kind_shape(input: &CreateApp) -> Result<(String, i64
         match input.publish_dir.as_deref() {
             Some(d) if !d.trim().is_empty() => d.to_string(),
             _ => {
-                return Err(Error::BadRequest("kind: static needs 'publish_dir'".into()));
+                return Err(Error::FieldValidation {
+                    field: "publish_dir".into(),
+                    detail: "is required for a static site".into(),
+                });
             }
         }
     } else {
         match input.binary_path.as_deref() {
             Some(b) if !b.trim().is_empty() => b.to_string(),
-            _ => return Err(Error::BadRequest("binary_path is required".into())),
+            _ => {
+                return Err(Error::FieldValidation {
+                    field: "binary_path".into(),
+                    detail: "is required for this workload".into(),
+                })
+            }
         }
     };
     if kind == "static" && (input.binary_path.is_some() || input.command.is_some()) {
-        return Err(Error::BadRequest(
-            "kind: static takes 'publish_dir', not 'binary_path'/'command'".into(),
-        ));
+        return Err(Error::FieldValidation {
+            field: "kind".into(),
+            detail: "static sites use a source directory, not a binary or command".into(),
+        });
     }
     if kind != "static" && input.publish_dir.is_some() {
-        return Err(Error::BadRequest(
-            "'publish_dir' is only valid for kind: static".into(),
-        ));
+        return Err(Error::FieldValidation {
+            field: "publish_dir".into(),
+            detail: "is only valid for a static site".into(),
+        });
     }
     let port = match kind.as_str() {
         "worker" => match input.port {
             None | Some(0) => 0,
             Some(_) => {
-                return Err(Error::BadRequest(
-                    "kind: worker takes no port (pass 0 or omit it)".into(),
-                ));
+                return Err(Error::FieldValidation {
+                    field: "port".into(),
+                    detail: "workers do not listen on a port; leave it empty".into(),
+                });
             }
         },
         _ => match input.port {
             Some(p) if p != 0 => p as i64,
             _ => {
-                return Err(Error::BadRequest(
-                    "kind: service/static needs 'port'".into(),
-                ))
+                return Err(Error::FieldValidation {
+                    field: "port".into(),
+                    detail: "is required for a service or static site".into(),
+                })
             }
         },
     };
     if kind == "worker" {
         if input.domain.as_ref().is_some_and(|d| !d.is_empty()) {
-            return Err(Error::BadRequest(
-                "kind: worker takes no 'domain' (nothing is routed)".into(),
-            ));
+            return Err(Error::FieldValidation {
+                field: "domain".into(),
+                detail: "workers have no public route; leave this empty".into(),
+            });
         }
         if input.metrics_path.is_some() {
-            return Err(Error::BadRequest(
-                "kind: worker takes no 'metrics_path' (nothing is scraped)".into(),
-            ));
+            return Err(Error::FieldValidation {
+                field: "metrics_path".into(),
+                detail: "workers do not expose an HTTP metrics route".into(),
+            });
         }
     }
     Ok((kind, port, binary_path))
@@ -483,7 +569,7 @@ pub async fn create(
     Json(input): Json<CreateApp>,
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
     let org_id = authz::authorize_org(&state, &user, &org, Role::Admin).await?;
-    validate_name(&input.name)?;
+    validate_name(&input.name).map_err(|error| at_field(error, "name"))?;
     let (kind, port, binary_path) = resolve_kind_shape(&input).await?;
     let id = uuid::Uuid::new_v4().to_string();
     let runtime = input
@@ -491,9 +577,10 @@ pub async fn create(
         .clone()
         .unwrap_or_else(|| state.cfg.runtime.driver.clone());
     if !matches!(runtime.as_str(), "systemd" | "proc") {
-        return Err(Error::BadRequest(
-            "runtime must be 'systemd' or 'proc'".into(),
-        ));
+        return Err(Error::FieldValidation {
+            field: "runtime".into(),
+            detail: "choose systemd or turaes (proc)".into(),
+        });
     }
     let server_id = input.server_id.clone().unwrap_or_else(|| "local".into());
     let server_exists: i64 = sqlx::query_scalar("SELECT count(*) FROM servers WHERE id = ?")
@@ -501,10 +588,15 @@ pub async fn create(
         .fetch_one(&state.pool)
         .await?;
     if server_exists == 0 {
-        return Err(Error::BadRequest(format!("unknown server '{server_id}'")));
+        return Err(Error::FieldValidation {
+            field: "server_id".into(),
+            detail: format!("server '{server_id}' does not exist"),
+        });
     }
     if port != 0 {
-        ensure_port_free(&state.pool, port, state.cfg.runtime.slot_offset as i64, "").await?;
+        ensure_port_free(&state.pool, port, state.cfg.runtime.slot_offset as i64, "")
+            .await
+            .map_err(|error| at_field(error, "port"))?;
     }
     validate_limits(input.mem_limit_mb, input.cpu_quota_pct, &runtime)?;
     quotas::ensure_capacity(
@@ -514,9 +606,18 @@ pub async fn create(
         input.mem_limit_mb,
         input.cpu_quota_pct,
     )
-    .await?;
-    if input.domain.as_ref().is_some_and(|d| !d.is_empty()) {
-        quotas::ensure_domain_capacity(&state.pool, &org_id).await?;
+    .await
+    .map_err(quota_field)?;
+    let domain = input
+        .domain
+        .as_deref()
+        .filter(|domain| !domain.trim().is_empty())
+        .map(crate::routes::domains::validate_domain)
+        .transpose()?;
+    if domain.is_some() {
+        quotas::ensure_domain_capacity(&state.pool, &org_id)
+            .await
+            .map_err(|error| at_field(error, "domain"))?;
     }
     let command_json = input
         .command
@@ -544,7 +645,7 @@ pub async fn create(
         "worker" => None,
         _ => input.metrics_path.or_else(|| Some("/metrics".into())),
     })
-    .bind(&input.domain)
+    .bind(&domain)
     .bind(&server_id)
     .bind(&runtime)
     .bind(input.auto_restart.unwrap_or(true) as i64)
@@ -556,7 +657,8 @@ pub async fn create(
     .bind(&input.publish_dir)
     .fetch_one(&state.pool)
     .await
-    .map_err(map_unique_name)?;
+    .map_err(map_unique_name)
+    .map_err(|error| at_field(error, "name"))?;
 
     // Seed the app's first placement (replicas can be added later).
     sqlx::query(
@@ -1145,6 +1247,12 @@ async fn fail_deployment(
     dep_id: &str,
     reason: &str,
 ) -> Result<()> {
+    // A failed replacement should not mark a still-serving previous slot down.
+    let app_status = if app.active_port.is_some() && app.status == "running" {
+        "running"
+    } else {
+        "failed"
+    };
     sqlx::query(
         "UPDATE deployments SET status = 'failed', log = ?, finished_at = datetime('now') WHERE id = ?",
     )
@@ -1152,12 +1260,11 @@ async fn fail_deployment(
     .bind(dep_id)
     .execute(&state.pool)
     .await?;
-    sqlx::query(
-        "UPDATE applications SET status = 'failed', updated_at = datetime('now') WHERE id = ?",
-    )
-    .bind(&app.id)
-    .execute(&state.pool)
-    .await?;
+    sqlx::query("UPDATE applications SET status = ?, updated_at = datetime('now') WHERE id = ?")
+        .bind(app_status)
+        .bind(&app.id)
+        .execute(&state.pool)
+        .await?;
     Ok(())
 }
 
@@ -1189,6 +1296,15 @@ pub async fn rollback(
     ensure_local(&app)?;
     // Static trees live in the slot directories, not the artifact store.
     if app.kind == "static" {
+        if body
+            .as_ref()
+            .is_some_and(|Json(b)| b.artifact_hash.is_some())
+        {
+            return Err(Error::FieldValidation {
+                field: "artifact_hash".into(),
+                detail: "static rollback switches to the previous retained slot; an explicit build target is not supported".into(),
+            });
+        }
         let (dep_id, out) = rollback_static(&state, &app).await?;
         audit::record(
             &state,
@@ -1209,28 +1325,11 @@ pub async fn rollback(
             "log": out.log,
         })));
     }
-    // Command apps version config, not bytes: rolling back means a fresh
-    // restart cutover of the current argv (the store holds no command blob).
     if app.command.is_some() {
-        let (dep_id, out) = deploy_app(&state, &app).await?;
-        audit::record(
-            &state,
-            Some(&org_id),
-            Some(&user),
-            Some(&app.id),
-            "app.rollback",
-            Some("deployment"),
-            Some(&dep_id),
-            Some(&serde_json::json!({"rolled_back_to": out.artifact_hash}).to_string()),
-        )
-        .await?;
-        return Ok(Json(serde_json::json!({
-            "deployment_id": dep_id,
-            "rolled_back_to": out.artifact_hash,
-            "state": out.state,
-            "artifact_hash": out.artifact_hash,
-            "log": out.log,
-        })));
+        return Err(Error::FieldValidation {
+            field: "command".into(),
+            detail: "command apps do not retain previous argv configurations; restore the desired command in turaes.yaml, run turaes apply, then deploy".into(),
+        });
     }
     let target = body.and_then(|Json(b)| b.artifact_hash);
     let previous = match target {
@@ -1385,9 +1484,10 @@ pub async fn update(
 
     let runtime = input.runtime.unwrap_or_else(|| app.runtime.clone());
     if !matches!(runtime.as_str(), "systemd" | "proc") {
-        return Err(Error::BadRequest(
-            "runtime must be 'systemd' or 'proc'".into(),
-        ));
+        return Err(Error::FieldValidation {
+            field: "runtime".into(),
+            detail: "choose systemd or turaes (proc)".into(),
+        });
     }
     let server_id = input.server_id.unwrap_or_else(|| app.server_id.clone());
     let exists: i64 = sqlx::query_scalar("SELECT count(*) FROM servers WHERE id = ?")
@@ -1395,58 +1495,130 @@ pub async fn update(
         .fetch_one(&state.pool)
         .await?;
     if exists == 0 {
-        return Err(Error::BadRequest(format!("unknown server '{server_id}'")));
+        return Err(Error::FieldValidation {
+            field: "server_id".into(),
+            detail: format!("server '{server_id}' does not exist"),
+        });
     }
 
     let port = input.port.map(|p| p as i64).unwrap_or(app.port);
     if app.kind == "worker" && port != 0 {
-        return Err(Error::BadRequest(
-            "kind: worker takes no port (pass 0 or omit it)".into(),
-        ));
+        return Err(Error::FieldValidation {
+            field: "port".into(),
+            detail: "workers do not listen on a port".into(),
+        });
     }
     if port != 0 && port != app.port {
-        ensure_port_free(&state.pool, port, state.cfg.runtime.slot_offset as i64, &id).await?;
+        ensure_port_free(&state.pool, port, state.cfg.runtime.slot_offset as i64, &id)
+            .await
+            .map_err(|error| at_field(error, "port"))?;
     }
-    let mem_limit_mb = input.mem_limit_mb.unwrap_or(app.mem_limit_mb);
-    let cpu_quota_pct = input.cpu_quota_pct.unwrap_or(app.cpu_quota_pct);
+    let mem_limit_mb = input.mem_limit_mb.apply(app.mem_limit_mb);
+    let cpu_quota_pct = input.cpu_quota_pct.apply(app.cpu_quota_pct);
     validate_limits(mem_limit_mb, cpu_quota_pct, &runtime)?;
-    quotas::ensure_capacity(&state.pool, &org_id, &id, mem_limit_mb, cpu_quota_pct).await?;
-    let domain = input.domain.or(app.domain.clone());
+    quotas::ensure_capacity(&state.pool, &org_id, &id, mem_limit_mb, cpu_quota_pct)
+        .await
+        .map_err(quota_field)?;
+    let domain = if app.kind == "worker" {
+        if input
+            .domain
+            .as_ref()
+            .is_some_and(|domain| !domain.is_empty())
+        {
+            return Err(Error::FieldValidation {
+                field: "domain".into(),
+                detail: "workers have no public route".into(),
+            });
+        }
+        None
+    } else {
+        input.domain.or(app.domain.clone())
+    };
+    let domain = domain
+        .map(|domain| {
+            if domain.trim().is_empty() {
+                Ok(String::new())
+            } else {
+                crate::routes::domains::validate_domain(&domain)
+            }
+        })
+        .transpose()?;
     if domain.as_ref().is_some_and(|d| !d.is_empty()) && domain != app.domain {
-        quotas::ensure_domain_capacity(&state.pool, &org_id).await?;
+        quotas::ensure_domain_capacity(&state.pool, &org_id)
+            .await
+            .map_err(|error| at_field(error, "domain"))?;
     }
     // Command/workdir/publish changes take effect on the next deploy. A new
     // command re-points the executable (binary_path tracks argv[0]).
-    let command: Option<Vec<String>> = match &input.command {
-        Some(None) => None,
-        Some(Some(argv)) => {
+    let command_was_set = matches!(&input.command, PatchValue::Value(_));
+    let command: Option<Vec<String>> = match input.command {
+        PatchValue::Null => None,
+        PatchValue::Value(argv) => {
             if argv.is_empty() || argv.iter().any(|a| a.trim().is_empty()) {
-                return Err(Error::BadRequest(
-                    "'command' must be a non-empty argv array".into(),
-                ));
+                return Err(Error::FieldValidation {
+                    field: "command".into(),
+                    detail: "must contain a non-empty executable and arguments".into(),
+                });
             }
             if argv[0].contains(' ') {
-                return Err(Error::BadRequest(
-                    "command[0] must be a binary path without spaces (no shell)".into(),
-                ));
+                return Err(Error::FieldValidation {
+                    field: "command".into(),
+                    detail: "the executable path cannot contain spaces; no shell is used".into(),
+                });
             }
             if input.args.is_some() {
-                return Err(Error::BadRequest(
-                    "'args' and 'command' are mutually exclusive (argv carries its own arguments)"
-                        .into(),
-                ));
+                return Err(Error::FieldValidation {
+                    field: "args".into(),
+                    detail:
+                        "cannot be combined with command; command already contains its arguments"
+                            .into(),
+                });
             }
-            Some(argv.clone())
+            Some(argv)
         }
-        None => app
+        PatchValue::Missing => app
             .command
             .as_deref()
             .and_then(|c| serde_json::from_str(c).ok()),
     };
-    let workdir = input.workdir.unwrap_or(app.workdir);
-    let publish_dir = input.publish_dir.unwrap_or(app.publish_dir);
+    if app.kind == "static" && command.is_some() {
+        return Err(Error::FieldValidation {
+            field: "command".into(),
+            detail: "static sites serve files and cannot run a command".into(),
+        });
+    }
+    let workdir = input.workdir.apply(app.workdir);
+    let publish_dir_was_set = matches!(&input.publish_dir, PatchValue::Value(_));
+    let publish_dir = input.publish_dir.apply(app.publish_dir);
+    if app.kind == "static" && publish_dir.is_none() {
+        return Err(Error::FieldValidation {
+            field: "publish_dir".into(),
+            detail: "a static site must keep a source directory".into(),
+        });
+    }
+    if app.kind != "static" && publish_dir_was_set {
+        return Err(Error::FieldValidation {
+            field: "publish_dir".into(),
+            detail: "is only valid for a static site".into(),
+        });
+    }
+    let metrics_path = if app.kind == "worker" {
+        if input
+            .metrics_path
+            .as_ref()
+            .is_some_and(|path| !path.trim().is_empty())
+        {
+            return Err(Error::FieldValidation {
+                field: "metrics_path".into(),
+                detail: "workers do not expose an HTTP metrics route".into(),
+            });
+        }
+        None
+    } else {
+        input.metrics_path.or(app.metrics_path)
+    };
     // Setting a command supersedes flat args (argv carries its own).
-    let args = if matches!(&input.command, Some(Some(_))) {
+    let args = if command_was_set {
         None
     } else {
         input.args.or(app.args)
@@ -1457,7 +1629,7 @@ pub async fn update(
     };
     let updated = sqlx::query_as::<_, Application>(
         "UPDATE applications SET description = ?, args = ?, port = ?, health_path = ?, \
-         metrics_path = ?, domain = ?, runtime = ?, auto_restart = ?, server_id = ?, \
+          metrics_path = ?, domain = ?, runtime = ?, auto_restart = ?, server_id = ?, \
          mem_limit_mb = ?, cpu_quota_pct = ?, binary_path = ?, command = ?, workdir = ?, \
          publish_dir = ?, \
          updated_at = datetime('now') WHERE id = ? RETURNING *",
@@ -1466,7 +1638,7 @@ pub async fn update(
     .bind(args)
     .bind(port)
     .bind(input.health_path.unwrap_or(app.health_path))
-    .bind(input.metrics_path.or(app.metrics_path))
+    .bind(metrics_path)
     .bind(domain)
     .bind(&runtime)
     .bind(input.auto_restart.unwrap_or(app.auto_restart) as i64)
@@ -1579,7 +1751,19 @@ pub async fn deployments(
 
 #[cfg(test)]
 mod tests {
-    use super::select_previous_artifact;
+    use super::{select_previous_artifact, PatchValue, UpdateApp};
+
+    #[test]
+    fn patch_values_distinguish_missing_null_and_value() {
+        let missing: UpdateApp = serde_json::from_str("{}").unwrap();
+        assert_eq!(missing.mem_limit_mb, PatchValue::Missing);
+
+        let clear: UpdateApp = serde_json::from_str(r#"{"mem_limit_mb":null}"#).unwrap();
+        assert_eq!(clear.mem_limit_mb, PatchValue::Null);
+
+        let set: UpdateApp = serde_json::from_str(r#"{"mem_limit_mb":256}"#).unwrap();
+        assert_eq!(set.mem_limit_mb, PatchValue::Value(256));
+    }
 
     #[test]
     fn picks_previous_distinct_artifact() {

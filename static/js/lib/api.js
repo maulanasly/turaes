@@ -10,6 +10,9 @@ export async function api(path, options = {}) {
   if (!res.ok) {
     const err = new Error(body.detail || `HTTP ${res.status}`);
     err.status = res.status;
+    err.code = body.code;
+    err.field = body.field;
+    err.fields = body.fields;
     throw err;
   }
   return body;

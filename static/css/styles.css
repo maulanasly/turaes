@@ -200,6 +200,7 @@ h3 { font-size: 13px; margin: 0 0 8px; }
 .btn:disabled { opacity: .6; cursor: default; }
 
 input, select { background: var(--bg); border: 1px solid var(--control-border); border-radius: 6px; padding: 8px 10px; color: var(--text); font: inherit; }
+input[aria-invalid="true"], select[aria-invalid="true"] { border-color: var(--bad); }
 .search { padding: 6px 10px; }
 
 .form { display: grid; gap: 10px; max-width: 620px; }
