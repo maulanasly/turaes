@@ -24,15 +24,20 @@ function AppCard({ app, servers }) {
 
 function NewAppForm({ servers, onCreated }) {
   const [busy, setBusy] = useState(false);
-  const submit = async (e) => {
+  const [review, setReview] = useState(null);
+  const startReview = (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
     const payload = Object.fromEntries([...fd.entries()].filter(([, v]) => v !== ""));
     if (payload.port) payload.port = Number(payload.port);
+    setReview(payload);
+  };
+  const confirm = async () => {
     setBusy(true);
     try {
-      const r = await oapi("/apps", { method: "POST", body: JSON.stringify(payload) });
+      const r = await oapi("/apps", { method: "POST", body: JSON.stringify(review) });
       toast.success(`Created ${r.application.name}`);
+      setReview(null);
       onCreated(r.application);
     } catch (err) {
       toast.error(err.message);
@@ -40,8 +45,28 @@ function NewAppForm({ servers, onCreated }) {
       setBusy(false);
     }
   };
+  if (review) {
+    const server = servers.find((s) => s.id === review.server_id);
+    return html`
+      <div>
+        <div class="section-band"><h2>Review</h2><span class="muted small">check before creating</span></div>
+        <table><tbody>
+          <tr><th>Name</th><td class="mono">${review.name}</td></tr>
+          <tr><th>Binary</th><td class="mono break">${review.binary_path}</td></tr>
+          <tr><th>Port</th><td class="mono">${review.port}</td></tr>
+          <tr><th>Domain</th><td class="mono">${review.domain || "—"}</td></tr>
+          <tr><th>Server</th><td>${server ? server.name : review.server_id || "—"}</td></tr>
+          <tr><th>Managed by</th><td>${runtimeLabel(review.runtime)}</td></tr>
+        </tbody></table>
+        <p class="muted small">This creates the app record; deploy it from its detail page to start it.</p>
+        <div class="controls">
+          <button class="btn ghost" disabled=${busy} onClick=${() => setReview(null)}>Back</button>
+          <button class="btn" disabled=${busy} onClick=${confirm}>${busy ? "Creating…" : "Create app"}</button>
+        </div>
+      </div>`;
+  }
   return html`
-    <form class="form" onSubmit=${submit}>
+    <form class="form" onSubmit=${startReview}>
       <div class="section-band"><h2>Identity</h2><span class="muted small">name becomes the unit + install name</span></div>
       <div class="row">
         <label>Name <input name="name" placeholder="beruang" required /></label>

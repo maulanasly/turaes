@@ -144,6 +144,20 @@ function Shell() {
 
   const attention = alerts.length;
   const onlineServers = servers.filter((s) => s.status === "online").length;
+  const crits = alerts.filter((a) => a.severity === "critical");
+  const warns = alerts.filter((a) => a.severity !== "critical");
+
+  function AlertSection({ cls, title, items }) {
+    if (items.length === 0) return null;
+    return html`<section class=${"panel notice " + cls} role="alert">
+      <div class="panel-head"><strong>${title}</strong></div>
+      ${items.map((a) => html`<div>
+        ${a.application_id
+          ? html`<a href=${`#/apps/${a.application_id}/overview`}>${a.subject}</a>`
+          : a.subject}
+      </div>`)}
+    </section>`;
+  }
 
   return html`
     <a class="skip-link" href="#main" onClick=${(e) => {
@@ -196,15 +210,10 @@ function Shell() {
     </header>
 
     <main id="main" tabindex="-1" ref=${mainRef}>
-      ${alerts.length > 0 && html`<section class="panel notice" role="alert">
-        <div class="panel-head"><strong>Firing alerts</strong></div>
-        ${alerts.map((a) => html`<div>
-          <strong>${a.severity === "critical" ? "Critical" : "Warning"}</strong>
-          ${" "}${a.application_id
-            ? html`<a href=${`#/apps/${a.application_id}/overview`}>${a.subject}</a>`
-            : a.subject}
-        </div>`)}
-      </section>`}
+      ${crits.length > 0 && html`<${AlertSection} cls="notice-critical"
+        title=${`Critical (${crits.length})`} items=${crits} />`}
+      ${warns.length > 0 && html`<${AlertSection} cls="notice-warning"
+        title=${`Warnings (${warns.length})`} items=${warns} />`}
       ${route.view === "apps" && html`<${AppsView} key=${org} user=${user} servers=${servers} />`}
       ${route.view === "app" && html`<${AppDetailView} key=${org} id=${route.id} tab=${route.tab} range=${route.range} user=${user} servers=${servers} />`}
       ${route.view === "servers" && html`<${ServersView} key=${org} user=${user} onChanged=${loadServers} />`}
