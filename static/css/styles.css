@@ -6,13 +6,13 @@
   --control-border: #6b7280;
   --text: #e6e8ee;
   --muted: #8b93a7;
-  --accent: #6ea8fe;
-  --signal: #d6a84f;
-  --signal-ink: #191c23;
+  --accent: #67e8f9;
+  --signal: #818cf8;
+  --signal-ink: #111322;
   --ok: #4ade80;
-  --warn: #facc15;
+  --warn: #fbbf24;
   --bad: #f87171;
-  --cpu: #6ea8fe;
+  --cpu: #67e8f9;
   --mem: #c084fc;
   --visits: #34d399;
   --radius: 8px;
@@ -27,13 +27,13 @@
   --control-border: #78828f;
   --text: #191c23;
   --muted: #5b6472;
-  --accent: #2563eb;
-  --signal: #9a6b1f;
+  --accent: #067481;
+  --signal: #4f46e5;
   --signal-ink: #ffffff;
-  --ok: #15803d;
-  --warn: #b45309;
-  --bad: #dc2626;
-  --cpu: #2563eb;
+  --ok: #126b35;
+  --warn: #8a4b08;
+  --bad: #c62828;
+  --cpu: #067481;
   --mem: #7c3aed;
   --visits: #059669;
   color-scheme: light;
@@ -120,7 +120,7 @@ a:hover { text-decoration: underline; }
 .cap-track { height: 6px; border-radius: 999px; background: var(--border); overflow: hidden; }
 .cap-fill { height: 100%; background: var(--cpu); border-radius: 999px; }
 .cap-fill.mem { background: var(--mem); }
-.cap-fill.warn { background: var(--warn, #d97706); }
+.cap-fill.warn { background: var(--warn); }
 .cap-fill.bad { background: var(--bad); }
 
 main { max-width: 1180px; margin: 22px auto; padding: 0 20px; display: grid; gap: 18px; }
@@ -175,9 +175,12 @@ h3 { font-size: 13px; margin: 0 0 8px; }
 .section-band h2 { margin: 0; }
 .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 4px 16px;
   border-top: 2px solid var(--border); border-bottom: 1px solid var(--border); padding: 10px 2px; }
-.fleet-summary { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted);
-  border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; white-space: nowrap; }
+.fleet-summary { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; }
 .fleet-summary strong { color: var(--text); }
+.fleet-item { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; }
+.fleet-separator { color: var(--muted); }
+.stat-value { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; }
 .tab-group { display: flex; align-items: center; gap: 4px; }
 .tab-group + .tab-group { margin-left: 10px; padding-left: 10px; border-left: 1px solid var(--border); }
 .tab-label { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }

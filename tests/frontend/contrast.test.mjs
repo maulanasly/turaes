@@ -34,12 +34,17 @@ function ratio(a, b) {
 
 const THEMES = { dark: tokens(":root"), light: tokens('\\[data-theme="light"\\]') };
 
-// Pairs that only need 3:1 (non-text UI boundaries, focus rings).
+// Pairs that only need 3:1 (non-text UI boundaries and chart lines).
 const NON_TEXT = [
   ["control-border", "bg"],
   ["control-border", "panel"],
   ["control-border", "panel-2"],
   ["signal", "panel"],
+  ["signal", "bg"],
+  ["signal", "panel-2"],
+  ["cpu", "bg"], ["cpu", "panel"], ["cpu", "panel-2"],
+  ["mem", "bg"], ["mem", "panel"], ["mem", "panel-2"],
+  ["visits", "bg"], ["visits", "panel"], ["visits", "panel-2"],
 ];
 
 for (const [name, t] of Object.entries(THEMES)) {
@@ -47,7 +52,10 @@ for (const [name, t] of Object.entries(THEMES)) {
     const pairs = [
       ["text", "bg"], ["text", "panel"], ["text", "panel-2"],
       ["muted", "bg"], ["muted", "panel"], ["muted", "panel-2"],
-      ["accent", "panel"], ["accent", "panel-2"],
+      ["accent", "bg"], ["accent", "panel"], ["accent", "panel-2"],
+      ["ok", "bg"], ["ok", "panel"], ["ok", "panel-2"],
+      ["warn", "bg"], ["warn", "panel"], ["warn", "panel-2"],
+      ["bad", "bg"], ["bad", "panel"], ["bad", "panel-2"],
       ["signal-ink", "signal"],
     ];
     for (const [fg, bg] of pairs) {
@@ -56,15 +64,10 @@ for (const [name, t] of Object.entries(THEMES)) {
     }
   });
 
-  test(`${name}: UI boundaries and focus ring meet 3:1`, () => {
+  test(`${name}: UI boundaries and telemetry lines meet 3:1`, () => {
     for (const [fg, bg] of NON_TEXT) {
       const r = ratio(t[fg], t[bg]);
       assert.ok(r >= 3, `${name} --${fg} on --${bg} = ${r.toFixed(2)} (< 3)`);
     }
-  });
-
-  test(`${name}: accent focus ring meets 3:1 on the page`, () => {
-    const r = ratio(t.accent, t.bg);
-    assert.ok(r >= 3, `${name} --accent on --bg = ${r.toFixed(2)} (< 3)`);
   });
 }
