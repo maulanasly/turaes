@@ -54,6 +54,7 @@ function Shell() {
   // Active org lives in Shell state so a switch remounts the org-scoped views
   // (via `key`) instead of a full page reload.
   const [org, setOrgState] = useState(() => getOrg() || "default");
+  const [orgs, setOrgs] = useState([]);
 
   // Screen-reader and tab users learn where they are on every navigation.
   useEffect(() => {
@@ -66,12 +67,13 @@ function Shell() {
       // Resolve the tenant principal and pin API calls to an org.
       try {
         const me = await api("/api/v1/me");
-        const orgs = me.orgs || [];
+        const list = me.orgs || [];
+        setOrgs(list);
         let stored = null;
         try { stored = localStorage.getItem("turaes-org"); } catch (e) {}
-        const pick = orgs.find((o) => o.slug === stored)
-          || orgs.find((o) => o.slug === "default")
-          || orgs[0];
+        const pick = list.find((o) => o.slug === stored)
+          || list.find((o) => o.slug === "default")
+          || list[0];
         if (pick) { setOrg(pick.slug); setOrgState(pick.slug); }
       } catch (e) {}
     } catch { setUser(null); }
@@ -132,19 +134,35 @@ function Shell() {
     return html`<${LoginView} error=${loginError} theme=${theme} onToggleTheme=${toggleTheme} />`;
   }
 
+  const attention = alerts.length;
+  const onlineServers = servers.filter((s) => s.status === "online").length;
+
   return html`
     <header class="topbar">
       <div class="brand">turaes <span class="muted small">· deploy your apps — no containers</span></div>
       <nav class="nav" aria-label="Primary">
-        <${NavLink} route=${route} view="apps" match="app" label="Applications" />
-        <${NavLink} route=${route} view="servers" match="server" label="Servers" />
-        <${NavLink} route=${route} view="tokens" label="Tokens" />
-        <${NavLink} route=${route} view="org" label="Organization" />
-        <${NavLink} route=${route} view="about" label="About" />
+        <span class="nav-group"><span class="nav-label">Operate</span>
+          <${NavLink} route=${route} view="apps" match="app" label="Applications" />
+          <${NavLink} route=${route} view="servers" match="server" label="Servers" />
+        </span>
+        <span class="nav-group"><span class="nav-label">Access</span>
+          <${NavLink} route=${route} view="tokens" label="Tokens" />
+          <${NavLink} route=${route} view="org" label="Organization" />
+        </span>
+        <span class="nav-group"><span class="nav-label">System</span>
+          <${NavLink} route=${route} view="about" label="About" />
+        </span>
       </nav>
       <div class="controls">
-        <span class=${"dot " + (health ? "ok" : "bad")}
-          title=${health ? "healthy" : "unreachable"} aria-label=${health ? "healthy" : "unreachable"}></span>
+        ${orgs.length > 1 ? html`<select value=${org} onChange=${(e) => changeOrg(e.target.value)}
+          aria-label="Active organization" title="Active organization">
+          ${orgs.map((o) => html`<option value=${o.slug}>${o.slug} (${o.role})</option>`)}
+        </select>` : orgs.length === 1 ? html`<span class="pill" title="Active organization">${orgs[0].slug}</span>` : null}
+        <span class="fleet-summary" title="Fleet status">
+          <strong>${servers.length}</strong>&nbsp;servers · <strong>${onlineServers}</strong>&nbsp;online${attention > 0 ? html` · <strong>${attention}</strong>&nbsp;attention` : null}
+        </span>
+        <span class=${"dot " + (health ? "ok" : "bad")} aria-hidden="true"></span>
+        <span class="small" role="status">${health ? "Healthy" : "Unreachable"}</span>
         <button class="btn small ghost" onClick=${toggleTheme}
           title="Toggle theme" aria-label="Toggle theme">${theme === "dark" ? "☾" : "☀"}</button>
         <span class="muted small">${user.login}</span>

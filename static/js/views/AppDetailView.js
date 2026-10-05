@@ -42,7 +42,28 @@ function Kpi({ label, value }) {
   return html`<div class="kpi"><div class="kpi-label">${label}</div><div class="kpi-value">${value}</div></div>`;
 }
 
-function Overview({ data, range, onRange, updatedAt, loading, onRefresh }) {
+const TAB_GROUPS = [
+  { label: "Operate", tabs: ["overview", "logs"] },
+  { label: "Release", tabs: ["deployments", "activity"] },
+  { label: "Configure", tabs: ["environment", "settings"] },
+];
+
+function RecentActivity({ entries, appId }) {
+  const items = (entries || []).slice(0, 5);
+  if (!entries) return html`<p class="muted">Loading recent activity…</p>`;
+  if (!items.length) return html`<p class="muted">No recorded actions yet.</p>`;
+  return html`
+    <ul class="timeline">
+      ${items.map((e) => html`<li>
+        <span class="mono small muted">${fmtTime(e.created_at)}</span>
+        <span class=${"t-dot " + (/fail|unhealthy|error/i.test(e.action || "") ? "bad" : /deploy|restart|start/i.test(e.action || "") ? "warn" : "ok")} aria-hidden="true"></span>
+        <span><a href=${`#/apps/${appId}/activity`}>${e.action}</a>
+          <span class="muted"> — ${e.actor_login || "system"}</span></span>
+      </li>`)}
+    </ul>`;
+}
+
+function Overview({ data, range, onRange, updatedAt, loading, onRefresh, activity, appId }) {
   const hours = rangeToHours(range);
   const rangeLabel = fmtRangeLabel(range);
   const metrics = data.metrics || [];
@@ -108,6 +129,10 @@ function Overview({ data, range, onRange, updatedAt, loading, onRefresh }) {
       </div>
       <${Chart} title="Visits observed" points=${visitSeries} color="var(--visits)" formatY=${(v) => Math.round(v)}
         subtitle=${rangeLabel} rangeHours=${hours} emptyHint=${emptyHint} />
+      <div>
+        <div class="section-band"><h2>Recent activity</h2><span class="muted small">latest first</span></div>
+        <${RecentActivity} entries=${activity} appId=${appId} />
+      </div>
       <div>
         <h2>Visitors by region <span class="muted small">· ${rangeLabel}, unique is latest per region (never summed)</span></h2>
         ${regions.length === 0
@@ -375,6 +400,7 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
   const [activity, setActivity] = useState(null);
   const [env, setEnv] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [latest, setLatest] = useState(null);
 
   // Single range drives CPU, memory and visitors together. URL wins, then
   // the stored preference, then the default — all normalized.
@@ -461,12 +487,21 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
 
   const refreshMetrics = useCallback(() => { loadMetrics(); }, [loadMetrics]);
 
+  const loadLatest = useCallback(async () => {
+    try {
+      const r = await oapi(`/apps/${id}/deployments?limit=1`);
+      setLatest((r.deployments || [])[0] || null);
+    } catch { setLatest(null); }
+  }, [id]);
+
   useEffect(() => {
-    if (tab === "overview") loadMetrics();
+    if (tab === "overview") { loadMetrics(); loadActivity(); }
     if (tab === "deployments") loadDeployments();
     if (tab === "activity") loadActivity();
     if (tab === "environment") loadEnv();
   }, [tab, id, range, loadMetrics, loadDeployments, loadActivity, loadEnv]);
+
+  useEffect(() => { loadLatest(); }, [loadLatest]);
 
   const deploy = async () => {
     setBusy(true);
@@ -564,39 +599,47 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
       <div class="panel-head">
         <div>
           <a href="#/apps" class="muted">← Applications</a>
-          <h1 class="mono">${app.name} <${StatusBadge} status=${app.status} /></h1>
-          <div class="muted small">
-            ${app.domain ? html`<span class="mono">${app.domain}</span> · ` : null}
-            ${serverName(servers, app.server_id)} · :${app.port} · ${runtimeLabel(app.runtime)}
+          <h1 class="identity"><span class="mono">${app.name}</span> <${StatusBadge} status=${app.status} /></h1>
+          <div class="status-strip" aria-label="Application status">
+            <div class="stat"><span>Server</span><span class="mono">${serverName(servers, app.server_id)}</span></div>
+            <div class="stat"><span>Route</span><span class="mono">${app.domain || "—"}</span></div>
+            <div class="stat"><span>Port</span><span class="mono">:${app.port}</span></div>
+            <div class="stat"><span>Managed by</span><span>${runtimeLabel(app.runtime)}</span></div>
+            <div class="stat"><span>Last deploy</span><span>${latest
+              ? html`<span class="mono" title=${latest.artifact_hash || ""}>${shortHash(latest.artifact_hash)} · ${timeAgo(Date.now() - parseTs(latest.started_at))}</span>`
+              : html`<span class="muted">never</span>`}</span></div>
           </div>
         </div>
         <div class="controls">
           ${user && html`
             <button class="btn" disabled=${busy} onClick=${deploy}>${busy ? "Deploying…" : "Deploy"}</button>
-            <button class="btn ghost" disabled=${busy} onClick=${rollback}>Rollback</button>
+            <button class="btn ghost" disabled=${busy} onClick=${() => action("restart")}>Restart</button>
+            <button class="btn ghost" disabled=${busy} onClick=${() => action("stop")}>Stop</button>
             <details class="menu">
               <summary class="btn small ghost" aria-label="More actions">More</summary>
               <div class="menu-list">
-                <button class="btn small ghost" disabled=${busy} onClick=${() => action("stop")}>Stop</button>
+                <button class="btn small ghost" disabled=${busy} onClick=${rollback}>Rollback</button>
                 <button class="btn small ghost" disabled=${busy} onClick=${() => action("start")}>Start</button>
-                <button class="btn small ghost" disabled=${busy} onClick=${() => action("restart")}>Restart</button>
               </div>
             </details>`}
         </div>
       </div>
-      <nav class="tabs" role="tablist">
-        ${APP_TABS.map((t) => {
-          const href = t === "overview" && range !== DEFAULT_RANGE
-            ? `#/apps/${id}/${t}?range=${range}`
-            : `#/apps/${id}/${t}`;
-          return html`
-            <a role="tab" aria-selected=${t === tab} class=${t === tab ? "active" : ""}
-              href=${href}>${TAB_LABEL[t]}</a>`;
-        })}
+      <nav class="tabs" role="tablist" aria-label="Application sections">
+        ${TAB_GROUPS.map((g) => html`<span class="tab-group"><span class="tab-label" aria-hidden="true">${g.label}</span>${
+          g.tabs.map((t) => {
+            const href = t === "overview" && range !== DEFAULT_RANGE
+              ? `#/apps/${id}/${t}?range=${range}`
+              : `#/apps/${id}/${t}`;
+            return html`
+              <a role="tab" aria-selected=${t === tab} class=${t === tab ? "active" : ""}
+                href=${href}>${TAB_LABEL[t]}</a>`;
+          })
+        }</span>`)}
       </nav>
       <div class="tab-body" role="tabpanel">
         ${tab === "overview" && html`<${Overview} data=${data} range=${range} onRange=${changeRange}
-          updatedAt=${metricsAt} loading=${metricsLoading} onRefresh=${refreshMetrics} />`}
+          updatedAt=${metricsAt} loading=${metricsLoading} onRefresh=${refreshMetrics}
+          activity=${activity} appId=${id} />`}
         ${tab === "deployments" && html`<${Deployments} deployments=${deployments} onRollbackTo=${rollbackTo} />`}
         ${tab === "activity" && html`<${Activity} entries=${activity} />`}
         ${tab === "environment" && html`<${Environment} env=${env} appId=${id} reload=${loadEnv} />`}

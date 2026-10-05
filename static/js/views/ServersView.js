@@ -93,9 +93,16 @@ export function ServersView({ user, onChanged }) {
     </section>`;
   }
 
+  const online = (servers || []).filter((s) => s.status === "online").length;
+
   return html`
     <section class="panel">
       <div class="panel-head"><h1>Servers</h1></div>
+      ${servers !== null && !error ? html`
+        <div class="status-strip" aria-label="Fleet status">
+          <div class="stat"><span>Fleet</span><span><strong>${servers.length}</strong>&nbsp;server${servers.length === 1 ? "" : "s"}</span></div>
+          <div class="stat"><span>Reachable</span><span><strong>${online}</strong>&nbsp;online</span></div>
+        </div>` : null}
       ${servers === null
         ? html`<p class="muted">Loading…</p>`
         : servers.length === 0
