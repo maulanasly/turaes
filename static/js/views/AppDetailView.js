@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback, useMemo } from "preact/hooks";
 import { oapi } from "../lib/api.js";
 import { toast } from "../lib/toast.js";
 import { confirmAction } from "../lib/confirm.js";
+import { deployConsequences, restartConsequences, stopConsequences, startConsequences, rollbackConsequences } from "../lib/appForm.js";
 import { fmtBytes, parseTs, fmtTime, fmtRangeLabel, timeAgo, shortHash, serverName, runtimeLabel } from "../lib/format.js";
 import { APP_TABS, navigate } from "../lib/router.js";
 import { RANGES, DEFAULT_RANGE, normalizeRange, rangeToHours } from "../lib/route.js";
@@ -504,6 +505,12 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
   useEffect(() => { loadLatest(); }, [loadLatest]);
 
   const deploy = async () => {
+    if (!(await confirmAction({
+      title: `Deploy ${app.name}?`,
+      body: "Installs the current binary and starts a new version, then moves traffic to it.",
+      consequences: deployConsequences(app),
+      confirmLabel: "Deploy",
+    }))) return;
     setBusy(true);
     try {
       await oapi(`/apps/${id}/deploy`, { method: "POST" });
@@ -521,6 +528,7 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
     if (!(await confirmAction({
       title: `Roll back ${app.name}?`,
       body: "Redeploys the previous build.",
+      consequences: rollbackConsequences(),
       confirmLabel: "Roll back",
     }))) return;
     setBusy(true);
@@ -540,6 +548,7 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
     if (!(await confirmAction({
       title: `Roll back ${app.name}?`,
       body: `Redeploy build ${shortHash(hash)}.`,
+      consequences: rollbackConsequences(shortHash(hash)),
       confirmLabel: "Roll back",
     }))) return;
     setBusy(true);
@@ -559,12 +568,18 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
   };
 
   const action = async (a) => {
-    if ((a === "stop" || a === "restart") && !(await confirmAction({
-      title: `${a === "stop" ? "Stop" : "Restart"} ${app.name}?`,
+    const consequences = a === "stop" ? stopConsequences()
+      : a === "restart" ? restartConsequences()
+      : startConsequences();
+    if (!(await confirmAction({
+      title: `${a[0].toUpperCase()}${a.slice(1)} ${app.name}?`,
       body: a === "stop"
         ? "Traffic to this app will drop until it starts again."
-        : "The active slot restarts; expect a brief interruption.",
-      confirmLabel: a === "stop" ? "Stop" : "Restart",
+        : a === "restart"
+        ? "The active process restarts; expect a brief interruption."
+        : "Brings the app back online.",
+      consequences,
+      confirmLabel: a[0].toUpperCase() + a.slice(1),
       danger: a === "stop",
     }))) return;
     setBusy(true);
@@ -624,6 +639,7 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
             </details>`}
         </div>
       </div>
+      <p class="action-note muted small">Deploy installs the current binary and swaps the route with no downtime. Restart briefly interrupts; Stop drops traffic immediately.</p>
       <nav class="tabs" role="tablist" aria-label="Application sections">
         ${TAB_GROUPS.map((g) => html`<span class="tab-group"><span class="tab-label" aria-hidden="true">${g.label}</span>${
           g.tabs.map((t) => {
