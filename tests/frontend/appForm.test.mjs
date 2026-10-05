@@ -14,6 +14,8 @@ test("kinds cover the three workload shapes", () => {
     assert.ok(k.blurb);
     assert.ok(k.constraints.length >= 2);
   }
+  assert.match(kindInfo("service").constraints.join(" "), /turaes\.yaml/);
+  assert.match(kindInfo("worker").constraints.join(" "), /turaes apply/);
   assert.deepEqual(STEPS, ["Workload", "Process", "Placement", "Review"]);
 });
 
