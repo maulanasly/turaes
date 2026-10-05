@@ -107,17 +107,17 @@ export function ServersView({ user, onChanged }) {
         ? html`<p class="muted">Loading…</p>`
         : servers.length === 0
           ? html`<p class="muted">No servers yet.</p>`
-          : html`<div class="table-wrap"><table>
+          : html`<div class="table-wrap"><table class="stacked">
             <thead><tr><th>Name</th><th>Address</th><th>Status</th><th>Last seen</th><th>Agent</th><th></th></tr></thead>
             <tbody>
               ${servers.map((s) => html`
                 <tr>
-                  <td><a class="mono" href=${`#/servers/${s.id}`}>${s.name}</a>${s.is_local ? html` <span class="pill">local</span>` : null}</td>
-                  <td class="mono">${s.address}</td>
-                  <td><span class=${"badge " + statusClass(s.status)}>${s.status}</span></td>
-                  <td class="muted">${s.last_seen_at ? fmtTime(s.last_seen_at) : "—"}</td>
-                  <td class="muted mono">${s.agent_version || "—"}</td>
-                  <td class="controls">
+                  <td data-label="Name"><a class="mono" href=${`#/servers/${s.id}`}>${s.name}</a>${s.is_local ? html` <span class="pill">local</span>` : null}</td>
+                  <td data-label="Address" class="mono">${s.address}</td>
+                  <td data-label="Status"><span class=${"badge " + statusClass(s.status)}>${s.status}</span></td>
+                  <td data-label="Last seen" class="muted">${s.last_seen_at ? fmtTime(s.last_seen_at) : "—"}</td>
+                  <td data-label="Agent" class="muted mono">${s.agent_version || "—"}</td>
+                  <td class="controls no-label">
                     ${user && html`<button class="btn small ghost" disabled=${busy !== null} onClick=${() => validate(s)}>
                       ${busy === `validate:${s.id}` ? "Validating…" : "Validate"}</button>`}
                     ${user && !s.is_local && html`<button class="btn small" disabled=${busy !== null} onClick=${() => bootstrap(s)}>

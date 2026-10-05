@@ -266,6 +266,24 @@ summary { cursor: pointer; color: var(--muted); }
 
 .table-wrap { overflow-x: auto; }
 .break { word-break: break-all; }
+
+/* Narrow screens: stacked resource rows instead of horizontal scrolling.
+   Tables opt in with class="stacked"; every td carries its column label in
+   data-label (or class="no-label" for action cells). Headers stay in the
+   accessibility tree via the sr-only technique. */
+@media (max-width: 640px) {
+  table.stacked thead { position: absolute; width: 1px; height: 1px; padding: 0;
+    margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+  table.stacked, table.stacked tbody, table.stacked tr, table.stacked td {
+    display: block; width: 100%; }
+  table.stacked tr { border-bottom: 2px solid var(--border); padding: 8px 0; }
+  table.stacked td { border-bottom: 0; padding: 3px 0; display: flex;
+    justify-content: space-between; align-items: center; gap: 12px; }
+  table.stacked td::before { content: attr(data-label); color: var(--muted);
+    font-size: 12px; flex-shrink: 0; }
+  table.stacked td.no-label::before { content: none; }
+  table.stacked td.no-label { justify-content: flex-start; }
+}
 @media (max-width: 720px) {
   .tabs { flex-wrap: nowrap; overflow-x: auto; }
 }
