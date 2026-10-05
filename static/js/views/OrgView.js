@@ -116,7 +116,7 @@ export function OrgView({ user, onOrgChange }) {
     <section class="panel">
       <div class="panel-head">
         <h1>Organization</h1>
-        ${mine && html`<span class="pill">${mine.slug} · ${mine.role}</span>`}
+        ${mine && html`<span class="muted small">${mine.slug} · ${mine.role}</span>`}
       </div>
       <div class="row" style="margin-bottom:14px">
         <label>Active organization
@@ -153,7 +153,7 @@ export function OrgView({ user, onOrgChange }) {
                         ? html`<select value=${m.role} disabled=${busy !== null} onChange=${(e) => changeRole(m, e.target.value)}>
                             ${ROLES.map((r) => html`<option value=${r}>${r}</option>`)}
                           </select>`
-                        : html`<span class="pill">${m.role}</span>`}
+                        : html`<span class="muted">${m.role}</span>`}
                     </td>
                     <td data-label="Since" class="muted">${m.created_at ? fmtTime(m.created_at) : "—"}</td>
                     <td class="controls no-label">

@@ -97,7 +97,7 @@ export function TokensView({ user }) {
                 ${tokens.map((t) => html`
                   <tr>
                     <td data-label="Name" class="mono">${t.name}</td>
-                    <td data-label="Scope"><span class="pill">${t.scopes}</span></td>
+                    <td data-label="Scope"><span class="mono small muted">${t.scopes}</span></td>
                     <td data-label="Created" class="muted">${t.created_at ? fmtTime(t.created_at) : "—"}</td>
                     <td data-label="Last used" class="muted">${t.last_used_at ? fmtTime(t.last_used_at) : "never"}</td>
                     <td class="controls no-label">

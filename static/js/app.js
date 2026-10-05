@@ -188,7 +188,7 @@ function Shell() {
         ${orgs.length > 1 ? html`<select value=${org} onChange=${(e) => changeOrg(e.target.value)}
           aria-label="Active organization" title="Active organization">
           ${orgs.map((o) => html`<option value=${o.slug}>${o.slug} (${o.role})</option>`)}
-        </select>` : orgs.length === 1 ? html`<span class="pill" title="Active organization">${orgs[0].slug}</span>` : null}
+        </select>` : orgs.length === 1 ? html`<span class="muted small" title="Active organization">${orgs[0].slug}</span>` : null}
         <span class="fleet-summary" title="Fleet status">
           <strong>${servers.length}</strong>&nbsp;servers · <strong>${onlineServers}</strong>&nbsp;online${attention > 0 ? html` · <strong>${attention}</strong>&nbsp;attention` : null}
         </span>
