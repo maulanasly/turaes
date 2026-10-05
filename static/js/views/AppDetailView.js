@@ -445,6 +445,7 @@ function EditForm({ app, servers, onSaved }) {
         </label>
       </div>
       <p class="muted small">Limits need the systemd runtime and take effect on the next deploy or restart.</p>
+      <p class="muted small">Binary path, custom argv, working directory, and static source directory are managed in turaes.yaml. Run turaes apply, then deploy to apply those changes.</p>
       ${formError ? html`<p class="form-error" role="alert">${formError}</p>` : null}
       <div><button class="btn" type="submit" disabled=${busy}>${busy ? "Saving…" : "Save settings"}</button></div>
     </form>`;

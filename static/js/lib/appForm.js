@@ -12,6 +12,7 @@ export const KINDS = [
       "Runs a prebuilt binary already on the server — turaes never builds or containers it.",
       "The port must be free on the chosen server.",
       "Arguments are passed literally: there is no shell, so no pipes, globs or quoting.",
+      "For custom argv or a working-directory override, define command/workdir in turaes.yaml and run turaes apply.",
     ],
   },
   {
@@ -32,6 +33,7 @@ export const KINDS = [
       "Runs a prebuilt binary already on the server.",
       "No port and no domain: nothing can reach it over HTTP.",
       "It is supervised and restarted on failure; watch it in the logs tab.",
+      "For custom argv or a working-directory override, define command/workdir in turaes.yaml and run turaes apply.",
     ],
   },
 ];
