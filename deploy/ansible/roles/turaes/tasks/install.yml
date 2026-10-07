@@ -39,6 +39,18 @@
   when: not turaes_env_stat.stat.exists
   notify: Restart turaes
 
+- name: Backfill the cert contact on existing env files
+  ansible.builtin.lineinfile:
+    path: "{{ turaes_env_file }}"
+    regexp: "^TURAES_CERT_EMAIL="
+    line: "TURAES_CERT_EMAIL={{ turaes_cert_email }}"
+    mode: "0600"
+  no_log: true
+  notify: Restart turaes
+  when:
+    - turaes_cert_email is defined
+    - turaes_cert_email | length > 0
+
 - name: Install systemd units and timers
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../../{{ item }}"
@@ -52,7 +64,17 @@
     - turaes-backup.timer
     - turaes-gc.service
     - turaes-gc.timer
+    - turaes-certs.service
+    - turaes-certs.timer
   notify: Reload systemd
+
+- name: Install the app-domain issuance script
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../ensure-app-certs.sh"
+    dest: /usr/local/bin/ensure-app-certs.sh
+    owner: root
+    group: root
+    mode: "0755"
 
 - name: Enable and start turaes
   ansible.builtin.systemd_service:
@@ -61,7 +83,7 @@
     state: started
   notify: Restart turaes
 
-- name: Enable backup and GC timers
+- name: Enable backup, GC and cert timers
   ansible.builtin.systemd_service:
     name: "{{ item }}"
     enabled: true
@@ -69,3 +91,4 @@
   loop:
     - turaes-backup.timer
     - turaes-gc.timer
+    - turaes-certs.timer

@@ -149,6 +149,11 @@ vars added to `/etc/turaes/turaes.env` by hand before joining workers.
 - **TLS order**: the proxy must be up (it is — the turaes role restarts the
   service with `TURAES_PROXY_ENABLED=true`) before certbot runs, because the
   challenge path is served by Pingora.
+- **App-domain TLS**: provision ends with an `app-certs` post-task that issues
+  certs for every registered app hostname (`deploy/ensure-app-certs.sh`;
+  contact from `turaes_cert_email`, backfilled into existing env files). The
+  weekly `turaes-certs.timer` keeps later-added apps covered; rerun on demand
+  with `ansible-playbook playbooks/provision.yml --tags app-certs`.
 
 ## Upgrades
 

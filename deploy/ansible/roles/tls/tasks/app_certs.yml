@@ -1,0 +1,34 @@
+# One-time TLS issuance for every hostname registered in the turaes database
+# (applications.domain + the domains table). Runs *after* app registration —
+# wired as provision post_tasks — so newly added domains get certs without
+# waiting for the weekly turaes-certs.timer. Re-runnable anytime on its own:
+#   ansible-playbook playbooks/provision.yml --tags app-certs
+# Idempotent by script design (valid certs skipped, local names filtered).
+
+- name: Assert the cert contact is set
+  ansible.builtin.assert:
+    that:
+      - turaes_cert_email is defined
+      - turaes_cert_email | length > 0
+    msg: >-
+      turaes_cert_email is empty — set it (inventory or vault) so certbot can
+      register new certificates.
+
+- name: Read the control-plane env for the issuance script
+  ansible.builtin.slurp:
+    src: "{{ turaes_env_file }}"
+  register: tls_app_certs_cli_env_slurp
+
+- name: Parse the env file into the script environment
+  ansible.builtin.set_fact:
+    tls_app_certs_cli_env: >-
+      {{ dict(tls_app_certs_cli_env_slurp.content | b64decode
+         | regex_findall('^([A-Za-z_][A-Za-z0-9_]*)=(.*)$', multiline=True)) }}
+  no_log: true
+
+- name: Issue missing app-domain certificates
+  ansible.builtin.command: /usr/local/bin/ensure-app-certs.sh
+  environment: "{{ tls_app_certs_cli_env }}"
+  register: tls_app_certs_run
+  changed_when: "'ISSUED:' in tls_app_certs_run.stdout"
+  check_mode: false
