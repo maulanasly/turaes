@@ -212,7 +212,7 @@ function Shell() {
       if (mainRef.current) { try { mainRef.current.focus(); } catch (err) {} }
     }}>Skip to content</a>
     <header class="topbar">
-      <a class="brand" href="#/apps" title="turaes home"><${BrandMark} size=${22} /><span>turaes</span><span class="brand-tag">Native process platform</span></a>
+      <a class="brand" href="#/apps" title="turaes home"><${BrandMark} size=${22} theme=${theme} /><span>turaes</span><span class="brand-tag">Native process platform</span></a>
       <button ref=${menuBtnRef} class="btn small ghost menu-toggle" aria-expanded=${menuOpen} aria-controls="primary-nav"
         onClick=${() => setMenuOpen((v) => !v)}>
         ${menuOpen ? "Close" : "Menu"}</button>
@@ -276,7 +276,7 @@ function Shell() {
       ${route.view === "server" && html`<${ServerDetailView} key=${org} id=${route.id} />`}
       ${route.view === "tokens" && html`<${TokensView} key=${org} user=${user} />`}
       ${route.view === "org" && html`<${OrgView} key=${org} user=${user} onOrgChange=${changeOrg} />`}
-      ${route.view === "about" && html`<${AboutView} health=${health} user=${user} />`}
+      ${route.view === "about" && html`<${AboutView} health=${health} user=${user} theme=${theme} />`}
       ${route.view === "notfound" && html`<section class="panel">
         <h1>Not found</h1>
         <p class="muted">No view matches <span class="mono">${route.path || ""}</span>.</p>

@@ -22,11 +22,12 @@ barely surfaced.
 - Light mode now.
 - Palette: graphite surfaces, indigo primary actions, cyan links/CPU telemetry,
   amber warnings, and distinct green/red health states.
-- Brand lockup: supplied icon mark + lowercase "turaes" wordmark (icon-only
-  assets; full logo PNGs deferred until the uppercase/lowercase wordmark
-  casing is settled); compact "Native process platform" descriptor in the
-  topbar; hero copy "Deploy apps as native processes. Operate the whole
-  fleet." with "No containers." as proof.
+- Brand lockup: theme-specific faceted insect SVG mark + lowercase "turaes"
+  wordmark; PNG favicon/touch sizes are generated from the same mark. The full
+  supplied logo PNGs remain unused because their baked-in uppercase wordmark
+  casing differs; topbar descriptor is "Native process platform" and hero
+  copy is "Deploy apps as native processes. Operate the whole fleet." with
+  "No containers." as proof.
 - Zero-build preserved.
 
 ## Terminology
