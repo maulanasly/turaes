@@ -769,6 +769,30 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
     }
   };
 
+  const toggleMaintenance = async () => {
+    const on = !app.maintenance;
+    if (!(await confirmAction({
+      title: `Turn maintenance mode ${on ? "on" : "off"} for ${app.name}?`,
+      body: on
+        ? "Visitors will see the maintenance page. The app keeps running for instant restore."
+        : "Traffic resumes to the live app.",
+      confirmLabel: on ? "Maintenance on" : "Maintenance off",
+    }))) return;
+    setBusy(true);
+    try {
+      await oapi(`/apps/${id}/maintenance`, {
+        method: "POST",
+        body: JSON.stringify({ enabled: on }),
+      });
+      toast.success(`Maintenance mode ${on ? "on" : "off"} for ${app.name}`);
+      loadApp();
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (notFound) {
     return html`<section class="panel"><p class="muted">Application not found.</p>
       <a href="#/apps">← Back to applications</a></section>`;
@@ -801,7 +825,7 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
               ? html`<span class="mono" title=${latest.artifact_hash || ""}>${shortHash(latest.artifact_hash)} · ${timeAgo(Date.now() - parseTs(latest.started_at))}</span>`
               : html`<span class="muted">never</span>`}</span></div>
           </div>
-          ${["stopped", "failed", "unhealthy"].includes(app.status)
+          ${["stopped", "failed", "unhealthy"].includes(app.status) || app.maintenance
             && html`<p class="muted small">Visitors see the maintenance page while this app isn't running.</p>`}
         </div>
         <div class="controls">
@@ -814,6 +838,8 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
               <div class="menu-list">
                 ${!app.command && html`<button class="btn small ghost" disabled=${busy} onClick=${rollback}>Rollback</button>`}
                 <button class="btn small ghost" disabled=${busy} onClick=${() => action("start")}>Start</button>
+                <button class="btn small ghost" disabled=${busy} onClick=${toggleMaintenance}>
+                  ${app.maintenance ? "Maintenance off" : "Maintenance on"}</button>
               </div>
             </details>`}
         </div>

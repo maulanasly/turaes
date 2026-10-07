@@ -32,6 +32,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/apps/{id}/stop", post(routes::apps::stop))
         .route("/apps/{id}/start", post(routes::apps::start))
         .route("/apps/{id}/restart", post(routes::apps::restart))
+        .route("/apps/{id}/maintenance", post(routes::apps::maintenance))
         .route("/apps/{id}/stats", get(routes::apps::stats))
         .route("/apps/{id}/visitors", get(routes::apps::visitors))
         .route("/apps/{id}/deployments", get(routes::apps::deployments))

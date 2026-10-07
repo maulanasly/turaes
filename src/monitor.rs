@@ -505,6 +505,7 @@ mod tests {
             runtime: "systemd".into(),
             auto_restart: true,
             status: "running".into(),
+            maintenance: false,
             created_at: String::new(),
             updated_at: String::new(),
         }

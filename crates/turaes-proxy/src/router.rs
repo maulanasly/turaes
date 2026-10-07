@@ -43,6 +43,8 @@ pub enum ParkedReason {
     Stopped,
     /// Failing health checks or a failed supervisor state.
     Unhealthy,
+    /// Explicit per-app maintenance flag (units keep running).
+    Maintenance,
 }
 
 /// A hostname kept in the table without upstreams, so the data plane can

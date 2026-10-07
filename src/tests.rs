@@ -3725,3 +3725,76 @@ async fn static_rollback_needs_a_previous_slot() {
         .unwrap_err();
     assert!(err.to_string().contains("never deployed"));
 }
+
+#[tokio::test]
+async fn maintenance_toggle_parks_and_restores() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let payload = json!({
+        "name": "held",
+        "binary_path": "/srv/held/app",
+        "port": 8400,
+        "domain": "held.test"
+    });
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/apps")
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let created = body_json(resp).await;
+    let id = created["application"]["id"].as_str().unwrap().to_string();
+    assert_eq!(created["application"]["maintenance"], false);
+
+    // Toggle on: parks the hostnames.
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/default/apps/{id}/maintenance"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"enabled":true}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(body_json(resp).await["maintenance"], true);
+
+    // Persisted on the application.
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/orgs/default/apps/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(body_json(resp).await["application"]["maintenance"], true);
+
+    // Toggle off: routes restore.
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/default/apps/{id}/maintenance"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"enabled":false}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(body_json(resp).await["maintenance"], false);
+}
