@@ -36,3 +36,25 @@ test("error-wired inputs carry names so errors can focus them", () => {
     }
   }
 });
+
+test("topbar uses a flat primary nav with the account section in an avatar menu", () => {
+  const src = readFileSync(new URL("../../static/js/app.js", import.meta.url), "utf8");
+  // No grouped clusters: primary nav is Applications + Servers only.
+  assert.ok(src.includes('class="nav-list"'), "primary nav renders a flat nav-list");
+  assert.ok(!src.includes("nav-group"), "grouped nav clusters are gone");
+  assert.ok(!src.includes("nav-label"), "nav section labels are gone");
+  assert.ok(!src.includes("brand-tag"), "header descriptor is out of the topbar");
+  // Infrequent destinations live in the account menu, not the primary nav.
+  assert.ok(src.includes('class="avatar-menu"'), "account menu exists");
+  assert.ok(src.includes('href="#/org"'), "Organization lives in the account menu");
+  assert.ok(src.includes('href="#/tokens"') || src.includes("#/tokens"), "Tokens stays reachable");
+  assert.ok(src.includes('href="#/about"'), "About lives in the account menu");
+  // Single status signal: API reachability wins over fleet counts.
+  assert.ok(src.includes("API unreachable"), "API-down has a distinct status");
+  assert.ok(!src.includes("${health ? \"Healthy\""), "separate Healthy/Unreachable text is gone");
+  // Triage aid: firing alerts badge on Applications.
+  assert.ok(src.includes("nav-badge"), "Applications carries an attention badge");
+  // Disclosures stay accessible.
+  assert.ok(src.includes('aria-haspopup="menu"'), "avatar button exposes the menu");
+  assert.ok(src.includes('aria-expanded=${userMenuOpen}'), "avatar menu reports expanded state");
+});

@@ -88,6 +88,7 @@ Hand-rolled hash router (`lib/router.js`), deep-link/back/refresh safe.
 | **UX-2 polish** | mobile nav disclosure, 44px coarse-pointer targets, skip link, focus-into-view on route change | ✅ |
 | **UX-3 responsive tables** | stacked resource rows (`data-label`) for all data tables under 640px, headers kept for AT | ✅ |
 | **UX-6 nav clarity** | grouped nav clusters with labeled sections + dividers, permission-aware Servers/Tokens links, fleet summary as Servers link with unavailable state, mobile menu ordered below brand row | ✅ |
+| **UX-7 nav flattening** | flat primary nav (Applications + Servers, alert badge) with Organization/Tokens/About in an avatar account menu; single fleet status pill (API-down wins); org switcher with labeled `slug — role`; SVG theme icon with `aria-pressed`; explicit nav hover/active; controls stay on the top row on mobile | 🔄 |
 
 ## Parked backlog (deferred deliberately, not forgotten)
 
