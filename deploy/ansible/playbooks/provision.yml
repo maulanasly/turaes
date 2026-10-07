@@ -40,3 +40,11 @@
     - turaes
     - tls
     - first_app
+
+  # App-domain TLS must run after registration: first_app writes the hostnames
+  # into the DB, then issuance picks them up. Standalone reruns
+  # (--tags app-certs) cover apps added after provisioning.
+  post_tasks:
+    - name: Issue TLS for registered app domains
+      ansible.builtin.import_tasks: ../roles/tls/tasks/app_certs.yml
+      tags: app-certs
