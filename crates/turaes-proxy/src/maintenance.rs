@@ -9,6 +9,7 @@ pub fn headline(reason: ParkedReason) -> &'static str {
     match reason {
         ParkedReason::Stopped => "temporarily unavailable",
         ParkedReason::Unhealthy => "experiencing problems",
+        ParkedReason::Maintenance => "under maintenance",
     }
 }
 
@@ -59,6 +60,8 @@ mod tests {
         assert!(!html.contains("beruang-dev.rayakala.ink"));
         let html = body("dev-lp", ParkedReason::Unhealthy);
         assert!(html.contains("experiencing problems"));
+        let html = body("dev-lp", ParkedReason::Maintenance);
+        assert!(html.contains("under maintenance"));
     }
 
     #[test]

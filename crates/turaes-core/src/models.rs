@@ -53,6 +53,9 @@ pub struct Application {
     pub auto_restart: bool,
     /// `stopped`, `starting`, `running`, `unhealthy`, `failed`.
     pub status: String,
+    /// Explicit maintenance mode: proxy parks the hostnames (503 page)
+    /// while units keep running. Independent of supervisor status.
+    pub maintenance: bool,
     /// Creation timestamp (RFC3339).
     pub created_at: String,
     /// Update timestamp (RFC3339).

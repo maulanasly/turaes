@@ -58,3 +58,10 @@ test("topbar uses a flat primary nav with the account section in an avatar menu"
   assert.ok(src.includes('aria-haspopup="menu"'), "avatar button exposes the menu");
   assert.ok(src.includes('aria-expanded=${userMenuOpen}'), "avatar menu reports expanded state");
 });
+
+test("app detail exposes the maintenance toggle and parked hint", () => {
+  const src = readFileSync(new URL("../../static/js/views/AppDetailView.js", import.meta.url), "utf8");
+  assert.ok(src.includes("/maintenance"), "detail view calls the maintenance endpoint");
+  assert.ok(src.includes("Maintenance on") && src.includes("Maintenance off"), "toggle labels both states");
+  assert.ok(src.includes("Visitors see the maintenance page"), "parked hint explains visitor impact");
+});

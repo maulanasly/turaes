@@ -160,6 +160,7 @@ mod tests {
             runtime: runtime.into(),
             auto_restart: true,
             status: "running".into(),
+            maintenance: false,
             created_at: String::new(),
             updated_at: String::new(),
         }

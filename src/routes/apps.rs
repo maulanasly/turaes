@@ -81,6 +81,13 @@ pub struct DeploymentsQuery {
     pub limit: Option<i64>,
 }
 
+/// Body for the explicit maintenance toggle.
+#[derive(Debug, Deserialize)]
+pub struct MaintenanceToggle {
+    /// Park hostnames (503 page) when true; restore routes when false.
+    pub enabled: bool,
+}
+
 /// Body for editing an application (all fields optional).
 #[derive(Debug, Deserialize)]
 pub struct UpdateApp {
@@ -418,7 +425,11 @@ pub fn spec_for_slot(cfg: &Config, app: &Application, slot: Option<Slot>, port: 
 /// Parked reason for an application status. Anything else routes normally —
 /// notably `deploying` (the old slot still serves until cutover) and
 /// `unknown` (transient probe state that must not flap live traffic).
-fn parked_reason(status: &str) -> Option<ParkedReason> {
+/// The explicit maintenance flag wins over every status.
+fn parked_reason(status: &str, maintenance: bool) -> Option<ParkedReason> {
+    if maintenance {
+        return Some(ParkedReason::Maintenance);
+    }
     match status {
         "stopped" => Some(ParkedReason::Stopped),
         "failed" | "unhealthy" => Some(ParkedReason::Unhealthy),
@@ -430,7 +441,7 @@ fn parked_reason(status: &str) -> Option<ParkedReason> {
 /// Pure so the partition is unit-tested; only hosts with placed upstreams
 /// are considered (workers and undeployed apps keep their 404).
 fn partition_hosts(
-    status_by_app: &HashMap<String, (String, String)>,
+    status_by_app: &HashMap<String, (String, String, bool)>,
     by_app: &HashMap<String, Vec<Upstream>>,
     hostnames: &[(String, String)],
 ) -> (HashMap<String, Vec<Upstream>>, HashMap<String, ParkedHost>) {
@@ -443,12 +454,12 @@ fn partition_hosts(
         let host = domain.to_lowercase();
         match status_by_app
             .get(app_id)
-            .and_then(|(_, status)| parked_reason(status))
+            .and_then(|(_, status, maintenance)| parked_reason(status, *maintenance))
         {
             Some(reason) => {
                 let app = status_by_app
                     .get(app_id)
-                    .map(|(name, _)| name.clone())
+                    .map(|(name, _, _)| name.clone())
                     .unwrap_or_default();
                 parked.insert(host, ParkedHost { app, reason });
             }
@@ -486,14 +497,15 @@ pub async fn refresh_proxy_routes(state: &AppState) -> Result<()> {
         });
     }
 
-    // App name + status per id; parked hosts name the application, not the host.
-    let status_rows: Vec<(String, String, String)> =
-        sqlx::query_as("SELECT id, name, status FROM applications")
+    // App name + status + maintenance flag per id; parked hosts name the
+    // application, not the host.
+    let status_rows: Vec<(String, String, String, bool)> =
+        sqlx::query_as("SELECT id, name, status, maintenance FROM applications")
             .fetch_all(&state.pool)
             .await?;
-    let status_by_app: HashMap<String, (String, String)> = status_rows
+    let status_by_app: HashMap<String, (String, String, bool)> = status_rows
         .into_iter()
-        .map(|(id, name, status)| (id, (name, status)))
+        .map(|(id, name, status, maintenance)| (id, (name, status, maintenance)))
         .collect();
 
     // Primary domain per app.
@@ -1730,6 +1742,44 @@ pub async fn restart(
     Ok(out)
 }
 
+/// Toggle explicit maintenance mode: the proxy parks the app's hostnames
+/// (503 page) while units keep running for instant restore. Allowed on
+/// never-deployed apps too — the page shows either way.
+pub async fn maintenance(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    Path((org, id)): Path<(String, String)>,
+    Json(input): Json<MaintenanceToggle>,
+) -> Result<Json<serde_json::Value>> {
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
+    let app = fetch_org_app(&state.pool, &org_id, &id).await?;
+    sqlx::query(
+        "UPDATE applications SET maintenance = ?, updated_at = datetime('now') WHERE id = ?",
+    )
+    .bind(input.enabled)
+    .bind(&app.id)
+    .execute(&state.pool)
+    .await?;
+    let action = if input.enabled {
+        "app.maintenance_on"
+    } else {
+        "app.maintenance_off"
+    };
+    audit::record(
+        &state,
+        Some(&org_id),
+        Some(&user),
+        Some(&app.id),
+        action,
+        Some("application"),
+        Some(&app.id),
+        None,
+    )
+    .await?;
+    let _ = refresh_proxy_routes(&state).await;
+    Ok(Json(serde_json::json!({ "maintenance": input.enabled })))
+}
+
 /// `PATCH /api/v1/orgs/{org}/apps/{id}` — edit an application (and its placement).
 pub async fn update(
     State(state): State<AppState>,
@@ -2046,43 +2096,62 @@ mod tests {
 
     #[test]
     fn parked_reason_covers_non_routable_statuses() {
-        assert_eq!(parked_reason("stopped"), Some(ParkedReason::Stopped));
-        assert_eq!(parked_reason("failed"), Some(ParkedReason::Unhealthy));
-        assert_eq!(parked_reason("unhealthy"), Some(ParkedReason::Unhealthy));
+        assert_eq!(parked_reason("stopped", false), Some(ParkedReason::Stopped));
+        assert_eq!(
+            parked_reason("failed", false),
+            Some(ParkedReason::Unhealthy)
+        );
+        assert_eq!(
+            parked_reason("unhealthy", false),
+            Some(ParkedReason::Unhealthy)
+        );
         // Deploying keeps the old slot live; unknown is transient — both route.
-        assert_eq!(parked_reason("running"), None);
-        assert_eq!(parked_reason("deploying"), None);
-        assert_eq!(parked_reason("unknown"), None);
+        assert_eq!(parked_reason("running", false), None);
+        assert_eq!(parked_reason("deploying", false), None);
+        assert_eq!(parked_reason("unknown", false), None);
+        // The explicit flag wins over every status, including running.
+        assert_eq!(
+            parked_reason("running", true),
+            Some(ParkedReason::Maintenance)
+        );
+        assert_eq!(
+            parked_reason("deploying", true),
+            Some(ParkedReason::Maintenance)
+        );
     }
 
     #[test]
     fn partition_hosts_parks_by_status_not_by_absence() {
         let mut status_by_app = HashMap::new();
-        status_by_app.insert("a".into(), ("web".into(), "running".into()));
-        status_by_app.insert("b".into(), ("old".into(), "stopped".into()));
-        status_by_app.insert("c".into(), ("sick".into(), "unhealthy".into()));
-        status_by_app.insert("w".into(), ("bg".into(), "stopped".into()));
+        status_by_app.insert("a".into(), ("web".into(), "running".into(), false));
+        status_by_app.insert("b".into(), ("old".into(), "stopped".into(), false));
+        status_by_app.insert("c".into(), ("sick".into(), "unhealthy".into(), false));
+        status_by_app.insert("m".into(), ("held".into(), "running".into(), true));
+        status_by_app.insert("w".into(), ("bg".into(), "stopped".into(), false));
         let mut by_app = HashMap::new();
         by_app.insert("a".into(), vec![upstream(8000)]);
         by_app.insert("b".into(), vec![upstream(8100)]);
         by_app.insert("c".into(), vec![upstream(8200)]);
+        by_app.insert("m".into(), vec![upstream(8300)]);
         // Worker `w` has a domain but no placements: neither routed nor parked.
         let hostnames = vec![
             ("a".into(), "web.test".into()),
             ("b".into(), "old.test".into()),
             ("c".into(), "sick.test".into()),
             ("c".into(), "alias.test".into()),
+            ("m".into(), "held.test".into()),
             ("w".into(), "bg.test".into()),
             ("ghost".into(), "ghost.test".into()),
         ];
         let (routes, parked) = partition_hosts(&status_by_app, &by_app, &hostnames);
         assert_eq!(routes.len(), 1);
         assert_eq!(routes["web.test"][0].port, 8000);
-        assert_eq!(parked.len(), 3);
+        assert_eq!(parked.len(), 4);
         assert_eq!(parked["old.test"].app, "old");
         assert_eq!(parked["old.test"].reason, ParkedReason::Stopped);
         assert_eq!(parked["sick.test"].reason, ParkedReason::Unhealthy);
         assert_eq!(parked["alias.test"].app, "sick");
+        assert_eq!(parked["held.test"].reason, ParkedReason::Maintenance);
         assert!(!parked.contains_key("bg.test"));
         assert!(!routes.contains_key("ghost.test"));
     }

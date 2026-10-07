@@ -137,6 +137,7 @@ roles yield `403`.
 | `POST` | `/api/v1/orgs/{org}/apps/{id}/deploy` | developer | Apply a workload version (binary, static files, or worker) using slots |
 | `POST` | `/api/v1/orgs/{org}/apps/{id}/rollback` | developer | Roll back a binary build or previous static slot; command apps do not retain prior argv for rollback |
 | `POST` | `/api/v1/orgs/{org}/apps/{id}/{stop,start,restart}` | developer | Lifecycle (local apps) |
+| `POST` | `/api/v1/orgs/{org}/apps/{id}/maintenance` | developer | Toggle maintenance page (`{"enabled":bool}`); units keep running |
 | `GET/POST` | `/api/v1/orgs/{org}/apps/{id}/domains` | viewer / developer | List / add domain aliases |
 | `DELETE` | `/api/v1/orgs/{org}/apps/{id}/domains/{domain}` | developer | Remove an alias |
 | `GET` | `/api/v1/orgs/{org}/apps/{id}/stats?hours=1` | viewer | CPU/memory samples (max 720h) |
