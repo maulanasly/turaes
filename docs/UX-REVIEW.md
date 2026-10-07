@@ -76,8 +76,9 @@ Hand-rolled hash router (`lib/router.js`), deep-link/back/refresh safe.
 | **UX-P5 workflow preflight** | server preflight on Review + recheck before submit, multi-error inline mapping, advanced launch (argv/workdir) in wizard and Settings with tri-state PATCH parity, queued-deployment polling, dashboard/manifest launch parity | ✅ |
 | **UX-P4 mobile & a11y** | nav disclosure focus/Escape, scrollable key-value tables, route/tab focus restore, toast live-region severity, skeleton `role=status`, 44px tap targets, AA contrast tokens enforced by `tests/frontend/contrast.test.mjs` | ✅ |
 | **UX-1 control room** | indigo primary actions (cyan reserved for links/telemetry), amber warnings, identity typography + status strips/resource rows/timelines, global org switcher + fleet summary + labeled health, grouped nav (Operate/Access/System), app attention filter + server grouping, app header with last deploy + grouped tabs + activity preview, server fleet strip, guided create form | ✅ |
-| **UX-2 polish** | mobile nav drawer, 44px coarse-pointer targets, skip link, focus-into-view on route change | ✅ |
+| **UX-2 polish** | mobile nav disclosure, 44px coarse-pointer targets, skip link, focus-into-view on route change | ✅ |
 | **UX-3 responsive tables** | stacked resource rows (`data-label`) for all data tables under 640px, headers kept for AT | ✅ |
+| **UX-6 nav clarity** | grouped nav clusters with labeled sections + dividers, permission-aware Servers/Tokens links, fleet summary as Servers link with unavailable state, mobile menu ordered below brand row | ✅ |
 
 ## Parked backlog (deferred deliberately, not forgotten)
 
