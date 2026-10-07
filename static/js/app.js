@@ -28,10 +28,19 @@ function useTheme() {
   return [theme, toggle];
 }
 
-function NavLink({ route, view, match, label }) {
+function NavLink({ route, view, match, label, badge }) {
   const active = route.view === view || (match && route.view === match);
   return html`<a href=${pathFor({ view })} class=${active ? "active" : ""}
-    aria-current=${active ? "page" : null}>${label}</a>`;
+    aria-current=${active ? "page" : null}>${label}${badge > 0
+      ? html`<span class="nav-badge" aria-label=${`${badge} firing alerts`}>${badge}</span>`
+      : null}</a>`;
+}
+
+function ThemeIcon({ theme }) {
+  if (theme === "dark") {
+    return html`<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><path d="M12 11A5.5 5.5 0 0 1 5 4a5.5 5.5 0 1 0 7 7z" fill="currentColor" /></svg>`;
+  }
+  return html`<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="3.5" fill="none" stroke="currentColor" stroke-width="1.5" /><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3 3l1.4 1.4M11.6 11.6L13 13M13 3l-1.4 1.4M4.4 11.6L3 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /></svg>`;
 }
 
 const VIEW_TITLES = {
@@ -59,17 +68,21 @@ function Shell() {
   const [fleetKnown, setFleetKnown] = useState(false);
   const [fleetFailed, setFleetFailed] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
   const mainRef = useRef(null);
   const menuBtnRef = useRef(null);
   const navRef = useRef(null);
+  const userMenuBtnRef = useRef(null);
+  const userMenuRef = useRef(null);
 
   // Screen-reader and tab users learn where they are on every navigation.
-  // Close the mobile menu and move focus into the new view (without
+  // Close both menus and move focus into the new view (without
   // scrolling) so keyboard/SR users land on fresh content. Keyed on id/tab as
   // well as view so app→app and tab→tab moves are announced too.
   useEffect(() => {
     document.title = `turaes — ${VIEW_TITLES[route.view] || "Applications"}`;
     setMenuOpen(false);
+    setUserMenuOpen(false);
     if (mainRef.current) {
       try { mainRef.current.focus({ preventScroll: true }); } catch (e) {}
     }
@@ -90,6 +103,31 @@ function Shell() {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [menuOpen]);
+
+  // Account menu is a separate disclosure: Escape closes it, outside clicks
+  // dismiss it, and focus returns to the avatar button.
+  useEffect(() => {
+    if (!userMenuOpen) return undefined;
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        setUserMenuOpen(false);
+        if (userMenuBtnRef.current) userMenuBtnRef.current.focus();
+      }
+    };
+    const onPointer = (e) => {
+      const el = userMenuRef.current;
+      const btn = userMenuBtnRef.current;
+      if (el && !el.contains(e.target) && btn && !btn.contains(e.target)) {
+        setUserMenuOpen(false);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onPointer);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onPointer);
+    };
+  }, [userMenuOpen]);
 
   const loadUser = useCallback(async () => {
     try {
@@ -193,6 +231,32 @@ function Shell() {
     ${attention > 0 ? html`<span class="fleet-separator" aria-hidden="true">·</span>
       <span class="fleet-item"><strong>${attention}</strong><span>attention</span></span>` : null}`;
 
+  // Single status signal: API reachability wins over fleet counts so the
+  // header never shows "Healthy" while servers are offline.
+  const degraded = offlineServers > 0 || attention > 0;
+  const statusPill = !health
+    ? html`<span class="fleet-summary is-bad" role="status">API unreachable</span>`
+    : !fleetKnown ? null
+      : fleetFailed
+        ? html`<span class="fleet-summary fleet-unavailable" title="Fleet status">Fleet status unavailable</span>`
+        : html`<span class=${"fleet-summary" + (degraded ? " is-warn" : "")} title="Fleet status">
+            ${isOperator
+              ? html`<a class="fleet-link" href="#/servers" title="Open Servers">${fleetItems}</a>`
+              : fleetItems}
+          </span>`;
+
+  const initials = (user.login || "?").slice(0, 2).toUpperCase();
+  const inAccountSection = route.view === "org" || route.view === "tokens" || route.view === "about";
+  const signOut = async () => {
+    try {
+      await api("/auth/logout", { method: "POST" });
+    } catch (e) {
+      toast.error(e.message);
+      return;
+    }
+    location.assign("/");
+  };
+
   function AlertSection({ cls, title, items }) {
     if (items.length === 0) return null;
     return html`<section class=${"panel notice " + cls} role="alert">
@@ -212,56 +276,41 @@ function Shell() {
       if (mainRef.current) { try { mainRef.current.focus(); } catch (err) {} }
     }}>Skip to content</a>
     <header class="topbar">
-      <a class="brand" href="#/apps" title="turaes home"><${BrandMark} size=${22} theme=${theme} /><span>turaes</span><span class="brand-tag">Native process platform</span></a>
+      <a class="brand" href="#/apps" aria-label="turaes home"><${BrandMark} size=${22} theme=${theme} /><span>turaes</span></a>
       <button ref=${menuBtnRef} class="btn small ghost menu-toggle" aria-expanded=${menuOpen} aria-controls="primary-nav"
         onClick=${() => setMenuOpen((v) => !v)}>
-        ${menuOpen ? "Close" : "Menu"}</button>
+        ${menuOpen ? "✕ Close" : "☰ Menu"}</button>
       <nav ref=${navRef} class=${"nav" + (menuOpen ? " open" : "")} id="primary-nav" aria-label="Primary"
-        onClick=${() => setMenuOpen(false)}>
-        <span class="nav-group"><span class="nav-label" aria-hidden="true">Operate</span>
-          <span class="nav-links" role="group" aria-label="Operate">
-            <${NavLink} route=${route} view="apps" match="app" label="Applications" />
-            ${isOperator && html`<${NavLink} route=${route} view="servers" match="server" label="Servers" />`}
-          </span>
-        </span>
-        <span class="nav-group"><span class="nav-label" aria-hidden="true">Access</span>
-          <span class="nav-links" role="group" aria-label="Access">
-            ${canManageTokens && html`<${NavLink} route=${route} view="tokens" label="Tokens" />`}
-            <${NavLink} route=${route} view="org" label="Organization" />
-          </span>
-        </span>
-        <span class="nav-group"><span class="nav-label" aria-hidden="true">System</span>
-          <span class="nav-links" role="group" aria-label="System">
-            <${NavLink} route=${route} view="about" label="About" />
-          </span>
-        </span>
+        onClick=${(e) => { if (e.target && e.target.closest && e.target.closest("a")) setMenuOpen(false); }}>
+        <ul class="nav-list">
+          <li><${NavLink} route=${route} view="apps" match="app" label="Applications" badge=${attention} /></li>
+          ${isOperator && html`<li><${NavLink} route=${route} view="servers" match="server" label="Servers" /></li>`}
+        </ul>
       </nav>
       <div class="controls">
-        ${orgs.length > 1 ? html`<select value=${org} onChange=${(e) => changeOrg(e.target.value)}
-          aria-label="Active organization" title="Active organization">
-          ${orgs.map((o) => html`<option value=${o.slug}>${o.slug} (${o.role})</option>`)}
-        </select>` : orgs.length === 1 ? html`<span class="muted small" title="Active organization">${orgs[0].slug}</span>` : null}
-        ${fleetKnown && (fleetFailed
-          ? html`<span class="fleet-summary fleet-unavailable" title="Fleet status">Fleet status unavailable</span>`
-          : html`<span class="fleet-summary" title="Fleet status">
-              ${isOperator
-                ? html`<a class="fleet-link" href="#/servers" title="Open Servers">${fleetItems}</a>`
-                : fleetItems}
-            </span>`)}
-        <span class=${"dot " + (health ? "ok" : "bad")} aria-hidden="true"></span>
-        <span class="small" role="status">${health ? "Healthy" : "Unreachable"}</span>
-        <button class="btn small ghost" onClick=${toggleTheme}
-          title="Toggle theme" aria-label="Toggle theme">${theme === "dark" ? "☾" : "☀"}</button>
-        <span class="muted small">${user.login}</span>
-        <button class="btn small ghost" onClick=${async () => {
-          try {
-            await api("/auth/logout", { method: "POST" });
-          } catch (e) {
-            toast.error(e.message);
-            return;
-          }
-          location.assign("/");
-        }}>Sign out</button>
+        ${statusPill}
+        <button class="btn small ghost theme-toggle" onClick=${toggleTheme}
+          title="Toggle theme" aria-label="Toggle theme" aria-pressed=${theme === "light"}><${ThemeIcon} theme=${theme} /></button>
+        <div class="avatar-wrap">
+          <button ref=${userMenuBtnRef} class=${"avatar-button" + (inAccountSection ? " active" : "")} aria-haspopup="menu"
+            aria-expanded=${userMenuOpen} aria-label="Account menu" title=${user.login}
+            onClick=${() => setUserMenuOpen((v) => !v)}>${initials}</button>
+          ${userMenuOpen && html`<div ref=${userMenuRef} class="avatar-menu" role="menu" aria-label="Account">
+            <div class="avatar-head"><strong>${user.login}</strong>
+              <span class="muted small">${orgRole ? `${org} · ${orgRole}` : org}</span></div>
+            ${orgs.length > 1 && html`<label class="avatar-org"><span class="avatar-org-label">Active organization</span>
+              <select value=${org} onChange=${(e) => { changeOrg(e.target.value); setUserMenuOpen(false); }}>
+                ${orgs.map((o) => html`<option value=${o.slug}>${o.slug} — ${o.role}</option>`)}
+              </select></label>`}
+            <a role="menuitem" href="#/org" class=${route.view === "org" ? "active" : ""}
+              onClick=${() => setUserMenuOpen(false)}>Organization</a>
+            ${canManageTokens && html`<a role="menuitem" href="#/tokens" class=${route.view === "tokens" ? "active" : ""}
+              onClick=${() => setUserMenuOpen(false)}>API tokens</a>`}
+            <a role="menuitem" href="#/about" class=${route.view === "about" ? "active" : ""}
+              onClick=${() => setUserMenuOpen(false)}>About</a>
+            <button role="menuitem" class="avatar-signout" onClick=${signOut}>Sign out</button>
+          </div>`}
+        </div>
       </div>
     </header>
 

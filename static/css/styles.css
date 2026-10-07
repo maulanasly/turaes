@@ -61,39 +61,57 @@ a:hover { text-decoration: underline; }
 .brand { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; font-size: 15px; color: var(--text); text-decoration: none; white-space: nowrap; }
 a.brand:hover { text-decoration: none; }
 .brand-mark { flex-shrink: 0; display: block; }
-.brand-tag { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
-.nav { display: flex; gap: 4px 6px; margin-right: auto; align-items: stretch; flex-wrap: wrap; }
-.nav a { padding: 5px 10px; border-radius: 6px; color: var(--muted); }
-.nav a.active { color: var(--text); background: var(--panel-2); box-shadow: inset 0 -2px 0 var(--signal); }
-.nav-group { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 2px 14px 2px 0; }
-.nav-group + .nav-group { border-left: 1px solid var(--border); padding-left: 14px; }
-.nav-links { display: flex; gap: 4px; align-items: center; }
-.nav-label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 2px; }
+.nav { display: flex; margin-right: auto; align-items: center; flex-wrap: wrap; }
+.nav-list { display: flex; gap: 4px; align-items: center; list-style: none; margin: 0; padding: 0; }
+.nav-list li { display: flex; }
+.nav a { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 6px; color: var(--muted); font-weight: 600; }
+.nav a:hover { color: var(--text); background: var(--panel-2); text-decoration: none; }
+.nav a.active { color: var(--text); font-weight: 700; background: var(--panel-2); box-shadow: inset 0 -2px 0 var(--signal); }
+.nav-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px;
+  padding: 0 6px; border-radius: 999px; background: var(--signal); color: var(--signal-ink);
+  font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .fleet-link { display: inline-flex; align-items: center; gap: 8px; color: inherit; text-decoration: none; }
 .fleet-link:hover { text-decoration: underline; }
 .fleet-unavailable { color: var(--muted); }
+.fleet-summary.is-warn { border-color: var(--warn); }
+.fleet-summary.is-bad { border-color: var(--bad); color: var(--bad); }
+.theme-toggle { display: inline-flex; align-items: center; justify-content: center; }
+.avatar-wrap { position: relative; display: inline-flex; }
+.avatar-button { width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--control-border);
+  background: var(--panel-2); color: var(--text); font: inherit; font-size: 12px; font-weight: 700;
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+.avatar-button:hover { border-color: var(--signal); }
+.avatar-button.active { border-color: var(--signal); box-shadow: inset 0 0 0 1px var(--signal); }
+.avatar-menu { position: absolute; right: 0; top: calc(100% + 8px); background: var(--panel);
+  border: 1px solid var(--border); border-radius: 10px; padding: 6px; display: grid; gap: 2px;
+  z-index: 20; min-width: 230px; box-shadow: 0 12px 32px rgba(0,0,0,.3); }
+.avatar-head { display: grid; gap: 2px; padding: 8px 10px 6px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.avatar-org { display: grid; gap: 4px; padding: 6px 10px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.avatar-org-label { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 600; }
+.avatar-menu a[role="menuitem"], .avatar-menu button[role="menuitem"] { display: flex; align-items: center; width: 100%;
+  text-align: left; padding: 8px 10px; border-radius: 6px; color: var(--text); background: transparent;
+  border: 0; font: inherit; font-size: 13px; cursor: pointer; text-decoration: none; box-sizing: border-box; }
+.avatar-menu a[role="menuitem"]:hover, .avatar-menu button[role="menuitem"]:hover { background: var(--panel-2); text-decoration: none; }
+.avatar-menu a[role="menuitem"].active { background: var(--panel-2); box-shadow: inset 0 -2px 0 var(--signal); }
+.avatar-signout { color: var(--text); }
 .menu-toggle { display: none; }
 .skip-link { position: absolute; left: 12px; top: -48px; z-index: 50; background: var(--panel);
   border: 1px solid var(--border); border-radius: 6px; padding: 8px 14px; transition: top .15s ease; }
 .skip-link:focus { top: 8px; }
 
-/* Narrow screens: collapse the nav groups behind a menu button instead of
-   wrapping the whole topbar into a multi-row header. */
+/* Narrow screens: collapse the flat nav behind a menu button instead of
+   wrapping the whole topbar into a multi-row header. Controls stay on the
+   top row; only the nav forms the sheet below. */
 @media (max-width: 760px) {
   .topbar { gap: 10px; padding: 10px 14px; }
   .menu-toggle { display: inline-block; }
-  .nav { display: none; width: 100%; margin-right: 0; flex-direction: column;
-    align-items: stretch; gap: 12px; order: 5; }
+  .topbar .controls { margin-left: auto; }
+  .nav { display: none; width: 100%; margin-right: 0; order: 5; }
   .nav.open { display: flex; }
-  .nav-group { padding: 0; }
-  .nav-group + .nav-group { border-left: 0; border-top: 1px solid var(--border);
-    padding-left: 0; padding-top: 10px; }
-  .nav-links { flex-direction: column; align-items: stretch; width: 100%; }
-  .nav a { padding: 10px 12px; }
-  /* Utility controls sit below the opened navigation, never above it. */
-  .topbar .controls { width: 100%; order: 6; }
-  /* Keep the header compact: the descriptor lives on wider screens. */
-  .brand-tag { display: none; }
+  .nav-list { flex-direction: column; align-items: stretch; width: 100%; gap: 4px; }
+  .nav-list li { display: flex; }
+  .nav a { padding: 10px 12px; width: 100%; }
+  .avatar-menu { position: fixed; left: 14px; right: 14px; top: auto; min-width: 0; }
 }
 
 /* Coarse pointers (touch): meet the 44px minimum target size without
@@ -103,6 +121,8 @@ a.brand:hover { text-decoration: none; }
   .btn.small { min-height: 40px; padding: 8px 14px; }
   .menu-toggle { min-height: 44px; }
   .nav a { padding: 10px 14px; }
+  .avatar-button { width: 44px; height: 44px; }
+  .avatar-menu a[role="menuitem"], .avatar-menu button[role="menuitem"] { min-height: 44px; }
   .tabs a { padding: 10px 14px; }
   .seg button { padding: 8px 14px; }
   .wizard-steps button { min-height: 44px; }
