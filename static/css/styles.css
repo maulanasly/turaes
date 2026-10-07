@@ -162,6 +162,7 @@ main { max-width: 1180px; margin: 22px auto; padding: 0 20px; display: grid; gap
 
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; }
 .panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.panel-head > div { min-width: 0; }
 h1 { font-size: 20px; margin: 0; letter-spacing: -0.005em; }
 h2 { font-size: 14px; margin: 14px 0 8px; }
 h3 { font-size: 13px; margin: 0 0 8px; }
@@ -176,10 +177,12 @@ h3 { font-size: 13px; margin: 0 0 8px; }
 .card:hover { border-color: var(--signal); text-decoration: none; }
 .card h3 { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 14px; }
 
-.stat { display: flex; justify-content: space-between; padding: 2px 0; font-variant-numeric: tabular-nums; }
+.stat { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; font-variant-numeric: tabular-nums; }
 /* Let card stat values (e.g. a long domain) shrink and wrap instead of
    overflowing the card; the label column stays fixed. */
 .card .stat span:last-child { min-width: 0; overflow-wrap: anywhere; }
+/* Same treatment for status-strip values (domains, hashes, deploys). */
+.status-strip .stat span:last-child { min-width: 0; overflow-wrap: anywhere; text-align: right; }
 .stat span:first-child { color: var(--muted); }
 
 .notice { border: 1px solid var(--warn); border-radius: 8px; padding: 10px 12px; margin: 0 0 12px; display: grid; gap: 8px; }
