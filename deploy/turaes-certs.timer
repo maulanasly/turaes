@@ -1,0 +1,11 @@
+[Unit]
+Description=turaes weekly TLS issuance for managed app domains
+Documentation=https://github.com/maulanasly/turaes
+
+[Timer]
+OnCalendar=weekly
+RandomizedDelaySec=3600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

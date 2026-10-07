@@ -54,6 +54,7 @@ Rust (Axum + SQLite) + embedded zero-build UI. The proxy is
 | `make lint` | `cargo clippy --workspace --all-targets -- -D warnings` |
 | `make fmt-check` | `cargo fmt --all -- --check` |
 | `make test-all` | `cargo test --workspace --all-targets` |
+| `make certs-check` | `bash scripts/check-certs.sh` (TLS issuance fixture test) |
 | `make verify` | all of the above — **run before every commit** |
 | `make proxy-check` | type-check the Pingora data plane (Linux; `--features pingora`) |
 
