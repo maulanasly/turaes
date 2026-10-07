@@ -55,6 +55,8 @@ function Shell() {
   // (via `key`) instead of a full page reload.
   const [org, setOrgState] = useState(() => getOrg() || "default");
   const [orgs, setOrgs] = useState([]);
+  const [fleetKnown, setFleetKnown] = useState(false);
+  const [fleetFailed, setFleetFailed] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const mainRef = useRef(null);
   const menuBtnRef = useRef(null);
@@ -106,7 +108,16 @@ function Shell() {
     } catch { setUser(null); }
   }, []);
   const loadServers = useCallback(async () => {
-    try { const r = await api("/api/v1/servers"); setServers(r.servers || []); } catch (e) {}
+    try {
+      const r = await api("/api/v1/servers");
+      setServers(r.servers || []);
+      setFleetFailed(false);
+    } catch (e) {
+      // Never render a failed poll as an empty fleet.
+      setFleetFailed(true);
+    } finally {
+      setFleetKnown(true);
+    }
   }, []);
   const loadHealth = useCallback(async () => {
     try { setHealth(await api("/health")); } catch { setHealth(null); }
@@ -166,6 +177,20 @@ function Shell() {
   const offlineServers = servers.filter((s) => s.status !== "online").length;
   const crits = alerts.filter((a) => a.severity === "critical");
   const warns = alerts.filter((a) => a.severity !== "critical");
+  // Servers is operator-gated and Tokens is org-admin-gated server-side; the
+  // nav mirrors that so restricted users never hit a dead end.
+  const isOperator = orgs.some((o) => o.role === "admin" || o.role === "owner");
+  const orgRole = (orgs.find((o) => o.slug === org) || {}).role;
+  const canManageTokens = orgRole === "admin" || orgRole === "owner";
+
+  const fleetItems = html`
+    <span class="fleet-item"><strong>${servers.length}</strong><span>servers</span></span>
+    <span class="fleet-separator" aria-hidden="true">·</span>
+    <span class="fleet-item"><strong>${onlineServers}</strong><span>online</span></span>
+    ${offlineServers > 0 ? html`<span class="fleet-separator" aria-hidden="true">·</span>
+      <span class="fleet-item"><strong>${offlineServers}</strong><span>offline</span></span>` : null}
+    ${attention > 0 ? html`<span class="fleet-separator" aria-hidden="true">·</span>
+      <span class="fleet-item"><strong>${attention}</strong><span>attention</span></span>` : null}`;
 
   function AlertSection({ cls, title, items }) {
     if (items.length === 0) return null;
@@ -192,16 +217,22 @@ function Shell() {
         ${menuOpen ? "Close" : "Menu"}</button>
       <nav ref=${navRef} class=${"nav" + (menuOpen ? " open" : "")} id="primary-nav" aria-label="Primary"
         onClick=${() => setMenuOpen(false)}>
-        <span class="nav-group"><span class="nav-label">Operate</span>
-          <${NavLink} route=${route} view="apps" match="app" label="Applications" />
-          <${NavLink} route=${route} view="servers" match="server" label="Servers" />
+        <span class="nav-group"><span class="nav-label" aria-hidden="true">Operate</span>
+          <span class="nav-links" role="group" aria-label="Operate">
+            <${NavLink} route=${route} view="apps" match="app" label="Applications" />
+            ${isOperator && html`<${NavLink} route=${route} view="servers" match="server" label="Servers" />`}
+          </span>
         </span>
-        <span class="nav-group"><span class="nav-label">Access</span>
-          <${NavLink} route=${route} view="tokens" label="Tokens" />
-          <${NavLink} route=${route} view="org" label="Organization" />
+        <span class="nav-group"><span class="nav-label" aria-hidden="true">Access</span>
+          <span class="nav-links" role="group" aria-label="Access">
+            ${canManageTokens && html`<${NavLink} route=${route} view="tokens" label="Tokens" />`}
+            <${NavLink} route=${route} view="org" label="Organization" />
+          </span>
         </span>
-        <span class="nav-group"><span class="nav-label">System</span>
-          <${NavLink} route=${route} view="about" label="About" />
+        <span class="nav-group"><span class="nav-label" aria-hidden="true">System</span>
+          <span class="nav-links" role="group" aria-label="System">
+            <${NavLink} route=${route} view="about" label="About" />
+          </span>
         </span>
       </nav>
       <div class="controls">
@@ -209,15 +240,13 @@ function Shell() {
           aria-label="Active organization" title="Active organization">
           ${orgs.map((o) => html`<option value=${o.slug}>${o.slug} (${o.role})</option>`)}
         </select>` : orgs.length === 1 ? html`<span class="muted small" title="Active organization">${orgs[0].slug}</span>` : null}
-        <span class="fleet-summary" title="Fleet status">
-          <span class="fleet-item"><strong>${servers.length}</strong><span>servers</span></span>
-          <span class="fleet-separator" aria-hidden="true">·</span>
-          <span class="fleet-item"><strong>${onlineServers}</strong><span>online</span></span>
-          ${offlineServers > 0 ? html`<span class="fleet-separator" aria-hidden="true">·</span>
-            <span class="fleet-item"><strong>${offlineServers}</strong><span>offline</span></span>` : null}
-          ${attention > 0 ? html`<span class="fleet-separator" aria-hidden="true">·</span>
-            <span class="fleet-item"><strong>${attention}</strong><span>attention</span></span>` : null}
-        </span>
+        ${fleetKnown && (fleetFailed
+          ? html`<span class="fleet-summary fleet-unavailable" title="Fleet status">Fleet status unavailable</span>`
+          : html`<span class="fleet-summary" title="Fleet status">
+              ${isOperator
+                ? html`<a class="fleet-link" href="#/servers" title="Open Servers">${fleetItems}</a>`
+                : fleetItems}
+            </span>`)}
         <span class=${"dot " + (health ? "ok" : "bad")} aria-hidden="true"></span>
         <span class="small" role="status">${health ? "Healthy" : "Unreachable"}</span>
         <button class="btn small ghost" onClick=${toggleTheme}

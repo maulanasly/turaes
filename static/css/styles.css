@@ -59,9 +59,16 @@ a:hover { text-decoration: underline; }
   background: var(--panel); position: sticky; top: 0; z-index: 5;
 }
 .brand { font-weight: 700; }
-.nav { display: flex; gap: 10px; margin-right: auto; align-items: center; flex-wrap: wrap; }
+.nav { display: flex; gap: 4px 6px; margin-right: auto; align-items: stretch; flex-wrap: wrap; }
 .nav a { padding: 5px 10px; border-radius: 6px; color: var(--muted); }
 .nav a.active { color: var(--text); background: var(--panel-2); box-shadow: inset 0 -2px 0 var(--signal); }
+.nav-group { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 2px 14px 2px 0; }
+.nav-group + .nav-group { border-left: 1px solid var(--border); padding-left: 14px; }
+.nav-links { display: flex; gap: 4px; align-items: center; }
+.nav-label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 2px; }
+.fleet-link { display: inline-flex; align-items: center; gap: 8px; color: inherit; text-decoration: none; }
+.fleet-link:hover { text-decoration: underline; }
+.fleet-unavailable { color: var(--muted); }
 .menu-toggle { display: none; }
 .skip-link { position: absolute; left: 12px; top: -48px; z-index: 50; background: var(--panel);
   border: 1px solid var(--border); border-radius: 6px; padding: 8px 14px; transition: top .15s ease; }
@@ -73,11 +80,15 @@ a:hover { text-decoration: underline; }
   .topbar { gap: 10px; padding: 10px 14px; }
   .menu-toggle { display: inline-block; }
   .nav { display: none; width: 100%; margin-right: 0; flex-direction: column;
-    align-items: stretch; gap: 2px; order: 5; }
+    align-items: stretch; gap: 12px; order: 5; }
   .nav.open { display: flex; }
-  .nav-group { flex-direction: column; align-items: stretch; }
+  .nav-group { padding: 0; }
+  .nav-group + .nav-group { border-left: 0; border-top: 1px solid var(--border);
+    padding-left: 0; padding-top: 10px; }
+  .nav-links { flex-direction: column; align-items: stretch; width: 100%; }
   .nav a { padding: 10px 12px; }
-  .topbar .controls { width: 100%; }
+  /* Utility controls sit below the opened navigation, never above it. */
+  .topbar .controls { width: 100%; order: 6; }
 }
 
 /* Coarse pointers (touch): meet the 44px minimum target size without
@@ -85,6 +96,7 @@ a:hover { text-decoration: underline; }
 @media (pointer: coarse) {
   .btn { min-height: 44px; }
   .btn.small { min-height: 40px; padding: 8px 14px; }
+  .menu-toggle { min-height: 44px; }
   .nav a { padding: 10px 14px; }
   .tabs a { padding: 10px 14px; }
   .seg button { padding: 8px 14px; }
@@ -96,8 +108,6 @@ a:hover { text-decoration: underline; }
 /* Programmatic focus target for route changes (tabindex=-1 keeps it out of
    the tab order, so no visible outline is needed). */
 #main:focus { outline: none; }
-.nav-group { display: flex; align-items: center; gap: 4px; }
-.nav-label { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 2px; }
 
 .muted { color: var(--muted); }
 .small { font-size: 12px; }
