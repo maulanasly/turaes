@@ -1,4 +1,5 @@
 import { html } from "../lib/html.js";
+import { BrandMark } from "../components/Brand.js";
 
 // Static product + build info. `health` is the already-polled /health state,
 // so this view makes no extra requests and stays current.
@@ -11,8 +12,9 @@ export function AboutView({ health, user }) {
   return html`
     <section class="panel">
       <div class="panel-head"><h1>About</h1></div>
-      <div class="brand" style="font-size:20px;font-weight:700">turaes</div>
-      <p class="muted small">Deploy your apps — no containers.</p>
+      <div class="brand" style="font-size:20px"><${BrandMark} size=${26} /><span>turaes</span></div>
+      <p><strong>Deploy apps as native processes. Operate the whole fleet.</strong></p>
+      <p class="muted small">No containers.</p>
       <div class="table-wrap"><table>
         <tbody>
           <tr><th>Version</th><td class="mono">${version}</td></tr>
