@@ -8,7 +8,7 @@ export function LoginView({ error, theme, onToggleTheme }) {
       <div class="login-card">
         ${onToggleTheme && html`<button class="btn small ghost login-theme" onClick=${onToggleTheme}
           title="Toggle theme" aria-label="Toggle theme">${theme === "dark" ? "☾" : "☀"}</button>`}
-        <div class="login-brand"><${BrandMark} size=${36} /><span>turaes</span></div>
+        <div class="login-brand"><${BrandMark} size=${36} theme=${theme} /><span>turaes</span></div>
         <p><strong>Deploy apps as native processes. Operate the whole fleet.</strong></p>
         <p class="muted small">No containers.</p>
         ${error && html`<p class="login-error" role="alert">${error}</p>`}

@@ -3,7 +3,7 @@ import { BrandMark } from "../components/Brand.js";
 
 // Static product + build info. `health` is the already-polled /health state,
 // so this view makes no extra requests and stays current.
-export function AboutView({ health, user }) {
+export function AboutView({ health, user, theme }) {
   const runtime = health && health.runtime ? health.runtime : "—";
   const version = health && health.version ? health.version : "—";
   const proxy = !health ? "—" : health.proxy ? "enabled (Pingora)" : "disabled";
@@ -12,7 +12,7 @@ export function AboutView({ health, user }) {
   return html`
     <section class="panel">
       <div class="panel-head"><h1>About</h1></div>
-      <div class="brand" style="font-size:20px"><${BrandMark} size=${26} /><span>turaes</span></div>
+      <div class="brand" style="font-size:20px"><${BrandMark} size=${26} theme=${theme} /><span>turaes</span></div>
       <p><strong>Deploy apps as native processes. Operate the whole fleet.</strong></p>
       <p class="muted small">No containers.</p>
       <div class="table-wrap"><table>
