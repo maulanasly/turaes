@@ -20,14 +20,17 @@ barely surfaced.
   server detail with agent status, Bootstrap/Validate in-UI.
 - Lifecycle in scope: stop/start/restart/delete/edit + domain aliases.
 - Light mode now.
-- Palette: graphite surfaces, indigo primary actions, cyan links/CPU telemetry,
-  amber warnings, and distinct green/red health states.
-- Brand lockup: theme-specific faceted insect SVG mark + lowercase "turaes"
-  wordmark; PNG favicon/touch sizes are generated from the same mark. The full
-  supplied logo PNGs remain unused because their baked-in uppercase wordmark
-  casing differs; topbar descriptor is "Native process platform" and hero
-  copy is "Deploy apps as native processes. Operate the whole fleet." with
-  "No containers." as proof.
+- Palette: graphite dark surfaces, warm-paper light surfaces (`#fef9ef`);
+  lagoon primary (`#227c9d`, `#1f7594` on light), teal links/CPU/visits
+  (`#17c3b2`, darkened `#0e6b7a`/`#0b6b52` on light), sand warnings
+  (`#ffcb77` dark / `#8a4b08` light), coral danger (`#fe6d73` dark / `#c62828`
+  light), green ok kept, purple mem kept for CPU/MEM separation.
+- Brand lockup: icon-only `turaes-web-assets` favicon PNG (single blue set for
+  both themes) + lowercase "turaes" wordmark; square PNG favicon/touch sizes
+  copied verbatim (`16/32/48/192/512`, dark/light identical). The full
+  `logo-*.png` files stay out of the binary because their baked-in uppercase
+  wordmark casing differs; hero copy is "Deploy apps as native processes.
+  Operate the whole fleet." with "No containers." as proof.
 - Zero-build preserved.
 
 ## Terminology
