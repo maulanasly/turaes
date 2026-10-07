@@ -22,6 +22,9 @@ barely surfaced.
 - Light mode now.
 - Palette: graphite surfaces, indigo primary actions, cyan links/CPU telemetry,
   amber warnings, and distinct green/red health states.
+- Brand lockup: route/process mark + "turaes" wordmark; compact "Native
+  process platform" descriptor in the topbar; hero copy "Deploy apps as native
+  processes. Operate the whole fleet." with "No containers." as proof.
 - Zero-build preserved.
 
 ## Terminology

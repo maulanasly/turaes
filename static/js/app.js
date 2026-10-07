@@ -7,6 +7,7 @@ import { toast } from "./lib/toast.js";
 import { useRoute, pathFor } from "./lib/router.js";
 import { Toasts } from "./components/Toasts.js";
 import { ConfirmHost } from "./components/ConfirmHost.js";
+import { BrandMark } from "./components/Brand.js";
 import { AppsView } from "./views/AppsView.js";
 import { AppDetailView } from "./views/AppDetailView.js";
 import { ServersView } from "./views/ServersView.js";
@@ -211,7 +212,7 @@ function Shell() {
       if (mainRef.current) { try { mainRef.current.focus(); } catch (err) {} }
     }}>Skip to content</a>
     <header class="topbar">
-      <div class="brand">turaes <span class="muted small">· deploy your apps — no containers</span></div>
+      <a class="brand" href="#/apps" title="turaes home"><${BrandMark} size=${22} /><span>turaes</span><span class="brand-tag">Native process platform</span></a>
       <button ref=${menuBtnRef} class="btn small ghost menu-toggle" aria-expanded=${menuOpen} aria-controls="primary-nav"
         onClick=${() => setMenuOpen((v) => !v)}>
         ${menuOpen ? "Close" : "Menu"}</button>
