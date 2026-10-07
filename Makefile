@@ -39,6 +39,9 @@ js-check: ## Syntax-check frontend ES modules
 test-js: ## Frontend unit tests (node --test, zero-build)
 	node --test tests/frontend/*.test.mjs
 
+certs-check: ## Fixture test for TLS issuance automation (needs sqlite3, openssl)
+	bash scripts/check-certs.sh
+
 build: ## Release build
 	$(CARGO) build --workspace --release
 
@@ -48,7 +51,7 @@ proxy-check: ## Type-check with the optional Pingora proxy enabled (Linux)
 proxy-build: ## Release build with the Pingora proxy enabled (Linux)
 	$(CARGO) build --release --features proxy
 
-verify: lint fmt-check test-all js-check test-js ## The gate: lint + fmt + tests + frontend
+verify: lint fmt-check test-all js-check test-js certs-check ## The gate: lint + fmt + tests + frontend + certs
 
 clean: ## Remove build artifacts
 	$(CARGO) clean

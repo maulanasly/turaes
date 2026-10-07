@@ -1,0 +1,15 @@
+[Unit]
+Description=turaes TLS issuance for managed app domains (one-shot)
+Documentation=https://github.com/maulanasly/turaes
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=-/etc/turaes/turaes.env
+# Deliberately unsandboxed: certbot writes /etc/letsencrypt, its work/logs
+# dirs and the ACME webroot, which no static ReadWritePaths list can cover.
+ExecStart=/usr/local/bin/ensure-app-certs.sh
+NoNewPrivileges=true
+PrivateTmp=true

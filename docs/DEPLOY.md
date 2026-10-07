@@ -209,6 +209,26 @@ pulls updated certs from the control plane — **no restart and no downtime**.
 (For multiple hosts, add a `[[webroot_map]]` entry per domain or pass `-d` per
 cert.)
 
+### Automatic issuance for app domains
+
+`install.sh` enables the `turaes-certs.timer` (weekly), which runs
+`deploy/ensure-app-certs.sh`: it reads every hostname from the turaes database
+(`applications.domain` + the `domains` table) and issues any missing cert via
+the same webroot flow. Existing valid certs are skipped; renewals stay with
+`certbot.timer`. Set the contact address once in `/etc/turaes/turaes.env`
+(otherwise new domains fail loudly instead of issuing):
+
+```bash
+TURAES_CERT_EMAIL=ops@example.com
+```
+
+Manual run (also useful with `DRY_RUN=1` to validate against staging first):
+
+```bash
+sudo /usr/local/bin/ensure-app-certs.sh
+sudo DRY_RUN=1 /usr/local/bin/ensure-app-certs.sh   # staging only, issues nothing
+```
+
 ## 5. First app: beruang
 
 ```bash

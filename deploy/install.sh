@@ -55,11 +55,16 @@ install -m 0644 "${SCRIPT_DIR}/turaes-backup.service" /etc/systemd/system/turaes
 install -m 0644 "${SCRIPT_DIR}/turaes-backup.timer" /etc/systemd/system/turaes-backup.timer
 install -m 0644 "${SCRIPT_DIR}/turaes-gc.service" /etc/systemd/system/turaes-gc.service
 install -m 0644 "${SCRIPT_DIR}/turaes-gc.timer" /etc/systemd/system/turaes-gc.timer
+install -m 0755 "${SCRIPT_DIR}/ensure-app-certs.sh" /usr/local/bin/ensure-app-certs.sh
+install -m 0644 "${SCRIPT_DIR}/turaes-certs.service" /etc/systemd/system/turaes-certs.service
+install -m 0644 "${SCRIPT_DIR}/turaes-certs.timer" /etc/systemd/system/turaes-certs.timer
 systemctl daemon-reload
 systemctl enable turaes
 systemctl enable --now turaes-backup.timer
 systemctl enable --now turaes-gc.timer
+systemctl enable --now turaes-certs.timer
 systemctl restart turaes
+log "set TURAES_CERT_EMAIL in ${ENV_FILE} so TLS issuance can register new certs"
 
 sleep 1
 if systemctl is-active --quiet turaes; then
