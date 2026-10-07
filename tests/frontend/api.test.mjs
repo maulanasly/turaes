@@ -39,3 +39,27 @@ test("api preserves structured field errors for forms", async () => {
     globalThis.fetch = previousFetch;
   }
 });
+
+test("api preserves multi-error arrays alongside the first field", async () => {
+  const previousFetch = globalThis.fetch;
+  const errors = [
+    { field: "port", code: "conflict", detail: "claimed" },
+    { field: "domain", code: "conflict", detail: "taken" },
+  ];
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    detail: "invalid input: claimed",
+    code: "validation",
+    field: "port",
+    errors,
+  }), { status: 422, headers: { "content-type": "application/json" } });
+  try {
+    await assert.rejects(api("/api/v1/test"), (err) => {
+      assert.equal(err.status, 422);
+      assert.equal(err.field, "port");
+      assert.deepEqual(err.errors, errors);
+      return true;
+    });
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});

@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from "preact/hooks"
 import { oapi } from "../lib/api.js";
 import { toast } from "../lib/toast.js";
 import { confirmAction } from "../lib/confirm.js";
-import { deployConsequences, restartConsequences, stopConsequences, startConsequences, rollbackConsequences, lifecycleSummary, resourceLimitErrors } from "../lib/appForm.js";
+import { deployConsequences, restartConsequences, stopConsequences, startConsequences, rollbackConsequences, lifecycleSummary, resourceLimitErrors, validateCommandLines, parseCommandArgv, textPatch, argvPatch, hasPendingDeployment } from "../lib/appForm.js";
 import { fmtBytes, parseTs, fmtTime, fmtRangeLabel, timeAgo, shortHash, serverName, runtimeLabel } from "../lib/format.js";
 import { APP_TABS, navigate } from "../lib/router.js";
 import { RANGES, DEFAULT_RANGE, normalizeRange, rangeToHours } from "../lib/route.js";
@@ -155,9 +155,11 @@ function Overview({ data, range, onRange, updatedAt, loading, onRefresh, activit
 function Deployments({ deployments, onRollbackTo, rollbackNote }) {
   if (!deployments) return html`<${Skeleton} lines={3} />`;
   if (deployments.length === 0) return html`<p class="muted">No deployments yet.</p>`;
+  const pending = hasPendingDeployment(deployments);
   return html`
     <div class="table-wrap">
     ${rollbackNote && html`<p class="muted small">${rollbackNote}</p>`}
+    ${pending && html`<p class="muted small" role="status">A deployment is still in progress — this list refreshes automatically.</p>`}
     <table class="stacked">
       <thead><tr><th>Status</th><th>Version</th><th>Started</th><th>Finished</th><th></th></tr></thead>
       <tbody>
@@ -326,7 +328,9 @@ function EditForm({ app, servers, onSaved }) {
   const [fieldErrors, setFieldErrors] = useState({});
   const [formError, setFormError] = useState(null);
   const [focusField, setFocusField] = useState(null);
+  const [launchMode, setLaunchMode] = useState(app.command ? "command" : "binary");
   const formRef = useRef(null);
+  const initialArgv = parseCommandArgv(app.command);
 
   useEffect(() => {
     if (!focusField || !formRef.current) return;
@@ -358,6 +362,28 @@ function EditForm({ app, servers, onSaved }) {
       }
     }
     if (!payload.server_id) errors.server_id = "Choose a server.";
+    // Advanced launch: tri-state patches — unchanged keys are omitted so the
+    // server keeps them, emptied values clear, new values replace.
+    if (launchMode === "command" && app.kind !== "static") {
+      const { lines, error } = validateCommandLines(fd.get("command"));
+      if (error) {
+        errors.command = error;
+      } else {
+        const patch = argvPatch(initialArgv, lines);
+        if (patch.present) payload.command = patch.value;
+      }
+    } else if (app.command) {
+      // Back to the stored binary: clearing argv re-points at it.
+      payload.command = null;
+    }
+    if (fd.get("workdir") !== null && fd.get("workdir") !== undefined) {
+      const patch = textPatch(app.workdir, String(fd.get("workdir")).trim());
+      if (patch.present) payload.workdir = patch.value;
+    }
+    if (app.kind === "static" && fd.get("publish_dir") !== null && fd.get("publish_dir") !== undefined) {
+      const patch = textPatch(app.publish_dir, String(fd.get("publish_dir")).trim());
+      if (patch.present) payload.publish_dir = patch.value;
+    }
     if (Object.keys(errors).length > 0) {
       const first = Object.keys(errors)[0];
       setFieldErrors(errors);
@@ -444,8 +470,35 @@ function EditForm({ app, servers, onSaved }) {
           <${FieldError} errors=${fieldErrors} name="cpu_quota_pct" />
         </label>
       </div>
-      <p class="muted small">Limits need the systemd runtime and take effect on the next deploy or restart.</p>
-      <p class="muted small">Binary path, custom argv, working directory, and static source directory are managed in turaes.yaml. Run turaes apply, then deploy to apply those changes.</p>
+      <div class="section-band"><h2>Advanced launch</h2><span class="muted small">argv, working directory, source</span></div>
+      ${app.kind !== "static" ? html`
+        <div class="seg" role="radiogroup" aria-label="Launch mode">
+          ${[["binary", "Stored binary"], ["command", "Explicit command"]].map(([m, label]) => html`
+            <button type="button" role="radio" aria-checked=${launchMode === m}
+              class=${launchMode === m ? "active" : ""}
+              onClick=${() => setLaunchMode(m)}>${label}</button>`)}
+        </div>` : null}
+      ${launchMode === "command" && app.kind !== "static" ? html`
+        <label>Command (one argument per line)
+          <textarea name="command" rows="3" class="mono"
+            defaultValue=${(initialArgv || []).join("\n")}
+            aria-invalid=${fieldErrors.command ? "true" : null}
+            aria-describedby=${fieldErrors.command ? "field-error-command" : null}></textarea>
+          <span class="muted small">The first line is the executable — no shell. ${app.command ? "To go back to the stored binary, choose Stored binary above." : "Setting a command supersedes the stored binary and flat arguments."}</span>
+          <${FieldError} errors=${fieldErrors} name="command" />
+        </label>` : html`
+        <p class="muted small">Runs <span class="mono">${app.command ? "the configured argv" : app.binary_path}</span> — no shell is involved.</p>`}
+      <label>Working directory <input name="workdir" defaultValue=${app.workdir ?? ""} placeholder="app state directory" />
+        <span class="muted small">Where the process runs. Empty the field to revert to the default.</span>
+      </label>
+      ${app.kind === "static" ? html`
+        <label>Source directory <input name="publish_dir" defaultValue=${app.publish_dir ?? ""}
+          aria-invalid=${fieldErrors.publish_dir ? "true" : null}
+          aria-describedby=${fieldErrors.publish_dir ? "field-error-publish_dir" : null} />
+          <span class="muted small">The files turaes serves. Takes effect on the next deploy.</span>
+          <${FieldError} errors=${fieldErrors} name="publish_dir" />
+        </label>` : null}
+      <p class="muted small">Limits need the systemd runtime and take effect on the next deploy or restart. Launch changes take effect on the next deploy.</p>
       ${formError ? html`<p class="form-error" role="alert">${formError}</p>` : null}
       <div><button class="btn" type="submit" disabled=${busy}>${busy ? "Saving…" : "Save settings"}</button></div>
     </form>`;
@@ -596,6 +649,21 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
 
   useEffect(() => { loadLatest(); }, [loadLatest]);
 
+  // While a deployment is still queued or installing (typically a remote
+  // node reconciling), poll the list so the tab settles into its terminal
+  // state without a manual refresh.
+  const deploymentPending = hasPendingDeployment(deployments);
+  useEffect(() => {
+    if (tab !== "deployments" || !deploymentPending) return undefined;
+    const t = setInterval(() => {
+      if (!document.hidden) {
+        loadDeployments();
+        loadLatest();
+      }
+    }, 5000);
+    return () => clearInterval(t);
+  }, [tab, deploymentPending, loadDeployments, loadLatest]);
+
   const deploy = async () => {
     if (!(await confirmAction({
       title: `Deploy ${app.name}?`,
@@ -606,8 +674,10 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
     setBusy(true);
     try {
       const result = await oapi(`/apps/${id}/deploy`, { method: "POST" });
-      if (result.state === "unknown") toast.info(`Deploy queued for ${serverName(servers, app.server_id)}`);
-      else toast.success(`Deployed ${app.name}`);
+      if (result.state === "unknown") {
+        toast.info(`Deploy queued for ${serverName(servers, app.server_id)} — watch it land on the Deployments tab.`);
+        navigate(`#/apps/${id}/deployments`);
+      } else toast.success(`Deployed ${app.name}`);
       loadApp();
       loadDeployments();
       loadLatest();

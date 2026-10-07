@@ -7,6 +7,7 @@ import { serverName, runtimeLabel, fmtTime } from "../lib/format.js";
 import { sortApps, filterApps } from "../lib/sort.js";
 import {
   KINDS, STEPS, emptyDraft, kindInfo, stepErrors, buildPayload, reviewGroups, createConsequences,
+  mapIssuesToFields, validateCommandLines,
 } from "../lib/appForm.js";
 import { StatusBadge } from "../components/StatusBadge.js";
 import { Skeleton } from "../components/Skeleton.js";
@@ -66,6 +67,8 @@ function NewAppForm({ servers, onCreated }) {
   const [fieldErrors, setFieldErrors] = useState({});
   const [formError, setFormError] = useState(null);
   const [focusField, setFocusField] = useState(null);
+  const [preflightWarnings, setPreflightWarnings] = useState([]);
+  const [preflightChecking, setPreflightChecking] = useState(false);
   const formRef = useRef(null);
 
   const set = (patch) => {
@@ -100,30 +103,67 @@ function NewAppForm({ servers, onCreated }) {
   };
   const back = () => { setFormError(null); setStep((s) => Math.max(s - 1, 0)); };
 
+  // Render every reported problem inline (a submit error carries at most
+  // one `field`, while preflight reports carry the full `errors` array).
+  const showIssues = (issues, summary) => {
+    const { fieldErrors, firstField, step: target } = mapIssuesToFields(issues);
+    if (!firstField) {
+      toast.error(summary);
+      setFormError(summary);
+      return;
+    }
+    setFieldErrors(fieldErrors);
+    setFormError(`Correct the highlighted field${Object.keys(fieldErrors).length > 1 ? "s" : ""} and try again.`);
+    setStep(target);
+    setFocusField(firstField);
+  };
+
   const showApiError = (err) => {
+    if (Array.isArray(err.errors) && err.errors.length > 0) {
+      showIssues(err.errors);
+      return;
+    }
     if (err.field) {
-      const stepsByField = {
-        name: 1, binary_path: 1, publish_dir: 1, args: 1, port: 1, health_path: 1,
-        server_id: 2, domain: 2, runtime: 2, mem_limit_mb: 2, cpu_quota_pct: 2,
-      };
-      if (stepsByField[err.field] === undefined) {
-        toast.error(err.message);
-        setFormError(err.message);
-        return;
-      }
-      setFieldErrors({ [err.field]: err.message });
-      setFormError("Correct the highlighted field and try again.");
-      setStep(stepsByField[err.field]);
-      setFocusField(err.field);
+      showIssues([{ field: err.field, detail: err.message }]);
       return;
     }
     toast.error(err.message);
     setFormError(err.message);
   };
 
+  // Run the server preflight for the current draft. Returns true when the
+  // draft would pass every blocking check.
+  const runPreflight = async () => {
+    let report;
+    try {
+      report = await oapi("/apps/preflight", {
+        method: "POST",
+        body: JSON.stringify(buildPayload(draft)),
+      });
+    } catch (e) {
+      // The preflight itself failed (auth, network): surface it globally and
+      // let the user retry instead of blocking on a stale assumption.
+      toast.error(e.message);
+      setFormError(e.message);
+      return false;
+    }
+    const issues = report.errors || [];
+    if (issues.length > 0) {
+      showIssues(issues);
+      return false;
+    }
+    setFieldErrors({});
+    setFormError(null);
+    setPreflightWarnings(report.warnings || []);
+    return true;
+  };
+
   const confirm = async () => {
     setBusy(true);
     try {
+      // Recheck immediately before writing: ports, quotas and domains may
+      // have been claimed since the Review step ran its own check.
+      if (!(await runPreflight())) return;
       const r = await oapi("/apps", { method: "POST", body: JSON.stringify(buildPayload(draft)) });
       toast.success(`Created ${r.application.name}`);
       onCreated(r.application);
@@ -133,6 +173,23 @@ function NewAppForm({ servers, onCreated }) {
       setBusy(false);
     }
   };
+
+  // Validate the full draft against the server whenever Review is shown,
+  // so blockers surface before Create instead of after a failed submit.
+  const preflightSeq = useRef(0);
+  useEffect(() => {
+    if (step !== lastStep) {
+      setPreflightWarnings([]);
+      return;
+    }
+    const seq = ++preflightSeq.current;
+    setPreflightChecking(true);
+    runPreflight().finally(() => {
+      if (preflightSeq.current === seq) setPreflightChecking(false);
+    });
+    // runPreflight reads the draft captured when Review was entered.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
 
   return html`
     <form ref=${formRef} class="wizard" noValidate onSubmit=${(e) => { e.preventDefault(); step < lastStep ? next() : confirm(); }}>
@@ -181,24 +238,50 @@ function NewAppForm({ servers, onCreated }) {
               onInput=${(e) => set({ publish_dir: e.target.value })} />
             <span class="muted small">The files turaes serves. No build runs — sync them yourself before deploying.</span>
             <${FieldError} errors=${fieldErrors} name="publish_dir" />
+          </label>
+          <label>Working directory (optional)
+            <input name="workdir" placeholder="/srv/beruang" value=${draft.workdir}
+              onInput=${(e) => set({ workdir: e.target.value })} />
+            <span class="muted small">Where the file server runs. Defaults to the app state directory.</span>
           </label>` : html`
-          <label>Binary path on the server
-            <input name="binary_path" placeholder="/srv/beruang/target/release/beruang-gateway" value=${draft.binary_path}
-              aria-invalid=${fieldErrors.binary_path ? "true" : null}
-              aria-describedby=${fieldErrors.binary_path ? "field-error-binary_path" : null}
-              onInput=${(e) => set({ binary_path: e.target.value })} />
-            <span class="muted small">A prebuilt binary already on the server. turaes never builds or containers it.</span>
-            <${FieldError} errors=${fieldErrors} name="binary_path" />
+          <div class="section-band"><h2>Launch</h2><span class="muted small">binary or explicit command</span></div>
+          <div class="seg" role="radiogroup" aria-label="Launch mode">
+            ${[["binary", "Prebuilt binary"], ["command", "Explicit command"]].map(([m, label]) => html`
+              <button type="button" role="radio" aria-checked=${draft.launchMode === m}
+                class=${draft.launchMode === m ? "active" : ""}
+                onClick=${() => set({ launchMode: m })}>${label}</button>`)}
+          </div>
+          ${draft.launchMode === "command" ? html`
+            <label>Command (one argument per line)
+              <textarea name="command" rows="3" class="mono" placeholder=${"/opt/venv/bin/python\nworker.py --queue default"}
+                value=${draft.command}
+                aria-invalid=${fieldErrors.command ? "true" : null}
+                aria-describedby=${fieldErrors.command ? "field-error-command" : null}
+                onInput=${(e) => set({ command: e.target.value })}></textarea>
+              <span class="muted small">The first line is the executable — no shell, so write each argument on its own line.</span>
+              <${FieldError} errors=${fieldErrors} name="command" />
+            </label>` : html`
+            <label>Binary path on the server
+              <input name="binary_path" placeholder="/srv/beruang/target/release/beruang-gateway" value=${draft.binary_path}
+                aria-invalid=${fieldErrors.binary_path ? "true" : null}
+                aria-describedby=${fieldErrors.binary_path ? "field-error-binary_path" : null}
+                onInput=${(e) => set({ binary_path: e.target.value })} />
+              <span class="muted small">A prebuilt binary already on the server. turaes never builds or containers it.</span>
+              <${FieldError} errors=${fieldErrors} name="binary_path" />
+            </label>
+            <label>Arguments (optional)
+              <input name="args" placeholder="--listen :8000 --config /etc/beruang.toml" value=${draft.args}
+                aria-invalid=${fieldErrors.args ? "true" : null}
+                aria-describedby=${fieldErrors.args ? "field-error-args" : null}
+                onInput=${(e) => set({ args: e.target.value })} />
+              <span class="muted small">Passed as separate words, literally — no shell, so no pipes, globs or quoting.</span>
+              <${FieldError} errors=${fieldErrors} name="args" />
+            </label>`}
+          <label>Working directory (optional)
+            <input name="workdir" placeholder="/srv/beruang" value=${draft.workdir}
+              onInput=${(e) => set({ workdir: e.target.value })} />
+            <span class="muted small">Where the process runs. Defaults to the app state directory.</span>
           </label>`}
-        ${draft.kind !== "static" ? html`
-          <label>Arguments (optional)
-            <input name="args" placeholder="--listen :8000 --config /etc/beruang.toml" value=${draft.args}
-              aria-invalid=${fieldErrors.args ? "true" : null}
-              aria-describedby=${fieldErrors.args ? "field-error-args" : null}
-              onInput=${(e) => set({ args: e.target.value })} />
-            <span class="muted small">Passed as separate words, literally — no shell, so no pipes, globs or quoting.</span>
-            <${FieldError} errors=${fieldErrors} name="args" />
-          </label>` : null}
         ${draft.kind !== "worker" ? html`
           <div class="row">
             <label>Port <input name="port" type="number" min="1" max="65535" placeholder="8000" value=${draft.port}
@@ -280,14 +363,21 @@ function NewAppForm({ servers, onCreated }) {
               </tbody></table>
             </div>`)}
         </div>
-        <${Callout} title="What happens when you create" notes=${createConsequences(draft.kind, draft.domain)} />` : null}
+        <${Callout} title="What happens when you create" notes=${createConsequences(draft.kind, draft.domain)} />
+        ${preflightChecking
+          ? html`<p class="muted small" role="status">Checking the draft against the server…</p>`
+          : preflightWarnings.length > 0
+          ? html`<div class="callout" role="note"><strong>Heads up</strong><ul>
+              ${preflightWarnings.map((w) => html`<li>${w.detail}</li>`)}
+            </ul></div>`
+          : null}` : null}
 
       ${formError ? html`<p class="form-error" role="alert">${formError}</p>` : null}
       <div class="controls wizard-nav">
         ${step > 0 ? html`<button type="button" class="btn ghost" disabled=${busy} onClick=${back}>Back</button>` : null}
         ${step < lastStep
           ? html`<button type="submit" class="btn">Next</button>`
-          : html`<button type="submit" class="btn" disabled=${busy}>${busy ? "Creating…" : "Create app"}</button>`}
+          : html`<button type="submit" class="btn" disabled=${busy || preflightChecking}>${busy ? "Creating…" : preflightChecking ? "Checking…" : "Create app"}</button>`}
       </div>
     </form>`;
 }

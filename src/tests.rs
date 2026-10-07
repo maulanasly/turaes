@@ -3112,6 +3112,324 @@ async fn api_rejects_kind_mismatches() {
 }
 
 #[tokio::test]
+async fn preflight_collects_every_problem_at_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    // Occupy a port first (tests default to the proc driver, so the memory
+    // limit below is also rejected: three independent problems).
+    create_app(&router, "taken", "/bin/true", 9600).await;
+
+    let payload = json!({
+        "name": "Bad Name!",
+        "binary_path": "/bin/true",
+        "port": 9600,
+        "mem_limit_mb": 256,
+    });
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/apps/preflight")
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert_eq!(body["ok"], false);
+    let fields: Vec<&str> = body["errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["field"].as_str().unwrap())
+        .collect();
+    assert!(
+        fields.contains(&"name"),
+        "expected a name error: {fields:?}"
+    );
+    assert!(
+        fields.contains(&"port"),
+        "expected a port error: {fields:?}"
+    );
+    assert!(
+        fields.contains(&"runtime"),
+        "expected a runtime error: {fields:?}"
+    );
+    assert_eq!(body["checks"]["port"], "fail");
+    // A service without a domain warns instead of failing.
+    let warnings = body["warnings"].as_array().unwrap();
+    assert!(
+        warnings.iter().any(|w| w["field"] == "domain"),
+        "expected a domain warning"
+    );
+}
+
+#[tokio::test]
+async fn preflight_edit_context_excludes_self() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let id = create_app(&router, "selfone", "/bin/true", 9610).await;
+
+    // Previewing the unchanged port must not clash with itself.
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/apps/preflight")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"app_id": id, "port": 9610}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert_eq!(body["ok"], true);
+    assert!(body["errors"].as_array().unwrap().is_empty());
+
+    // ...but another app's port still clashes.
+    create_app(&router, "selftwo", "/bin/true", 9611).await;
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/apps/preflight")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"app_id": id, "port": 9611}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert_eq!(body["ok"], false);
+    assert_eq!(body["errors"][0]["field"], "port");
+}
+
+#[tokio::test]
+async fn duplicate_primary_domain_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let mk = |name: &str, port: u16, domain: &str| {
+        let payload =
+            json!({"name": name, "binary_path": "/bin/true", "port": port, "domain": domain});
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/orgs/default/apps")
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap()
+    };
+    let resp = router
+        .clone()
+        .oneshot(mk("domone", 9620, "d1.test"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let resp = router.oneshot(mk("domtwo", 9621, "D1.TEST")).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let body = body_json(resp).await;
+    assert_eq!(body["field"], "domain");
+    assert_eq!(body["code"], "conflict");
+}
+
+#[tokio::test]
+async fn alias_conflicting_with_primary_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let mk = |name: &str, port: u16| {
+        let payload = json!({"name": name, "binary_path": "/bin/true", "port": port});
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/orgs/default/apps")
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap()
+    };
+    // App A owns the primary.
+    let resp = router.clone().oneshot(mk("aliasone", 9630)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let a = body_json(resp).await["application"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/orgs/default/apps/{a}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"domain": "shared.test"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // App B cannot take it as an alias.
+    let resp = router.clone().oneshot(mk("aliastwo", 9631)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let b = body_json(resp).await["application"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/default/apps/{b}/domains"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"domain": "shared.test"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(resp).await["field"], "domain");
+
+    // ...nor can A alias its own primary.
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/default/apps/{a}/domains"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"domain": "shared.test"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(resp).await["field"], "domain");
+}
+
+#[tokio::test]
+async fn lifecycle_stop_start_restart_cycle() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let bin = write_health_server(dir.path());
+    let id = create_app(&router, "cycleapp", &bin, 9640).await;
+    let act = |method: &str, path: String| {
+        router.clone().oneshot(
+            Request::builder()
+                .method(method)
+                .uri(path)
+                .body(Body::empty())
+                .unwrap(),
+        )
+    };
+    let status_of = |router: &axum::Router| {
+        let id = id.clone();
+        router.clone().oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/orgs/default/apps/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+    };
+
+    let resp = act("POST", format!("/api/v1/orgs/default/apps/{id}/deploy"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = act("POST", format!("/api/v1/orgs/default/apps/{id}/restart"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let app = body_json(status_of(&router).await.unwrap()).await;
+    assert_eq!(app["application"]["status"], "running");
+
+    let resp = act("POST", format!("/api/v1/orgs/default/apps/{id}/stop"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let app = body_json(status_of(&router).await.unwrap()).await;
+    assert_eq!(app["application"]["status"], "stopped");
+
+    let resp = act("POST", format!("/api/v1/orgs/default/apps/{id}/start"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let app = body_json(status_of(&router).await.unwrap()).await;
+    assert_eq!(app["application"]["status"], "running");
+}
+
+#[tokio::test]
+async fn worker_restart_reports_running() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let payload =
+        json!({"name": "sleeprestart", "kind": "worker", "command": ["/bin/sleep", "60"]});
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/apps")
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let id = body_json(resp).await["application"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    for action in ["deploy", "restart"] {
+        let resp = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/orgs/default/apps/{id}/{action}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "worker {action} failed");
+    }
+    let app = body_json(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/orgs/default/apps/{id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(app["application"]["status"], "running");
+
+    // Park the sleeper so no stray process survives the test run.
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/default/apps/{id}/stop"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn worker_settings_reject_web_only_fields() {
     let dir = tempfile::tempdir().unwrap();
     let router = test_router(dir.path()).await;

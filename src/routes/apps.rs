@@ -21,8 +21,10 @@ use turaes_runtime::{AppSpec, DeployOutcome, Deployer, RunState, Runtime, Slot};
 
 use crate::audit;
 use crate::authz::{self, CurrentUser, Role};
+use crate::routes::app_validation::{self, CheckedDraft, PreflightReport};
 use crate::routes::quotas;
 use crate::state::AppState;
+use turaes_core::FieldIssue;
 
 /// Body for creating an application.
 #[derive(Debug, Deserialize)]
@@ -119,7 +121,7 @@ pub struct UpdateApp {
 }
 
 /// Tri-state PATCH value: omitted preserves, JSON null clears, a value replaces.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq, Clone)]
 pub enum PatchValue<T> {
     #[default]
     Missing,
@@ -128,7 +130,7 @@ pub enum PatchValue<T> {
 }
 
 impl<T> PatchValue<T> {
-    fn apply(self, current: Option<T>) -> Option<T> {
+    pub(crate) fn apply(self, current: Option<T>) -> Option<T> {
         match self {
             Self::Missing => current,
             Self::Null => None,
@@ -173,6 +175,97 @@ fn quota_field(error: Error) -> Error {
             at_field(Error::Conflict(detail), "cpu_quota_pct")
         }
         other => other,
+    }
+}
+
+/// Build the effective draft for a create request.
+fn draft_from_create(state: &AppState, org_id: &str, input: &CreateApp) -> CheckedDraft {
+    let command = input.command.clone();
+    let args = if command.is_some() {
+        None
+    } else {
+        input.args.clone()
+    };
+    let binary_path = command
+        .as_ref()
+        .and_then(|argv| argv.first().cloned())
+        .or_else(|| input.binary_path.clone());
+    CheckedDraft {
+        name: input.name.clone(),
+        kind: input.kind.clone().unwrap_or_else(|| "service".into()),
+        binary_path,
+        args,
+        command,
+        publish_dir: input.publish_dir.clone(),
+        port: input.port.map(|p| p as i64).unwrap_or(0),
+        domain: input.domain.clone(),
+        server_id: input.server_id.clone().unwrap_or_else(|| "local".into()),
+        runtime: input
+            .runtime
+            .clone()
+            .unwrap_or_else(|| state.cfg.runtime.driver.clone()),
+        mem_limit_mb: input.mem_limit_mb,
+        cpu_quota_pct: input.cpu_quota_pct,
+        metrics_path: input.metrics_path.clone(),
+        except_app_id: String::new(),
+        is_create: true,
+        check_domain_budget: input
+            .domain
+            .as_deref()
+            .is_some_and(|d| !d.trim().is_empty()),
+        org_id: org_id.to_string(),
+    }
+}
+
+/// Build the effective draft for an update request, mirroring the PATCH
+/// tri-state resolution in `update()`.
+fn draft_from_update(app: &Application, org_id: &str, input: &UpdateApp) -> CheckedDraft {
+    let command = match &input.command {
+        PatchValue::Null => None,
+        PatchValue::Value(argv) => Some(argv.clone()),
+        PatchValue::Missing => app
+            .command
+            .as_deref()
+            .and_then(|c| serde_json::from_str(c).ok()),
+    };
+    let command_was_set = matches!(&input.command, PatchValue::Value(_));
+    let args = if command_was_set {
+        None
+    } else {
+        input.args.clone().or(app.args.clone())
+    };
+    let binary_path = command
+        .as_ref()
+        .and_then(|argv| argv.first().cloned())
+        .or_else(|| Some(app.binary_path.clone()));
+    // Normalized input domain for the budget check, mirroring `update()`:
+    // only a changed, valid domain consumes budget.
+    let norm_input_domain: Option<String> = input
+        .domain
+        .as_deref()
+        .filter(|d| !d.trim().is_empty())
+        .and_then(|d| crate::routes::domains::validate_domain(d).ok());
+    CheckedDraft {
+        name: app.name.clone(),
+        kind: app.kind.clone(),
+        binary_path,
+        args,
+        command,
+        publish_dir: input.publish_dir.clone().apply(app.publish_dir.clone()),
+        port: input.port.map(|p| p as i64).unwrap_or(app.port),
+        domain: input.domain.clone().or(app.domain.clone()),
+        server_id: input
+            .server_id
+            .clone()
+            .unwrap_or_else(|| app.server_id.clone()),
+        runtime: input.runtime.clone().unwrap_or_else(|| app.runtime.clone()),
+        mem_limit_mb: input.mem_limit_mb.clone().apply(app.mem_limit_mb),
+        cpu_quota_pct: input.cpu_quota_pct.clone().apply(app.cpu_quota_pct),
+        metrics_path: input.metrics_path.clone().or(app.metrics_path.clone()),
+        except_app_id: app.id.clone(),
+        is_create: false,
+        check_domain_budget: norm_input_domain.is_some() && norm_input_domain != app.domain,
+        org_id: org_id.to_string(),
     }
 }
 
@@ -561,6 +654,125 @@ pub(crate) async fn resolve_kind_shape(input: &CreateApp) -> Result<(String, i64
     Ok((kind, port, binary_path))
 }
 
+/// Body for preflight validation: the same draft shape as create, all
+/// fields optional (absent means "keep existing" when `app_id` is set).
+#[derive(Debug, Deserialize)]
+pub struct PreflightBody {
+    /// Existing app id when previewing an edit.
+    pub app_id: Option<String>,
+    pub name: Option<String>,
+    pub kind: Option<String>,
+    pub binary_path: Option<String>,
+    pub args: Option<String>,
+    pub command: Option<Vec<String>>,
+    pub publish_dir: Option<String>,
+    pub port: Option<i64>,
+    pub domain: Option<String>,
+    pub server_id: Option<String>,
+    pub runtime: Option<String>,
+    pub mem_limit_mb: Option<i64>,
+    pub cpu_quota_pct: Option<i64>,
+    pub metrics_path: Option<String>,
+}
+
+/// `POST /api/v1/orgs/{org}/apps/preflight` — validate a draft without
+/// writing anything. Always returns 200 with `{ok, errors, warnings,
+/// checks}`; `ok` is false when `errors` is non-empty.
+pub async fn preflight(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    Path(org): Path<String>,
+    Json(input): Json<PreflightBody>,
+) -> Result<Json<PreflightReport>> {
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Admin).await?;
+    let mut extra: Vec<FieldIssue> = Vec::new();
+    // Reuse the create/update draft builders so preflight merges values
+    // exactly the way submit does. Tri-state `null` (explicit clear) cannot
+    // be expressed here, so provided values preview as replacements.
+    let draft = match input.app_id.clone() {
+        Some(app_id) => {
+            let app = fetch_org_app(&state.pool, &org_id, &app_id).await?;
+            if let Some(kind) = input.kind.clone() {
+                if kind != app.kind {
+                    extra.push(FieldIssue {
+                        field: "kind".into(),
+                        code: "bad_request".into(),
+                        detail: format!(
+                            "kind cannot change from '{}' to '{kind}' (recreate the app instead)",
+                            app.kind
+                        ),
+                    });
+                }
+            }
+            draft_from_update(
+                &app,
+                &org_id,
+                &UpdateApp {
+                    description: None,
+                    args: input.args.clone(),
+                    port: input.port.and_then(|p| u16::try_from(p).ok()),
+                    health_path: None,
+                    metrics_path: input.metrics_path.clone(),
+                    domain: input.domain.clone(),
+                    runtime: input.runtime.clone(),
+                    auto_restart: None,
+                    server_id: input.server_id.clone(),
+                    mem_limit_mb: input
+                        .mem_limit_mb
+                        .map(PatchValue::Value)
+                        .unwrap_or(PatchValue::Missing),
+                    cpu_quota_pct: input
+                        .cpu_quota_pct
+                        .map(PatchValue::Value)
+                        .unwrap_or(PatchValue::Missing),
+                    command: input
+                        .command
+                        .clone()
+                        .map(PatchValue::Value)
+                        .unwrap_or(PatchValue::Missing),
+                    workdir: PatchValue::Missing,
+                    publish_dir: input
+                        .publish_dir
+                        .clone()
+                        .map(PatchValue::Value)
+                        .unwrap_or(PatchValue::Missing),
+                },
+            )
+        }
+        None => draft_from_create(
+            &state,
+            &org_id,
+            &CreateApp {
+                name: input.name.clone().unwrap_or_default(),
+                description: None,
+                binary_path: input.binary_path.clone(),
+                args: input.args.clone(),
+                command: input.command.clone(),
+                workdir: None,
+                publish_dir: input.publish_dir.clone(),
+                kind: input.kind.clone(),
+                port: input.port.and_then(|p| u16::try_from(p).ok()),
+                health_path: None,
+                metrics_path: input.metrics_path.clone(),
+                domain: input.domain.clone(),
+                server_id: input.server_id.clone(),
+                runtime: input.runtime.clone(),
+                auto_restart: None,
+                mem_limit_mb: input.mem_limit_mb,
+                cpu_quota_pct: input.cpu_quota_pct,
+            },
+        ),
+    };
+    let (mut errors, warnings, checks) = app_validation::validate_draft(&state, &draft).await;
+    errors.extend(extra);
+    Ok(Json(PreflightReport {
+        ok: errors.is_empty(),
+        errors,
+        warnings,
+        checks,
+    }))
+}
+
 /// `POST /api/v1/orgs/{org}/apps`
 pub async fn create(
     State(state): State<AppState>,
@@ -618,6 +830,9 @@ pub async fn create(
         quotas::ensure_domain_capacity(&state.pool, &org_id)
             .await
             .map_err(|error| at_field(error, "domain"))?;
+        if let Some(d) = domain.as_deref().filter(|d| !d.trim().is_empty()) {
+            app_validation::ensure_domain_available(&state.pool, d, "").await?;
+        }
     }
     let command_json = input
         .command
@@ -1547,6 +1762,9 @@ pub async fn update(
         quotas::ensure_domain_capacity(&state.pool, &org_id)
             .await
             .map_err(|error| at_field(error, "domain"))?;
+        if let Some(d) = domain.as_deref().filter(|d| !d.trim().is_empty()) {
+            app_validation::ensure_domain_available(&state.pool, d, &id).await?;
+        }
     }
     // Command/workdir/publish changes take effect on the next deploy. A new
     // command re-points the executable (binary_path tracks argv[0]).

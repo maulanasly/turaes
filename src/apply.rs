@@ -434,6 +434,15 @@ pub async fn apply_manifest(
     if manifest.domain.as_ref().is_some_and(|d| !d.is_empty()) && manifest.domain != existing_domain
     {
         quotas::ensure_domain_capacity(&state.pool, org_id).await?;
+        if let Some(domain) = manifest.domain.as_deref().filter(|d| !d.trim().is_empty()) {
+            let normalized = crate::routes::domains::validate_domain(domain)?;
+            crate::routes::app_validation::ensure_domain_available(
+                &state.pool,
+                &normalized,
+                &except_id,
+            )
+            .await?;
+        }
     }
 
     // Resolve file-anchored paths now so dry-run and real runs agree.

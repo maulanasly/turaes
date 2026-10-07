@@ -199,7 +199,9 @@ h3 { font-size: 13px; margin: 0 0 8px; }
 .btn.danger { background: var(--bad); }
 .btn:disabled { opacity: .6; cursor: default; }
 
-input, select { background: var(--bg); border: 1px solid var(--control-border); border-radius: 6px; padding: 8px 10px; color: var(--text); font: inherit; }
+input, select, textarea { background: var(--bg); border: 1px solid var(--control-border); border-radius: 6px; padding: 8px 10px; color: var(--text); font: inherit; }
+textarea { resize: vertical; min-height: 64px; }
+textarea[aria-invalid="true"] { border-color: var(--bad); }
 input[aria-invalid="true"], select[aria-invalid="true"] { border-color: var(--bad); }
 .search { padding: 6px 10px; }
 

@@ -12,7 +12,7 @@ export const KINDS = [
       "Runs a prebuilt binary already on the server — turaes never builds or containers it.",
       "The port must be free on the chosen server.",
       "Arguments are passed literally: there is no shell, so no pipes, globs or quoting.",
-      "For custom argv or a working-directory override, define command/workdir in turaes.yaml and run turaes apply.",
+      "For a custom executable or working directory, use Advanced launch below — or define command/workdir in turaes.yaml.",
     ],
   },
   {
@@ -33,7 +33,7 @@ export const KINDS = [
       "Runs a prebuilt binary already on the server.",
       "No port and no domain: nothing can reach it over HTTP.",
       "It is supervised and restarted on failure; watch it in the logs tab.",
-      "For custom argv or a working-directory override, define command/workdir in turaes.yaml and run turaes apply.",
+      "For a custom executable or working directory, use Advanced launch below — or define command/workdir in turaes.yaml.",
     ],
   },
 ];
@@ -44,13 +44,43 @@ export function kindInfo(id) {
 
 export const STEPS = ["Workload", "Process", "Placement", "Review"];
 
+// Which wizard step owns each payload field, so server-reported problems
+// can jump straight to the input that caused them.
+export const FIELD_STEPS = {
+  name: 1, binary_path: 1, publish_dir: 1, args: 1, command: 1, workdir: 1,
+  port: 1, health_path: 1,
+  server_id: 2, domain: 2, runtime: 2, mem_limit_mb: 2, cpu_quota_pct: 2,
+};
+
+// Fold a list of `{field, detail}` issues (preflight `errors`, or a submit
+// error carrying `errors`) into inline field errors plus the earliest step
+// and field to focus.
+export function mapIssuesToFields(issues) {
+  const fieldErrors = {};
+  let firstField = null;
+  let step = 3;
+  for (const issue of issues || []) {
+    if (!issue || !issue.field) continue;
+    if (!(issue.field in fieldErrors)) {
+      fieldErrors[issue.field] = issue.detail || "Invalid value.";
+    }
+    if (!firstField) firstField = issue.field;
+    const s = FIELD_STEPS[issue.field];
+    if (s !== undefined && s < step) step = s;
+  }
+  return { fieldErrors, firstField, step: firstField ? step : 3 };
+}
+
 export function emptyDraft(serverId = "local") {
   return {
     kind: "service",
     name: "",
     description: "",
+    launchMode: "binary",
     binary_path: "",
     args: "",
+    command: "",
+    workdir: "",
     publish_dir: "",
     port: "",
     health_path: "",
@@ -61,6 +91,59 @@ export function emptyDraft(serverId = "local") {
     mem_limit_mb: "",
     cpu_quota_pct: "",
   };
+}
+
+// Split an argv textarea (one argument per line) into lines, mirroring the
+// API rule: non-empty argv, executable without spaces (no shell involved).
+export function validateCommandLines(text) {
+  const lines = String(text || "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l !== "");
+  if (lines.length === 0) {
+    return { lines, error: "Enter the executable path, one argument per line." };
+  }
+  if (lines[0].includes(" ")) {
+    return { lines, error: "The executable path cannot contain spaces; no shell is used." };
+  }
+  return { lines, error: null };
+}
+
+// Parse the stored argv JSON (`Application.command`) back into lines.
+export function parseCommandArgv(stored) {
+  if (!stored) return null;
+  try {
+    const v = JSON.parse(stored);
+    return Array.isArray(v) ? v.map(String) : null;
+  } catch {
+    return null;
+  }
+}
+
+// True while any deployment still needs reconciling (a remote agent
+// catching up, a slow install): the Deployments tab polls instead of
+// going stale.
+export function hasPendingDeployment(deployments) {
+  return (deployments || []).some((d) => d.status === "queued" || d.status === "installing");
+}
+
+// Tri-state PATCH helpers for Settings: distinguish "unchanged" (omit the
+// key so the server keeps the value) from "cleared" (send null) and "set".
+export function textPatch(initial, current) {
+  const before = initial ?? "";
+  if (current === before) return { present: false };
+  if (current === "") return { present: true, value: null };
+  return { present: true, value: current };
+}
+
+export function argvPatch(initial, current) {
+  const before = initial || null;
+  const same = before === null
+    ? current.length === 0
+    : before.length === current.length && before.every((v, i) => v === current[i]);
+  if (same) return { present: false };
+  if (current.length === 0) return { present: true, value: null };
+  return { present: true, value: current };
 }
 
 export function resourceLimitErrors(runtime, memLimit, cpuLimit) {
@@ -102,6 +185,12 @@ export function stepErrors(draft, step) {
     }
     if (draft.kind === "static") {
       if (!draft.publish_dir.trim()) errors.publish_dir = "A source directory is required for a static site.";
+    } else if (draft.launchMode === "command") {
+      const { error } = validateCommandLines(draft.command);
+      if (error) errors.command = error;
+      else if (draft.args.trim()) {
+        errors.args = "Arguments cannot be combined with an explicit command; put them on their own lines above.";
+      }
     } else if (!draft.binary_path.trim()) {
       errors.binary_path = "A prebuilt binary path is required.";
     }
@@ -130,12 +219,17 @@ export function buildPayload(draft) {
   const kind = draft.kind;
   const payload = { kind, name: draft.name.trim() };
   if (draft.description.trim()) payload.description = draft.description.trim();
+  const useCommand = kind !== "static" && draft.launchMode === "command";
   if (kind === "static") {
     payload.publish_dir = draft.publish_dir.trim();
+  } else if (useCommand) {
+    const { lines } = validateCommandLines(draft.command);
+    payload.command = lines;
   } else {
     payload.binary_path = draft.binary_path.trim();
   }
-  if (draft.args.trim()) payload.args = draft.args.trim();
+  if (!useCommand && draft.args.trim()) payload.args = draft.args.trim();
+  if (draft.workdir.trim()) payload.workdir = draft.workdir.trim();
   if (kind !== "worker") {
     payload.port = Number(draft.port);
     if (draft.health_path.trim()) payload.health_path = draft.health_path.trim();
@@ -158,9 +252,15 @@ export function reviewGroups(draft, serverLabel) {
   if (draft.description.trim()) identity.push(["Description", draft.description.trim()]);
 
   const process = [];
+  const useCommand = draft.kind !== "static" && draft.launchMode === "command";
+  process.push(["Launch", useCommand ? "Explicit argv command" : draft.kind === "static" ? "Built-in file server" : "Prebuilt binary"]);
   if (draft.kind === "static") process.push(["Source directory", draft.publish_dir.trim() || "—"]);
-  else process.push(["Binary", draft.binary_path.trim() || "—"]);
-  if (draft.args.trim()) process.push(["Arguments", draft.args.trim()]);
+  else if (useCommand) {
+    const { lines } = validateCommandLines(draft.command);
+    process.push(["Command", lines.length > 0 ? lines.join(" ") : "—"]);
+  } else process.push(["Binary", draft.binary_path.trim() || "—"]);
+  if (!useCommand && draft.args.trim()) process.push(["Arguments", draft.args.trim()]);
+  if (draft.workdir.trim()) process.push(["Working directory", draft.workdir.trim()]);
   if (draft.kind !== "worker") {
     process.push(["Port", draft.port || "—"]);
     process.push(["Health path", draft.health_path.trim() || "/health (default)"]);

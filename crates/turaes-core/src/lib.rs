@@ -13,4 +13,4 @@ pub mod manifest;
 pub mod models;
 
 pub use config::Config;
-pub use error::{Error, Result};
+pub use error::{Error, FieldIssue, Result};

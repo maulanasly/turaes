@@ -6,7 +6,11 @@ JSON `{"detail": "...", "code": "..."}` — switch on the stable `code`
 (`config`, `not_found`, `unauthorized`, `forbidden`, `bad_request`,
 `conflict`, `db`, `io`, `internal`), never on the human `detail` text. App
 validation/conflict responses include `field` when the issue maps to one input
-(for example, a reserved port); non-field errors omit it.
+(for example, a reserved port); non-field errors omit it. The preflight
+endpoint below additionally returns an `errors` array of
+`{field, code, detail}` objects describing every problem at once, plus
+`warnings` (`{field?, detail}`) and per-check `pass`/`fail`/`unknown`
+outcomes — use it to validate a draft before writing anything.
 
 Status codes: `200` ok · `201` created · `204` no content · `401` unauthenticated ·
 `403` not on allowlist · `404` unknown id · `409` resource conflict · `422` bad input ·
@@ -126,6 +130,7 @@ roles yield `403`.
 |---|---|---|---|
 | `GET` | `/api/v1/orgs/{org}/apps` | viewer | List the org's applications |
 | `POST` | `/api/v1/orgs/{org}/apps` | admin | Create an application (`201`) |
+| `POST` | `/api/v1/orgs/{org}/apps/preflight` | admin | Validate a draft without writing (`200` always; `ok:false` when `errors` is non-empty; pass `app_id` to preview an edit) |
 | `GET` | `/api/v1/orgs/{org}/apps/{id}` | viewer | Fetch one |
 | `PATCH` | `/api/v1/orgs/{org}/apps/{id}` | admin | Edit fields + placement |
 | `DELETE` | `/api/v1/orgs/{org}/apps/{id}` | admin | Remove app + stop it (`204`) |
@@ -197,6 +202,14 @@ curl -X POST localhost:8787/api/v1/orgs/default/apps \
 `command`/`workdir`/`publish_dir` are tri-state (absent keeps, `null` clears,
 a value sets). `kind` is immutable after create. Limits with the `proc`
 runtime are rejected (`422`) rather than silently ignored.
+
+Primary domains and aliases share one namespace: claiming a domain already
+used as another app's primary or alias yields `409` on the `domain` field,
+as does aliasing an app's own primary. Hostnames are normalized to lowercase
+before comparison. The dashboard exposes the full launch model — prebuilt
+binary, explicit argv `command` (one argument per line, no shell), and
+`workdir` — in both the create wizard (Advanced launch) and Settings, with
+the same tri-state semantics as `PATCH`.
 
 ## Quotas
 
