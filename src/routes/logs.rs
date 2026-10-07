@@ -29,19 +29,37 @@ pub fn log_argv(cfg: &Config, app: &Application) -> (String, Vec<String>) {
                 vec!["-n".into(), "50".into(), "-f".into(), log],
             )
         }
-        _ => (
-            "journalctl".into(),
-            vec![
-                "-u".into(),
-                format!("{}.service", app.name),
-                "-f".into(),
-                "-n".into(),
-                "50".into(),
-                "--no-pager".into(),
-                "-o".into(),
-                "short-iso".into(),
-            ],
-        ),
+        _ => {
+            // Blue/green units are named `{name}-a` / `{name}-b`; the bare
+            // `{name}.service` never exists, and journalctl matches nothing
+            // for it (empty stream, no error). Tail the active slot, derived
+            // from active_port the same way cutover does; before the first
+            // deploy (active_port None) cover both slots plus the legacy
+            // bare name — journalctl ignores units with no entries.
+            let offset = cfg.runtime.slot_offset as i64;
+            let units: Vec<String> = match app.active_port {
+                Some(ap) if ap == app.port + offset => {
+                    vec![format!("{}-b.service", app.name)]
+                }
+                Some(_) => vec![format!("{}-a.service", app.name)],
+                None => vec![
+                    format!("{}.service", app.name),
+                    format!("{}-a.service", app.name),
+                    format!("{}-b.service", app.name),
+                ],
+            };
+            let mut args = Vec::with_capacity(units.len() * 2 + 6);
+            for u in units {
+                args.push("-u".to_string());
+                args.push(u);
+            }
+            args.extend(
+                ["-f", "-n", "50", "--no-pager", "-o", "short-iso"]
+                    .iter()
+                    .map(|s| s.to_string()),
+            );
+            ("journalctl".into(), args)
+        }
     }
 }
 
@@ -119,15 +137,15 @@ mod tests {
     use turaes_core::config::Config;
     use turaes_core::models::Application;
 
-    fn app(runtime: &str, name: &str) -> Application {
+    fn app(runtime: &str, name: &str, active_port: Option<i64>) -> Application {
         Application {
             id: "x".into(),
             name: name.into(),
             description: None,
             binary_path: "/bin/true".into(),
             args: None,
-            port: 1,
-            active_port: None,
+            port: 8000,
+            active_port,
             health_path: "/health".into(),
             metrics_path: None,
             domain: None,
@@ -148,18 +166,39 @@ mod tests {
     }
 
     #[test]
-    fn systemd_uses_journalctl() {
+    fn systemd_tails_the_active_slot() {
         let cfg = Config::from_toml(include_str!("../../config/default.toml")).unwrap();
-        let (program, args) = log_argv(&cfg, &app("systemd", "beruang"));
+        // Slot A serves the base port.
+        let (program, args) = log_argv(&cfg, &app("systemd", "beruang", Some(8000)));
+        assert_eq!(program, "journalctl");
+        assert!(args.contains(&"beruang-a.service".to_string()));
+        assert!(!args.contains(&"beruang-b.service".to_string()));
+        assert!(!args.contains(&"beruang.service".to_string()));
+        assert!(args.contains(&"-f".to_string()));
+        // Slot B serves base port + slot_offset.
+        let b_port = 8000 + cfg.runtime.slot_offset as i64;
+        let (program, args) = log_argv(&cfg, &app("systemd", "beruang", Some(b_port)));
+        assert_eq!(program, "journalctl");
+        assert!(args.contains(&"beruang-b.service".to_string()));
+        assert!(!args.contains(&"beruang-a.service".to_string()));
+    }
+
+    #[test]
+    fn systemd_covers_all_units_before_the_first_deploy() {
+        // active_port None: tail both slots plus the legacy bare unit name —
+        // journalctl skips units with no entries, so this is always safe.
+        let cfg = Config::from_toml(include_str!("../../config/default.toml")).unwrap();
+        let (program, args) = log_argv(&cfg, &app("systemd", "beruang", None));
         assert_eq!(program, "journalctl");
         assert!(args.contains(&"beruang.service".to_string()));
-        assert!(args.contains(&"-f".to_string()));
+        assert!(args.contains(&"beruang-a.service".to_string()));
+        assert!(args.contains(&"beruang-b.service".to_string()));
     }
 
     #[test]
     fn proc_uses_tail() {
         let cfg = Config::from_toml(include_str!("../../config/default.toml")).unwrap();
-        let (program, args) = log_argv(&cfg, &app("proc", "demo"));
+        let (program, args) = log_argv(&cfg, &app("proc", "demo", None));
         assert_eq!(program, "tail");
         assert!(args.iter().any(|a| a.ends_with("/demo/demo.log")));
     }
