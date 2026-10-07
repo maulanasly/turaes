@@ -808,7 +808,7 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
             <button class="btn ghost" disabled=${busy} onClick=${() => action("restart")}>Restart</button>
             <button class="btn ghost" disabled=${busy} onClick=${() => action("stop")}>Stop</button>
             <details class="menu">
-              <summary class="btn small ghost" aria-label="More actions">More</summary>
+              <summary class="btn ghost" aria-label="More actions">More</summary>
               <div class="menu-list">
                 ${!app.command && html`<button class="btn small ghost" disabled=${busy} onClick=${rollback}>Rollback</button>`}
                 <button class="btn small ghost" disabled=${busy} onClick=${() => action("start")}>Start</button>
