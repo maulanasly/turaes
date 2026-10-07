@@ -23,9 +23,12 @@ NoNewPrivileges=true
 # writes under /etc and /usr/local, D-Bus + journal sockets (AF_UNIX),
 # loopback/VPC traffic (AF_INET/AF_INET6) and interface lookups (AF_NETLINK).
 ProtectSystem=strict
-# Writable paths mirror the runtime defaults (bin/unit/env/state dirs). If the
-# [runtime] dirs are relocated, extend this list to match.
-ReadWritePaths=/var/lib/turaes /etc /usr/local/bin
+# Writable paths mirror the runtime defaults (bin/unit/env/state dirs). The
+# per-app state root ({state_dir}/{app}, default /var/lib) must stay covered:
+# a deploy's first filesystem write outside these paths fails with EROFS
+# ("Read-only file system"). If the [runtime] dirs are relocated, extend this
+# list to match.
+ReadWritePaths=/var/lib /etc /usr/local/bin
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
