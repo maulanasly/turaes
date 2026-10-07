@@ -20,3 +20,19 @@ test("frontend templates do not contain literal non-breaking-space entities", ()
     assert.ok(!readFileSync(path, "utf8").includes(entity), `${path} contains a literal ${entity}`);
   }
 });
+
+test("error-wired inputs carry names so errors can focus them", () => {
+  // Every control that renders aria-invalid for a field error must be
+  // reachable through form.elements.namedItem(name).
+  for (const file of ["views/AppsView.js", "views/AppDetailView.js"]) {
+    const src = readFileSync(new URL(`../../static/js/${file}`, import.meta.url), "utf8");
+    for (const match of src.matchAll(/<(input|select|textarea)\b([^>]*?)>/g)) {
+      const [tag, attrs] = [match[1], match[2]];
+      if (!/aria-invalid/.test(attrs)) continue;
+      assert.ok(
+        /\bname="/.test(attrs),
+        `${file} has an error-wired but nameless <${tag}>: ${match[0].slice(0, 80)}`
+      );
+    }
+  }
+});

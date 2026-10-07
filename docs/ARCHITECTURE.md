@@ -214,6 +214,18 @@ users ──< memberships(role) >── organizations ──< applications ─�
 - **Trust boundary**: `X-Forwarded-For` / country headers are proxy-set and
   spoofable; visitor numbers are best-effort.
 
+## Validation flow
+
+App drafts are validated in one shared core (`src/routes/app_validation.rs`)
+reused by create, update, preflight, and manifest apply: name, workload
+shape, runtime, placement, port availability, limits, quotas, domain format,
+budget and global availability, plus advisory source-path and no-route
+warnings. Handlers stay authoritative and fail fast with a single `field`
+error; `POST /apps/preflight` instead returns every problem at once
+(`errors[]`), warnings, and per-check `pass`/`fail`/`unknown` outcomes without
+writing anything. The dashboard Review step runs preflight on entry and
+rechecks immediately before submit.
+
 ## Testing strategy
 
 - **Unit**: pure functions — unit-file rendering, env-file parsing, Prometheus
@@ -221,6 +233,9 @@ users ──< memberships(role) >── organizations ──< applications ─�
   resolution, cert path discovery.
 - **Integration** (`src/tests.rs`): the real Axum router against a temporary
   SQLite database via `tower::ServiceExt::oneshot`.
+- **Frontend** (`tests/frontend`, `node --test`, zero-build): pure form
+  helpers, API error-shape preservation, workflow simulation with a stubbed
+  `fetch` layer, contrast tokens, and static markup audits.
 - **Gate**: `make verify` (clippy `-D warnings` + fmt check + all tests).
 
 ## Related projects

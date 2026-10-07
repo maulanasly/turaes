@@ -20,6 +20,7 @@ impl LimitQuery {
 
 pub mod agent;
 pub mod alerts;
+pub mod app_validation;
 pub mod apps;
 pub mod artifacts;
 pub mod audit;

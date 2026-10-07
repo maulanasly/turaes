@@ -90,6 +90,13 @@ pub async fn add(
             other => other,
         })?;
     let domain = validate_domain(&input.domain)?;
+    if app.domain.as_deref() == Some(domain.as_str()) {
+        return Err(Error::FieldConflict {
+            field: "domain".into(),
+            detail: format!("domain '{domain}' is already this app's primary domain"),
+        });
+    }
+    crate::routes::app_validation::ensure_domain_available(&state.pool, &domain, &id).await?;
     let row = sqlx::query_as::<_, Domain>(
         "INSERT INTO domains (id, application_id, domain, is_primary) \
          VALUES (?, ?, ?, 0) RETURNING *",

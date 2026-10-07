@@ -95,6 +95,12 @@ Unknown fields are rejected so typos fail loudly with a line number.
 Relative `binary`/`publish_dir`/`workdir` paths resolve against the manifest
 file's directory. `kind` cannot change after creation (recreate the app).
 
+The dashboard and the manifest share one launch model: the create wizard and
+Settings expose the same prebuilt-binary / explicit-argv-`command` /
+`workdir` options (with the same mutual-exclusion and tri-state rules), so a
+`turaes.yaml` round-trip and a dashboard edit cannot disagree about what an
+app runs.
+
 ## Secrets (names only, values out-of-band)
 
 ```bash

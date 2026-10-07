@@ -2,11 +2,14 @@
 //!
 //! Errors map to a JSON body with a stable machine-readable `code`; validation
 //! responses may also include `field` so forms can put feedback next to input.
-//! Bad input is 422 (not 400) to stay consistent across the fleet.
+//! The preflight report additionally carries an `errors` array of
+//! `{field, code, detail}` objects describing every problem at once. Bad input
+//! is 422 (not 400) to stay consistent across the fleet.
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 /// Result alias used throughout turaes.
@@ -48,6 +51,17 @@ pub enum Error {
     /// An unexpected internal failure.
     #[error("internal error: {0}")]
     Internal(String),
+}
+
+/// One field-scoped problem inside a multi-error validation response.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FieldIssue {
+    /// Request field the problem maps to (`""` when it maps to no field).
+    pub field: String,
+    /// Stable machine-readable code (`bad_request` or `conflict`).
+    pub code: String,
+    /// Human-readable detail.
+    pub detail: String,
 }
 
 impl Error {

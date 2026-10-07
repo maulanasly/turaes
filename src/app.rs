@@ -20,6 +20,7 @@ pub fn build_router(state: AppState) -> Router {
     // role floor for it (see `authz::authorize_org`).
     let org_api = Router::new()
         .route("/apps", get(routes::apps::list).post(routes::apps::create))
+        .route("/apps/preflight", post(routes::apps::preflight))
         .route(
             "/apps/{id}",
             get(routes::apps::get)

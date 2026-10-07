@@ -13,6 +13,9 @@ export async function api(path, options = {}) {
     err.code = body.code;
     err.field = body.field;
     err.fields = body.fields;
+    // Multi-error validation responses (and preflight-style reports
+    // surfaced as errors) carry every problem, not just the first.
+    err.errors = Array.isArray(body.errors) ? body.errors : null;
     throw err;
   }
   return body;

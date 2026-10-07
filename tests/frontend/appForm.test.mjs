@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  KINDS, STEPS, emptyDraft, kindInfo, stepError, stepErrors, buildPayload, reviewGroups,
+  KINDS, STEPS, FIELD_STEPS, emptyDraft, kindInfo, stepError, stepErrors, buildPayload, reviewGroups,
   createConsequences, deployConsequences, restartConsequences, stopConsequences,
-  startConsequences, rollbackConsequences, lifecycleSummary,
+  startConsequences, rollbackConsequences, lifecycleSummary, mapIssuesToFields,
+  validateCommandLines, parseCommandArgv, textPatch, argvPatch,
 } from "../../static/js/lib/appForm.js";
 
 test("kinds cover the three workload shapes", () => {
@@ -15,7 +16,7 @@ test("kinds cover the three workload shapes", () => {
     assert.ok(k.constraints.length >= 2);
   }
   assert.match(kindInfo("service").constraints.join(" "), /turaes\.yaml/);
-  assert.match(kindInfo("worker").constraints.join(" "), /turaes apply/);
+  assert.match(kindInfo("worker").constraints.join(" "), /Advanced launch/);
   assert.deepEqual(STEPS, ["Workload", "Process", "Placement", "Review"]);
 });
 
@@ -108,6 +109,69 @@ test("reviewGroups summarises identity, process and placement", () => {
   const wg = reviewGroups(w, "local");
   assert.ok(!wg[2].rows.some(([l]) => l === "Port"));
   assert.ok(!wg[3].rows.some(([l]) => l === "Domain"));
+});
+
+test("explicit argv commands validate like the API", () => {
+  assert.deepEqual(validateCommandLines(""), { lines: [], error: "Enter the executable path, one argument per line." });
+  assert.match(validateCommandLines("/opt/my prog\n--x").error, /cannot contain spaces/);
+  assert.deepEqual(validateCommandLines("/opt/venv/bin/python\nworker.py --queue default"), {
+    lines: ["/opt/venv/bin/python", "worker.py --queue default"],
+    error: null,
+  });
+
+  // Command mode requires argv and forbids flat args; binary mode is untouched.
+  const cmd = { ...emptyDraft(), name: "jobs", launchMode: "command", command: "", port: "8000" };
+  assert.match(stepErrors(cmd, 1).command, /executable path/);
+  cmd.command = "/bin/sleep\n60";
+  cmd.args = "--x";
+  assert.match(stepErrors(cmd, 1).args, /cannot be combined/);
+  cmd.args = "";
+  assert.deepEqual(stepErrors(cmd, 1), {});
+
+  const payload = buildPayload({ ...cmd, workdir: "/srv/jobs " });
+  assert.deepEqual(payload.command, ["/bin/sleep", "60"]);
+  assert.equal(payload.binary_path, undefined);
+  assert.equal(payload.args, undefined);
+  assert.equal(payload.workdir, "/srv/jobs");
+  assert.equal(payload.port, 8000);
+});
+
+test("field issues map to steps with the earliest problem first", () => {
+  assert.equal(FIELD_STEPS.port, 1);
+  assert.equal(FIELD_STEPS.mem_limit_mb, 2);
+  const mapped = mapIssuesToFields([
+    { field: "domain", code: "conflict", detail: "taken" },
+    { field: "port", code: "conflict", detail: "claimed" },
+    { field: "mystery", code: "bad_request", detail: "?" },
+  ]);
+  assert.deepEqual(mapped.fieldErrors, { domain: "taken", port: "claimed", mystery: "?" });
+  assert.equal(mapped.firstField, "domain");
+  assert.equal(mapped.step, 1);
+  assert.deepEqual(mapIssuesToFields([]), { fieldErrors: {}, firstField: null, step: 3 });
+  assert.deepEqual(mapIssuesToFields(null), { fieldErrors: {}, firstField: null, step: 3 });
+});
+
+test("tri-state patches distinguish unchanged, cleared and set values", () => {
+  assert.deepEqual(textPatch("/srv/a", "/srv/a"), { present: false });
+  assert.deepEqual(textPatch(null, ""), { present: false });
+  assert.deepEqual(textPatch("/srv/a", ""), { present: true, value: null });
+  assert.deepEqual(textPatch(null, "/srv/b"), { present: true, value: "/srv/b" });
+  assert.deepEqual(argvPatch(null, []), { present: false });
+  assert.deepEqual(argvPatch(["a"], ["a"]), { present: false });
+  assert.deepEqual(argvPatch(["a"], []), { present: true, value: null });
+  assert.deepEqual(argvPatch(null, ["a"]), { present: true, value: ["a"] });
+  assert.deepEqual(parseCommandArgv(null), null);
+  assert.deepEqual(parseCommandArgv('["/bin/sleep","60"]'), ["/bin/sleep", "60"]);
+  assert.equal(parseCommandArgv("nope"), null);
+});
+
+test("review reflects the launch mode actually submitted", () => {
+  const d = { ...emptyDraft(), name: "jobs", launchMode: "command", command: "/bin/sleep\n60", workdir: "/srv/jobs" };
+  const process = reviewGroups(d, "local")[2].rows;
+  assert.deepEqual(process[0], ["Launch", "Explicit argv command"]);
+  assert.deepEqual(process[1], ["Command", "/bin/sleep 60"]);
+  assert.deepEqual(process.find(([l]) => l === "Working directory"), ["Working directory", "/srv/jobs"]);
+  assert.ok(!process.some(([l]) => l === "Binary"));
 });
 
 test("lifecycle consequences are always explained", () => {
