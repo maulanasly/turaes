@@ -112,6 +112,11 @@ Host: kalkulator.rayakala.ink
 
 The table is built from `applications.domain` + `domains` rows and published
 atomically after each deploy/domain change. Unknown hosts return 404.
+Hostnames whose apps are stopped, failed or unhealthy stay in the table as
+parked entries and answer 503 with a branded maintenance page naming the app
+(`Retry-After: 60`); LE challenges are still served for them on port 80, so
+renewal works while parked. Snapshots publish only on change, so health
+transitions and lifecycle actions can trigger rebuilds cheaply.
 
 ## Docker-less runtime design
 

@@ -35,3 +35,11 @@ test("More disclosure matches sibling header buttons (not small)", () => {
   assert.doesNotMatch(src, /<summary class="btn small ghost"/);
   assert.match(src, /<summary class="btn ghost" aria-label="More actions">/);
 });
+
+test("non-running apps explain the maintenance page", () => {
+  const src = readFileSync(
+    new URL("../../static/js/views/AppDetailView.js", import.meta.url),
+    "utf8"
+  );
+  assert.match(src, /Visitors see the maintenance page/);
+});

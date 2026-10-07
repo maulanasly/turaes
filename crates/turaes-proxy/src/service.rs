@@ -210,6 +210,25 @@ mod pingora_impl {
     }
 
     impl Gateway {
+        /// Serve the parked-host maintenance page (503). Known hostnames
+        /// without live upstreams (stopped or unhealthy apps) get branded
+        /// HTML naming the application — never a bare 502.
+        async fn serve_maintenance(
+            &self,
+            session: &mut Session,
+            parked: &crate::router::ParkedHost,
+        ) -> Result<bool> {
+            let body = crate::maintenance::body(&parked.app, parked.reason);
+            let mut resp = ResponseHeader::build(503, None)?;
+            resp.insert_header(http::header::CONTENT_TYPE, "text/html; charset=utf-8")?;
+            resp.insert_header(http::header::RETRY_AFTER, "60")?;
+            session.write_response_header(Box::new(resp), false).await?;
+            session
+                .write_response_body(Some(bytes::Bytes::from(body)), true)
+                .await?;
+            Ok(true)
+        }
+
         /// Serve a certbot HTTP-01 challenge file from the webroot
         /// (`{webroot}/.well-known/acme-challenge/{token}`).
         async fn serve_acme(&self, session: &mut Session, token: &str) -> Result<bool> {
@@ -240,8 +259,9 @@ mod pingora_impl {
         type CTX = ();
         fn new_ctx(&self) -> Self::CTX {}
 
-        /// Redirect plain HTTP to HTTPS for any host we route. Unknown hosts
-        /// (and IP access) fall through so they 404 as before.
+        /// Redirect plain HTTP to HTTPS for known hosts; serve the parked-host
+        /// maintenance page (503) for hostnames without live upstreams.
+        /// Unknown hosts (and IP access) fall through so they 404 as before.
         async fn request_filter(
             &self,
             session: &mut Session,
@@ -251,9 +271,6 @@ mod pingora_impl {
                 .digest()
                 .map(|d| d.ssl_digest.is_some())
                 .unwrap_or(false);
-            if is_tls {
-                return Ok(false);
-            }
 
             let (host, path) = {
                 let req = session.req_header();
@@ -270,13 +287,27 @@ mod pingora_impl {
                     .unwrap_or_else(|| "/".to_string());
                 (host, path)
             };
+            let hostname = host.split(':').next().unwrap_or("").to_ascii_lowercase();
 
-            // certbot HTTP-01 challenge: serve from the webroot before redirect.
-            if let Some(token) = super::acme_token(&path) {
-                return self.serve_acme(session, token).await;
+            // certbot HTTP-01 challenge: serve from the webroot before
+            // anything else, so renewals work even for parked hosts.
+            // (Issuers only ever validate over plain HTTP.)
+            if !is_tls {
+                if let Some(token) = super::acme_token(&path) {
+                    return self.serve_acme(session, token).await;
+                }
             }
 
-            let hostname = host.split(':').next().unwrap_or("").to_ascii_lowercase();
+            // Parked hosts (stopped or unhealthy apps) get the maintenance
+            // page on both schemes — no redirect to a dead endpoint.
+            if let Some(parked) = self.router.is_parked(&hostname) {
+                return self.serve_maintenance(session, &parked).await;
+            }
+
+            if is_tls {
+                return Ok(false);
+            }
+
             if hostname.is_empty() || self.router.resolve(&hostname).is_none() {
                 return Ok(false);
             }

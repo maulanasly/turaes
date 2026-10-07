@@ -36,11 +36,47 @@ pub fn pick(upstreams: &[Upstream], counter: u64) -> Option<&Upstream> {
     }
 }
 
+/// Why a known host has no live upstreams. Rendered on the maintenance page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ParkedReason {
+    /// Stopped by its owner (`app.stop`).
+    Stopped,
+    /// Failing health checks or a failed supervisor state.
+    Unhealthy,
+}
+
+/// A hostname kept in the table without upstreams, so the data plane can
+/// answer it with a maintenance page instead of a bare 502.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParkedHost {
+    /// Application slug, shown on the page (never the raw hostname).
+    pub app: String,
+    /// Why it is parked.
+    pub reason: ParkedReason,
+}
+
 /// An immutable snapshot of the routing table.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RouteTable {
     routes: HashMap<String, Vec<Upstream>>,
+    parked: HashMap<String, ParkedHost>,
     base_domain: String,
+}
+
+fn lookup<'a, V>(map: &'a HashMap<String, V>, base_domain: &str, host: &str) -> Option<&'a V> {
+    let host = host.split(':').next().unwrap_or(host).trim().to_lowercase();
+    if let Some(v) = map.get(&host) {
+        return Some(v);
+    }
+    if !base_domain.is_empty() {
+        let suffix = format!(".{base_domain}");
+        if let Some(label) = host.strip_suffix(&suffix) {
+            if let Some(v) = map.get(label) {
+                return Some(v);
+            }
+        }
+    }
+    None
 }
 
 impl RouteTable {
@@ -51,8 +87,18 @@ impl RouteTable {
                 .into_iter()
                 .map(|(k, v)| (k.to_lowercase(), v))
                 .collect(),
+            parked: HashMap::new(),
             base_domain: base_domain.into().to_lowercase(),
         }
+    }
+
+    /// Attach parked hosts (known hostnames without live upstreams).
+    pub fn with_parked(mut self, parked: HashMap<String, ParkedHost>) -> Self {
+        self.parked = parked
+            .into_iter()
+            .map(|(k, v)| (k.to_lowercase(), v))
+            .collect();
+        self
     }
 
     /// Resolve a `Host` header value (port optional) to all upstreams.
@@ -60,19 +106,13 @@ impl RouteTable {
     /// Exact hostname matches win; otherwise `{app}.{base_domain}` resolves the
     /// `{app}` route, enabling wildcard/multitenant subdomains.
     pub fn resolve_all(&self, host: &str) -> &[Upstream] {
-        let host = host.split(':').next().unwrap_or(host).trim().to_lowercase();
-        if let Some(u) = self.routes.get(&host) {
-            return u;
-        }
-        if !self.base_domain.is_empty() {
-            let suffix = format!(".{}", self.base_domain);
-            if let Some(label) = host.strip_suffix(&suffix) {
-                if let Some(u) = self.routes.get(label) {
-                    return u;
-                }
-            }
-        }
-        &[]
+        lookup(&self.routes, &self.base_domain, host).map_or(&[], |v| v)
+    }
+
+    /// Parked entry for a host, if it is known but has no live upstreams.
+    /// Same exact-then-`base_domain` resolution as [`Self::resolve_all`].
+    pub fn is_parked(&self, host: &str) -> Option<ParkedHost> {
+        lookup(&self.parked, &self.base_domain, host).cloned()
     }
 
     /// First upstream for a host (backward-compatible convenience).
@@ -108,6 +148,22 @@ impl Router {
     /// Publish a new snapshot atomically.
     pub fn publish(&self, table: RouteTable) {
         self.table.store(std::sync::Arc::new(table));
+    }
+
+    /// Publish only when the snapshot differs; returns whether it changed.
+    /// Lets frequent triggers (health transitions, toggles) call for a
+    /// rebuild without churning the hot path.
+    pub fn publish_if_changed(&self, table: RouteTable) -> bool {
+        if **self.table.load() == table {
+            return false;
+        }
+        self.publish(table);
+        true
+    }
+
+    /// Parked entry for a host using the current snapshot.
+    pub fn is_parked(&self, host: &str) -> Option<ParkedHost> {
+        self.table.load().is_parked(host)
     }
 
     /// All upstreams for a host using the current snapshot.
@@ -195,5 +251,65 @@ mod tests {
         routes.insert("new".into(), vec![up(9001)]);
         r.publish(RouteTable::new("rayakala.ink", routes));
         assert_eq!(r.resolve("new.rayakala.ink").unwrap().port, 9001);
+    }
+
+    fn parked_router() -> Router {
+        let r = router();
+        let mut parked = HashMap::new();
+        parked.insert(
+            "old.rayakala.ink".into(),
+            ParkedHost {
+                app: "old".into(),
+                reason: ParkedReason::Stopped,
+            },
+        );
+        parked.insert(
+            "sick".into(),
+            ParkedHost {
+                app: "sick".into(),
+                reason: ParkedReason::Unhealthy,
+            },
+        );
+        let table = RouteTable::new("rayakala.ink", HashMap::new()).with_parked(parked);
+        r.publish(table);
+        r
+    }
+
+    #[test]
+    fn parked_exact_and_wildcard_match() {
+        let r = parked_router();
+        // Exact hostname, case-insensitive, port tolerated.
+        let p = r.is_parked("OLD.rayakala.ink:443").unwrap();
+        assert_eq!(p.app, "old");
+        assert_eq!(p.reason, ParkedReason::Stopped);
+        // Label fallback through the base domain.
+        let p = r.is_parked("sick.rayakala.ink").unwrap();
+        assert_eq!(p.app, "sick");
+        assert_eq!(p.reason, ParkedReason::Unhealthy);
+        // Unknown hosts stay unknown; routed hosts are not parked.
+        assert!(r.is_parked("nope.example.com").is_none());
+        assert!(r.is_parked("kalkulator.rayakala.ink").is_none());
+    }
+
+    #[test]
+    fn publish_if_changed_skips_identical_snapshots() {
+        let r = router();
+        let same = RouteTable::new("rayakala.ink", HashMap::new());
+        // Current snapshot differs (has routes), so this publishes.
+        assert!(r.publish_if_changed(same));
+        // Publishing it again is a no-op.
+        let again = RouteTable::new("rayakala.ink", HashMap::new());
+        assert!(!r.publish_if_changed(again));
+        // A parked entry counts as a change.
+        let mut parked = HashMap::new();
+        parked.insert(
+            "old.rayakala.ink".into(),
+            ParkedHost {
+                app: "old".into(),
+                reason: ParkedReason::Stopped,
+            },
+        );
+        let changed = RouteTable::new("rayakala.ink", HashMap::new()).with_parked(parked);
+        assert!(r.publish_if_changed(changed));
     }
 }

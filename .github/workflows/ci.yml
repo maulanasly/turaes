@@ -49,3 +49,5 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y clang perl pkg-config libssl-dev cmake
       - name: Check proxy
         run: cargo check -p turaes-proxy --features pingora
+      - name: Test proxy (data-plane wiring needs the feature to compile)
+        run: cargo test -p turaes-proxy --features pingora

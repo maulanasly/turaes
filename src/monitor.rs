@@ -15,7 +15,7 @@ use turaes_core::models::Application;
 use turaes_monitor::{health, scrape, stats};
 use turaes_runtime::RunState;
 
-use crate::routes::apps::{active_spec, runtime_for};
+use crate::routes::apps::{active_spec, refresh_proxy_routes, runtime_for};
 use crate::state::AppState;
 
 /// Running aggregate for one app's current minute.
@@ -242,6 +242,8 @@ async fn probe_health(
     match memo.threshold.record(&outcome, &cfg) {
         Some(health::Transition::BecameUnhealthy) => {
             set_status(state, &app.id, "unhealthy").await?;
+            // Park the hostnames (maintenance page) until recovery.
+            let _ = refresh_proxy_routes(state).await;
             record_event(
                 state,
                 Some(app.id.as_str()),
@@ -269,6 +271,8 @@ async fn probe_health(
         }
         Some(health::Transition::BecameHealthy) => {
             set_status(state, &app.id, "running").await?;
+            // Restore the routes the unhealthy transition parked.
+            let _ = refresh_proxy_routes(state).await;
             record_event(
                 state,
                 Some(app.id.as_str()),
@@ -285,6 +289,8 @@ async fn probe_health(
             };
             if app.status != desired && app.status != "stopped" {
                 set_status(state, &app.id, desired).await?;
+                // Reconciled flips change routability; republish if so.
+                let _ = refresh_proxy_routes(state).await;
             }
         }
     }

@@ -801,6 +801,8 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
               ? html`<span class="mono" title=${latest.artifact_hash || ""}>${shortHash(latest.artifact_hash)} · ${timeAgo(Date.now() - parseTs(latest.started_at))}</span>`
               : html`<span class="muted">never</span>`}</span></div>
           </div>
+          ${["stopped", "failed", "unhealthy"].includes(app.status)
+            && html`<p class="muted small">Visitors see the maintenance page while this app isn't running.</p>`}
         </div>
         <div class="controls">
           ${user && html`
