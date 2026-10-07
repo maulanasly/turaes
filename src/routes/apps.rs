@@ -14,7 +14,7 @@ use turaes_core::db::Pool;
 use turaes_core::models::{Application, Deployment};
 use turaes_core::{Error, Result};
 use turaes_monitor::health;
-use turaes_proxy::{RouteTable, Upstream};
+use turaes_proxy::{ParkedHost, ParkedReason, RouteTable, Upstream};
 use turaes_runtime::proc::ProcRuntime;
 use turaes_runtime::systemd::SystemdRuntime;
 use turaes_runtime::{AppSpec, DeployOutcome, Deployer, RunState, Runtime, Slot};
@@ -415,6 +415,51 @@ pub fn spec_for_slot(cfg: &Config, app: &Application, slot: Option<Slot>, port: 
 ///
 /// Routes each app's domain and the dashboard host to their loopback ports.
 /// No-op when the proxy is disabled.
+/// Parked reason for an application status. Anything else routes normally —
+/// notably `deploying` (the old slot still serves until cutover) and
+/// `unknown` (transient probe state that must not flap live traffic).
+fn parked_reason(status: &str) -> Option<ParkedReason> {
+    match status {
+        "stopped" => Some(ParkedReason::Stopped),
+        "failed" | "unhealthy" => Some(ParkedReason::Unhealthy),
+        _ => None,
+    }
+}
+
+/// Split hostnames into live routes vs parked maintenance entries.
+/// Pure so the partition is unit-tested; only hosts with placed upstreams
+/// are considered (workers and undeployed apps keep their 404).
+fn partition_hosts(
+    status_by_app: &HashMap<String, (String, String)>,
+    by_app: &HashMap<String, Vec<Upstream>>,
+    hostnames: &[(String, String)],
+) -> (HashMap<String, Vec<Upstream>>, HashMap<String, ParkedHost>) {
+    let mut routes: HashMap<String, Vec<Upstream>> = HashMap::new();
+    let mut parked: HashMap<String, ParkedHost> = HashMap::new();
+    for (app_id, domain) in hostnames {
+        let Some(ups) = by_app.get(app_id) else {
+            continue;
+        };
+        let host = domain.to_lowercase();
+        match status_by_app
+            .get(app_id)
+            .and_then(|(_, status)| parked_reason(status))
+        {
+            Some(reason) => {
+                let app = status_by_app
+                    .get(app_id)
+                    .map(|(name, _)| name.clone())
+                    .unwrap_or_default();
+                parked.insert(host, ParkedHost { app, reason });
+            }
+            None => {
+                routes.entry(host).or_default().extend(ups.iter().cloned());
+            }
+        }
+    }
+    (routes, parked)
+}
+
 pub async fn refresh_proxy_routes(state: &AppState) -> Result<()> {
     let Some(router) = &state.proxy_router else {
         return Ok(());
@@ -441,36 +486,32 @@ pub async fn refresh_proxy_routes(state: &AppState) -> Result<()> {
         });
     }
 
-    let mut routes: HashMap<String, Vec<Upstream>> = HashMap::new();
+    // App name + status per id; parked hosts name the application, not the host.
+    let status_rows: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT id, name, status FROM applications")
+            .fetch_all(&state.pool)
+            .await?;
+    let status_by_app: HashMap<String, (String, String)> = status_rows
+        .into_iter()
+        .map(|(id, name, status)| (id, (name, status)))
+        .collect();
 
     // Primary domain per app.
-    let primaries: Vec<(String, String)> = sqlx::query_as(
+    let mut hostnames: Vec<(String, String)> = sqlx::query_as(
         "SELECT id, domain FROM applications WHERE domain IS NOT NULL AND domain != ''",
     )
     .fetch_all(&state.pool)
     .await?;
-    for (app_id, domain) in primaries {
-        if let Some(ups) = by_app.get(&app_id) {
-            routes
-                .entry(domain.to_lowercase())
-                .or_default()
-                .extend(ups.iter().cloned());
-        }
-    }
 
     // Domain aliases.
-    let aliases: Vec<(String, String)> =
+    let mut aliases: Vec<(String, String)> =
         sqlx::query_as("SELECT application_id, domain FROM domains")
             .fetch_all(&state.pool)
             .await?;
-    for (app_id, domain) in aliases {
-        if let Some(ups) = by_app.get(&app_id) {
-            routes
-                .entry(domain.to_lowercase())
-                .or_default()
-                .extend(ups.iter().cloned());
-        }
-    }
+    hostnames.append(&mut aliases);
+
+    // Split into live routes vs parked maintenance entries by status.
+    let (mut routes, parked) = partition_hosts(&status_by_app, &by_app, &hostnames);
 
     if let Some(host) = state.cfg.dashboard_host() {
         routes
@@ -483,10 +524,9 @@ pub async fn refresh_proxy_routes(state: &AppState) -> Result<()> {
             });
     }
 
-    router.publish(RouteTable::new(
-        state.cfg.server.base_domain.clone(),
-        routes,
-    ));
+    router.publish_if_changed(
+        RouteTable::new(state.cfg.server.base_domain.clone(), routes).with_parked(parked),
+    );
     Ok(())
 }
 
@@ -1615,6 +1655,9 @@ async fn lifecycle(
         .bind(&app.id)
         .execute(&state.pool)
         .await?;
+    // Republish so stop parks the hostnames (maintenance page) and start
+    // restores them. Change-detected: restarts are a no-op publish.
+    let _ = refresh_proxy_routes(state).await;
     Ok(Json(serde_json::json!({ "state": st })))
 }
 
@@ -1969,7 +2012,9 @@ pub async fn deployments(
 
 #[cfg(test)]
 mod tests {
-    use super::{select_previous_artifact, PatchValue, UpdateApp};
+    use super::{parked_reason, partition_hosts, select_previous_artifact, PatchValue, UpdateApp};
+    use std::collections::HashMap;
+    use turaes_proxy::{ParkedReason, Upstream};
 
     #[test]
     fn patch_values_distinguish_missing_null_and_value() {
@@ -1989,5 +2034,56 @@ mod tests {
         assert_eq!(select_previous_artifact(&hs).as_deref(), Some("sha256:bb"));
         assert_eq!(select_previous_artifact(&["sha256:aa".into()]), None);
         assert_eq!(select_previous_artifact(&[]), None);
+    }
+
+    fn upstream(port: u16) -> Upstream {
+        Upstream {
+            host: "127.0.0.1".into(),
+            port,
+            tls: false,
+        }
+    }
+
+    #[test]
+    fn parked_reason_covers_non_routable_statuses() {
+        assert_eq!(parked_reason("stopped"), Some(ParkedReason::Stopped));
+        assert_eq!(parked_reason("failed"), Some(ParkedReason::Unhealthy));
+        assert_eq!(parked_reason("unhealthy"), Some(ParkedReason::Unhealthy));
+        // Deploying keeps the old slot live; unknown is transient — both route.
+        assert_eq!(parked_reason("running"), None);
+        assert_eq!(parked_reason("deploying"), None);
+        assert_eq!(parked_reason("unknown"), None);
+    }
+
+    #[test]
+    fn partition_hosts_parks_by_status_not_by_absence() {
+        let mut status_by_app = HashMap::new();
+        status_by_app.insert("a".into(), ("web".into(), "running".into()));
+        status_by_app.insert("b".into(), ("old".into(), "stopped".into()));
+        status_by_app.insert("c".into(), ("sick".into(), "unhealthy".into()));
+        status_by_app.insert("w".into(), ("bg".into(), "stopped".into()));
+        let mut by_app = HashMap::new();
+        by_app.insert("a".into(), vec![upstream(8000)]);
+        by_app.insert("b".into(), vec![upstream(8100)]);
+        by_app.insert("c".into(), vec![upstream(8200)]);
+        // Worker `w` has a domain but no placements: neither routed nor parked.
+        let hostnames = vec![
+            ("a".into(), "web.test".into()),
+            ("b".into(), "old.test".into()),
+            ("c".into(), "sick.test".into()),
+            ("c".into(), "alias.test".into()),
+            ("w".into(), "bg.test".into()),
+            ("ghost".into(), "ghost.test".into()),
+        ];
+        let (routes, parked) = partition_hosts(&status_by_app, &by_app, &hostnames);
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes["web.test"][0].port, 8000);
+        assert_eq!(parked.len(), 3);
+        assert_eq!(parked["old.test"].app, "old");
+        assert_eq!(parked["old.test"].reason, ParkedReason::Stopped);
+        assert_eq!(parked["sick.test"].reason, ParkedReason::Unhealthy);
+        assert_eq!(parked["alias.test"].app, "sick");
+        assert!(!parked.contains_key("bg.test"));
+        assert!(!routes.contains_key("ghost.test"));
     }
 }
