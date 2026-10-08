@@ -25,12 +25,13 @@ barely surfaced.
   (`#17c3b2`, darkened `#0e6b7a`/`#0b6b52` on light), sand warnings
   (`#ffcb77` dark / `#8a4b08` light), coral danger (`#fe6d73` dark / `#c62828`
   light), green ok kept, purple mem kept for CPU/MEM separation.
-- Brand lockup: icon-only `turaes-web-assets` favicon PNG (single blue set for
-  both themes) + lowercase "turaes" wordmark; square PNG favicon/touch sizes
-  copied verbatim (`16/32/48/192/512`, dark/light identical). The full
-  `logo-*.png` files stay out of the binary because their baked-in uppercase
-  wordmark casing differs; hero copy is "Deploy apps as native processes.
-  Operate the whole fleet." with "No containers." as proof.
+- Brand lockup: icon-only theme-specific SVG mark from `turaes-logo-assets`
+  (teal `#17c3b2` + cream `#fef9ef` on dark; lagoon `#227c9d` on light) +
+  lowercase "turaes" wordmark; square PNG favicon/touch sizes per variant
+  (`16/32/48` verbatim, `192` downscaled from `favicon-256`, `512` from the
+  themed mark render) plus `favicon.ico`. Repeatable via
+  `scripts/sync-brand-assets.sh`. Hero copy is "Deploy apps as native
+  processes. Operate the whole fleet." with "No containers." as proof.
 - Zero-build preserved.
 
 ## Terminology
