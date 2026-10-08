@@ -38,7 +38,7 @@ pub fn body(app: &str, reason: ParkedReason) -> String {
          <style>:root{{color-scheme:dark}}body{{margin:0;background:#0f1115;color:#e6e8ee;\
          font:16px/1.5 ui-sans-serif,system-ui,sans-serif;display:flex;min-height:100vh;\
          align-items:center;justify-content:center}}main{{text-align:center;padding:24px}}\
-         h1{{font-size:28px;margin:0 0 8px}}.app{{color:#17c3b2}}\
+         h1{{font-size:28px;margin:0 0 8px}}.app{{color:#32cbff}}\
          p{{color:#8b93a7;margin:0 0 4px}}footer{{margin-top:16px;font-size:12px}}</style></head>\n\
          <body><main><p>turaes</p><h1><span class=\"app\">{app}</span> {headline}</h1>\
          <p>Please try again in a minute.</p><footer>HTTP 503</footer></main></body>\n\
