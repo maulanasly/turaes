@@ -274,10 +274,14 @@ mod pingora_impl {
 
             let (host, path) = {
                 let req = session.req_header();
+                // HTTP/1.1 carries `Host`; HTTP/2 exposes the host via the URI
+                // authority (`:authority`) instead — same fallback as
+                // `upstream_peer`, or parked hosts are invisible over H2.
                 let host = req
                     .headers
                     .get(http::header::HOST)
                     .and_then(|v| v.to_str().ok())
+                    .or_else(|| req.uri.host())
                     .unwrap_or_default()
                     .to_string();
                 let path = req
