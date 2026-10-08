@@ -20,11 +20,12 @@ barely surfaced.
   server detail with agent status, Bootstrap/Validate in-UI.
 - Lifecycle in scope: stop/start/restart/delete/edit + domain aliases.
 - Light mode now.
-- Palette: graphite dark surfaces, warm-paper light surfaces (`#fef9ef`);
-  lagoon primary (`#227c9d`, `#1f7594` on light), teal links/CPU/visits
-  (`#17c3b2`, darkened `#0e6b7a`/`#0b6b52` on light), sand warnings
-  (`#ffcb77` dark / `#8a4b08` light), coral danger (`#fe6d73` dark / `#c62828`
-  light), green ok kept, purple mem kept for CPU/MEM separation.
+- Palette: graphite dark surfaces, neutral light surfaces (`#f5f6f8`);
+  cyan links/CPU (`#32cbff`, darkened `#006f9f` on light), periwinkle
+  primary buttons (`#89a1ef` dark with dark ink / `#006f9f` on light),
+  pale-pink warnings (`#fecef1` dark / `#8a4b08` light), pink danger
+  (`#ef9cda` dark / `#8f2d68` light), cerulean visits (`#00a5e0` dark /
+  `#4a5fc0` light), green ok kept, purple mem kept for CPU/MEM separation.
 - Brand lockup: icon-only `turaes-web-assets` favicon PNG (single blue set for
   both themes) + lowercase "turaes" wordmark; square PNG favicon/touch sizes
   copied verbatim (`16/32/48/192/512`, dark/light identical). The full

@@ -6,36 +6,36 @@
   --control-border: #6b7280;
   --text: #fef9ef;
   --muted: #8b93a7;
-  --accent: #17c3b2;
-  --signal: #227c9d;
-  --signal-ink: #fef9ef;
+  --accent: #32cbff;
+  --signal: #89a1ef;
+  --signal-ink: #191c23;
   --ok: #4ade80;
-  --warn: #ffcb77;
-  --bad: #fe6d73;
-  --cpu: #17c3b2;
+  --warn: #fecef1;
+  --bad: #ef9cda;
+  --cpu: #32cbff;
   --mem: #c084fc;
-  --visits: #17c3b2;
+  --visits: #00a5e0;
   --radius: 8px;
   color-scheme: dark;
 }
 
 [data-theme="light"] {
-  --bg: #fef9ef;
+  --bg: #f5f6f8;
   --panel: #ffffff;
-  --panel-2: #faf3e6;
+  --panel-2: #f1f3f6;
   --border: #d9dee6;
   --control-border: #78828f;
   --text: #191c23;
   --muted: #5b6472;
-  --accent: #1f7594;
-  --signal: #1f7594;
+  --accent: #006f9f;
+  --signal: #006f9f;
   --signal-ink: #ffffff;
   --ok: #126b35;
   --warn: #8a4b08;
-  --bad: #c62828;
-  --cpu: #0e6b7a;
+  --bad: #8f2d68;
+  --cpu: #006f9f;
   --mem: #7c3aed;
-  --visits: #0b6b52;
+  --visits: #4a5fc0;
   color-scheme: light;
 }
 
