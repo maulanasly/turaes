@@ -136,6 +136,19 @@ must **not** be pointed here (it resolves to another server).
 - [ ] Live logs stream over WebSocket without polling.
 - [ ] Events timeline reflects deploys, restarts and health flips.
 
+### Backlog (future improvements)
+
+- [ ] Binary upload + targeted-server deploy: `POST` artifact endpoint streaming
+      into the content-addressed store, optional `server_id` on deploy (remote
+      = existing queued/agent-converged path, surfaced as pending), dashboard
+      Deployments-tab UI + `turaes app upload` CLI. **Security (non-negotiable):
+      Admin-only** (create/PATCH precedent — Developer upload would hand API-only
+      users host RCE without SSH); per-route body limit + 256MB cap (axum default
+      is 2MB repo-wide); ELF validation; single-pass streaming hash; pending-pin
+      so GC can't reap un-deployed uploads; `app.artifact_upload` audit.
+      **Scope: service binaries v1** (static/command remote stay unimplemented).
+      Deferred: per-org storage quota, static bundles.
+
 ---
 
 ## M5 — Auto-deploy ⏳ (2026-11-29 → 12-12)
@@ -155,6 +168,22 @@ must **not** be pointed here (it resolves to another server).
 - [ ] A push to `main` triggers a deploy and records a delivery.
 - [ ] A `cargo` project builds from Git and deploys without a manual artifact.
 - [ ] Webhook signature failures are rejected with 401 and never deploy.
+
+### Backlog (future improvements) — pull artifacts before building them
+
+- [ ] URL + `expected_sha256` artifact sources (no provider API; control plane
+      pulls once, agents unchanged via the existing hash flow).
+- [ ] GitHub-release sources: tag/`latest` resolution pinned to an immutable
+      digest in the deployment row; `objects.githubusercontent.com` redirect
+      handling.
+- [ ] GitLab packages incl. allowlisted self-hosted instances; org-level sealed
+      provider tokens (minimal scopes). **Security (non-negotiable): strict SSRF
+      host allowlist, no auth forwarding on redirect, per-fetch timeouts, size
+      caps, resolve-then-pin determinism.** Private repos need the token
+      machinery; public-assets-only is the fallback slice.
+- [ ] "Check for updates" (resolve-only preview) vs deploy-from-source;
+      manifest `artifact:` block. Webhooks stay M5 proper. Deferred: note (don't
+      fix) the any-agent-can-fetch-any-blob property.
 
 ---
 
