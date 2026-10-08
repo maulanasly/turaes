@@ -29,8 +29,18 @@ test("runtimeLabel is human", () => {
 
 test("timeAgo", () => {
   assert.equal(timeAgo(1000), "just now");
+  assert.equal(timeAgo(-5000), "just now");
   assert.equal(timeAgo(30000), "30s ago");
   assert.equal(timeAgo(120000), "2m ago");
+  assert.equal(timeAgo(3 * 3600000), "3h ago");
+  assert.equal(timeAgo(23 * 3600000), "23h ago");
+  assert.equal(timeAgo(26 * 3600000), "1d ago");
+  assert.equal(timeAgo(100 * 3600000), "4d ago");
+  assert.equal(timeAgo(6 * 86400000), "6d ago");
+  assert.equal(timeAgo(8 * 86400000), "1w ago");
+  assert.equal(timeAgo(29 * 86400000), "4w ago");
+  assert.equal(timeAgo(30 * 86400000), "1mo ago");
+  assert.equal(timeAgo(45 * 86400000), "2mo ago");
 });
 
 test("fmtRangeLabel", () => {
