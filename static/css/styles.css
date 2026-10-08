@@ -398,3 +398,10 @@ summary { cursor: pointer; color: var(--muted); }
 .menu-list { position: absolute; right: 0; top: 110%; background: var(--panel); border: 1px solid var(--border);
   border-radius: 8px; padding: 6px; display: grid; gap: 4px; z-index: 10; min-width: 120px; }
 .menu-list .btn { width: 100%; text-align: left; }
+
+/* Hairline figures: fixed-ratio stages beside text that stays the carrier.
+   --hairline-plate must equal the surface behind the figure (here --panel);
+   the kernel's injected stylesheet follows the page color-scheme itself. */
+.fig-row { display: flex; gap: 16px; margin: 12px 0 4px; flex-wrap: wrap; align-items: flex-start; }
+.fig { width: 200px; max-width: 100%; --hairline-plate: var(--panel); }
+.fig svg { width: 100%; height: auto; display: block; }

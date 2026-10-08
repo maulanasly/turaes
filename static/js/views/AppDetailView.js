@@ -7,7 +7,9 @@ import { deployConsequences, restartConsequences, stopConsequences, startConsequ
 import { fmtBytes, parseTs, fmtTime, fmtRangeLabel, timeAgo, shortHash, serverName, runtimeLabel } from "../lib/format.js";
 import { APP_TABS, navigate } from "../lib/router.js";
 import { RANGES, DEFAULT_RANGE, normalizeRange, rangeToHours } from "../lib/route.js";
-import { StatusBadge } from "../components/StatusBadge.js";
+import { StatusBadge, statusLabel } from "../components/StatusBadge.js";
+import { HairlineFigure } from "../components/Hairline.js";
+import { beaconValue, slotsValue, slotsInput } from "../lib/figureState.js";
 import { Skeleton } from "../components/Skeleton.js";
 import { Chart } from "../components/Chart.js";
 import { LogViewer } from "../components/LogViewer.js";
@@ -152,12 +154,21 @@ function Overview({ data, range, onRange, updatedAt, loading, onRefresh, activit
     </div>`;
 }
 
-function Deployments({ deployments, onRollbackTo, rollbackNote }) {
+function Deployments({ app, deployments, onRollbackTo, rollbackNote }) {
   if (!deployments) return html`<${Skeleton} lines={3} />`;
-  if (deployments.length === 0) return html`<p class="muted">No deployments yet.</p>`;
+  const slots = slotsInput(app, deployments);
+  const slotsLabel = `Deployment slots for ${app ? app.name : "this app"}: slot ${slots.active} live`
+    + (slots.phase === "empty" ? ", nothing deployed yet"
+      : slots.phase === "progress" ? ", a deploy is in progress"
+      : slots.retained ? ", previous build retained for rollback" : ", up to date");
   const pending = hasPendingDeployment(deployments);
   return html`
-    <div class="table-wrap">
+    <div class="fig-row">
+      <${HairlineFigure} figure="slots" value=${slotsValue(slots.active, slots.phase)} label=${slotsLabel} />
+    </div>
+    ${deployments.length === 0
+      ? html`<p class="muted">No deployments yet.</p>`
+      : html`<div class="table-wrap">
     ${rollbackNote && html`<p class="muted small">${rollbackNote}</p>`}
     ${pending && html`<p class="muted small" role="status">A deployment is still in progress — this list refreshes automatically.</p>`}
     <table class="stacked">
@@ -190,7 +201,7 @@ function Deployments({ deployments, onRollbackTo, rollbackNote }) {
           </tr>`)}
       </tbody>
     </table>
-    </div>`;
+    </div>`}`;
 }
 
 function Environment({ env, appId, reload }) {
@@ -825,6 +836,10 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
               ? html`<span class="mono" title=${latest.artifact_hash || ""}>${shortHash(latest.artifact_hash)} · ${timeAgo(Date.now() - parseTs(latest.started_at))}</span>`
               : html`<span class="muted">never</span>`}</span></div>
           </div>
+          <div class="fig-row">
+            <${HairlineFigure} figure="beacon" value=${beaconValue(app.status)}
+              label=${`Status signal for ${app.name}: ${statusLabel(app.status)}`} />
+          </div>
           ${["stopped", "failed", "unhealthy"].includes(app.status) || app.maintenance
             && html`<p class="muted small">Visitors see the maintenance page while this app isn't running.</p>`}
         </div>
@@ -861,7 +876,7 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
         ${tab === "overview" && html`<${Overview} data=${data} range=${range} onRange=${changeRange}
           updatedAt=${metricsAt} loading=${metricsLoading} onRefresh=${refreshMetrics}
           activity=${activity} appId=${id} />`}
-        ${tab === "deployments" && html`<${Deployments} deployments=${deployments}
+        ${tab === "deployments" && html`<${Deployments} app=${app} deployments=${deployments}
           onRollbackTo=${app.command || app.kind === "static" ? null : rollbackTo}
           rollbackNote=${app.command
             ? "Command apps do not retain prior argv configurations. Restore the desired command in turaes.yaml, run turaes apply, then deploy."
