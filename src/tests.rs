@@ -3798,3 +3798,91 @@ async fn maintenance_toggle_parks_and_restores() {
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(body_json(resp).await["maintenance"], false);
 }
+
+#[tokio::test]
+async fn maintenance_toggle_parks_hostnames_in_router() {
+    use turaes_proxy::ParkedReason;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut state = test_state(dir.path()).await;
+    let router_handle = Arc::new(turaes_proxy::Router::new("localhost", Default::default()));
+    state.proxy_router = Some(router_handle.clone());
+    let router = app::build_router(state.clone());
+
+    let payload = json!({
+        "name": "held",
+        "binary_path": "/srv/held/app",
+        "port": 8400,
+        "domain": "held.test"
+    });
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/apps")
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let created = body_json(resp).await;
+    let id = created["application"]["id"].as_str().unwrap().to_string();
+
+    // Fresh (never deployed, status stopped) parks as Stopped, not routed.
+    crate::routes::apps::refresh_proxy_routes(&state)
+        .await
+        .unwrap();
+    let parked = router_handle.is_parked("held.test").expect("host parked");
+    assert_eq!(parked.app, "held");
+    assert_eq!(parked.reason, ParkedReason::Stopped);
+    assert!(router_handle.resolve("held.test").is_none());
+
+    // Toggle on via the API: the handler itself republishes as Maintenance.
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/default/apps/{id}/maintenance"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"enabled":true}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parked = router_handle.is_parked("held.test").expect("host parked");
+    assert_eq!(parked.reason, ParkedReason::Maintenance);
+
+    // Toggle off falls back to the status-driven reason.
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/default/apps/{id}/maintenance"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"enabled":false}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parked = router_handle.is_parked("held.test").expect("host parked");
+    assert_eq!(parked.reason, ParkedReason::Stopped);
+
+    // A running app restores routes.
+    sqlx::query("UPDATE applications SET status = 'running' WHERE id = ?")
+        .bind(&id)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    crate::routes::apps::refresh_proxy_routes(&state)
+        .await
+        .unwrap();
+    assert!(router_handle.is_parked("held.test").is_none());
+    assert_eq!(router_handle.resolve("held.test").unwrap().port, 8400);
+}
