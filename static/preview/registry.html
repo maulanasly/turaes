@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>turaes — Registry preview (Releases tab)</title>
+<link rel="stylesheet" href="../css/styles.css">
+<style>
+  /* Preview-only scaffolding. No new design tokens: everything below reuses
+     styles.css primitives (panel, resource-row, table.stacked, badge, menu). */
+  .preview-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    border: 1px dashed var(--border); border-radius: 8px; padding: 8px 12px; margin-bottom: 14px; }
+  .channel-row { display: grid; grid-template-columns: minmax(180px, 280px) 1fr auto;
+    gap: 12px; align-items: center; padding: 10px 2px; border-bottom: 1px solid var(--border); }
+  .channel-row:last-child { border-bottom: 0; }
+  .channel-name { font-weight: 700; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+  .channel-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+  .channel-dot.stable { background: var(--ok); }
+  .channel-dot.latest { background: var(--cpu); }
+  .channel-dot.beta { background: var(--mem); }
+  @media (max-width: 640px) {
+    .channel-row { grid-template-columns: 1fr; gap: 6px; }
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <span class="brand"><span aria-hidden="true">▲</span><span>turaes</span></span>
+  <nav class="nav" aria-label="Primary"><ul class="nav-list">
+    <li><a href="#" class="active" aria-current="page">Applications</a></li>
+    <li><a href="#">Servers</a></li>
+  </ul></nav>
+  <div class="controls">
+    <span class="fleet-summary" title="Fleet status"><span class="fleet-item"><strong>2</strong><span>servers</span></span></span>
+    <button class="btn small ghost theme-toggle" id="themeBtn" aria-pressed="false" title="Toggle theme">◐ theme</button>
+    <label class="muted small" for="roleSel">Preview role
+      <select id="roleSel" class="search" aria-label="Preview role">
+        <option value="viewer">viewer</option>
+        <option value="developer" selected>developer</option>
+        <option value="admin">admin</option>
+      </select>
+    </label>
+  </div>
+</header>
+
+<main id="main" tabindex="-1">
+  <div class="preview-bar" role="note">
+    <strong>Preview only</strong>
+    <span class="muted small">Clickable mock of <span class="mono">#/apps/beruang/releases</span> (UX review items 1–2). No backend calls; buttons toast instead of deploying.</span>
+    <span class="muted small">Open via <span class="mono">turaes serve</span> → <span class="mono">/preview/registry.html</span> so <span class="mono">../css/styles.css</span> resolves.</span>
+  </div>
+
+  <section class="panel" aria-labelledby="appName">
+    <div class="panel-head">
+      <div>
+        <span class="muted">← Applications</span>
+        <h1 class="identity" id="appName"><span class="mono">beruang</span> <span class="badge running"><span class="badge-glyph" aria-hidden="true">●</span>running</span></h1>
+        <div class="status-strip" aria-label="Application status">
+          <div class="stat"><span>Server</span><span class="mono">local</span></div>
+          <div class="stat"><span>Route</span><span class="mono">beruang.turaes.rayakala.ink</span></div>
+          <div class="stat"><span>Port</span><span class="mono">:8000</span></div>
+          <div class="stat"><span>Managed by</span><span>systemd</span></div>
+          <div class="stat"><span>Last deploy</span><span class="mono" id="lastDeploy" title="sha256:9f2ac41d04be8b3f0aa11c27d7e54bb8f1c90aa3e4d5f6a7890abcdef123456">v1.2.3 · 2h ago</span></div>
+        </div>
+      </div>
+      <div class="controls">
+        <button class="btn" id="deployStableBtn">Deploy</button>
+        <details class="menu">
+          <summary class="btn ghost" aria-label="More deploy options">Deploy options</summary>
+          <div class="menu-list">
+            <button class="btn small ghost" data-deploy="v1.2.3">Deploy stable…</button>
+            <button class="btn small ghost" data-deploy="v1.3.0-rc.1">Deploy latest…</button>
+            <button class="btn small ghost" id="chooseReleaseBtn">Choose release…</button>
+          </div>
+        </details>
+      </div>
+    </div>
+    <p class="action-note muted small">Deploy restarts the active process; expect a brief interruption. Blue/green health gate applies.</p>
+
+    <nav class="tabs" role="tablist" aria-label="Application sections">
+      <span class="tab-group"><span class="tab-label" aria-hidden="true">Operate</span>
+        <a role="tab" aria-selected="false" href="#">Overview</a>
+        <a role="tab" aria-selected="false" href="#">Logs</a></span>
+      <span class="tab-group"><span class="tab-label" aria-hidden="true">Release</span>
+        <a role="tab" aria-selected="false" href="#">Deployments</a>
+        <a role="tab" aria-selected="true" class="active" href="#">Releases</a>
+        <a role="tab" aria-selected="false" href="#">Activity</a></span>
+      <span class="tab-group"><span class="tab-label" aria-hidden="true">Configure</span>
+        <a role="tab" aria-selected="false" href="#">Environment</a>
+        <a role="tab" aria-selected="false" href="#">Settings</a></span>
+    </nav>
+
+    <div class="tab-body" role="tabpanel">
+      <div class="section-band">
+        <h2>Channels</h2>
+        <span class="muted small" id="freshness" role="status">updated 2m ago · resolve-only check, never deploys</span>
+        <span class="controls" style="margin-left:auto"><button class="btn small ghost" id="checkBtn">Check for updates</button></span>
+      </div>
+      <div role="list" aria-label="Channels">
+        <div class="channel-row" role="listitem">
+          <span class="channel-name"><span class="channel-dot stable" aria-hidden="true"></span><span class="mono">stable → v1.2.3</span></span>
+          <span class="muted small mono">sha256:9f2a…3456 · x86_64 · 18 MB · CI #481 · updated 2h ago</span>
+          <span class="controls"><button class="btn small" data-deploy="v1.2.3">Deploy</button></span>
+        </div>
+        <div class="channel-row" role="listitem">
+          <span class="channel-name"><span class="channel-dot latest" aria-hidden="true"></span><span class="mono">latest → v1.3.0-rc.1</span></span>
+          <span class="muted small mono">sha256:41be…77e9 · x86_64 · 18 MB · CI #482 · updated 12m ago</span>
+          <span class="controls">
+            <button class="btn small" data-deploy="v1.3.0-rc.1">Deploy</button>
+            <button class="btn small ghost admin-only" data-promote="v1.3.0-rc.1">Promote to stable…</button>
+          </span>
+        </div>
+      </div>
+
+      <div class="section-band">
+        <h2>Releases</h2>
+        <span class="muted small">immutable releases · pushed from CI via OIDC, never uploaded here</span>
+      </div>
+      <div class="table-wrap">
+      <table class="stacked">
+        <thead><tr><th>Release</th><th>Build</th><th>Arch</th><th>Size</th><th>Pushed</th><th></th></tr></thead>
+        <tbody>
+          <tr>
+            <td data-label="Release" class="mono">v1.3.0-rc.1 <span class="badge deploying">latest</span></td>
+            <td data-label="Build"><span class="mono">sha256:41be…77e9</span>
+              <button class="btn small ghost" data-copy="sha256:41be07c3d2f54aa891c0d77e4b5c6a90123456789abcdef0123456789abe77e9">Copy</button>
+              <details><summary class="muted small">full id</summary><div class="mono small break">sha256:41be07c3d2f54aa891c0d77e4b5c6a90123456789abcdef0123456789abe77e9</div></details></td>
+            <td data-label="Arch" class="mono">x86_64</td>
+            <td data-label="Size">18 MB</td>
+            <td data-label="Pushed" class="muted">12m ago · CI #482 · a1b2c3d</td>
+            <td class="controls no-label">
+              <button class="btn small" data-deploy="v1.3.0-rc.1">Deploy</button>
+              <button class="btn small ghost admin-only" data-promote="v1.3.0-rc.1">→ stable</button>
+            </td>
+          </tr>
+          <tr>
+            <td data-label="Release" class="mono">v1.2.3 <span class="badge running">stable</span></td>
+            <td data-label="Build"><span class="mono">sha256:9f2a…3456</span>
+              <button class="btn small ghost" data-copy="sha256:9f2ac41d04be8b3f0aa11c27d7e54bb8f1c90aa3e4d5f6a7890abcdef123456">Copy</button>
+              <details><summary class="muted small">full id</summary><div class="mono small break">sha256:9f2ac41d04be8b3f0aa11c27d7e54bb8f1c90aa3e4d5f6a7890abcdef123456</div></details></td>
+            <td data-label="Arch" class="mono">x86_64</td>
+            <td data-label="Size">18 MB</td>
+            <td data-label="Pushed" class="muted">2h ago · CI #481 · e4f5a6b</td>
+            <td class="controls no-label">
+              <button class="btn small" data-deploy="v1.2.3">Deploy</button>
+            </td>
+          </tr>
+          <tr>
+            <td data-label="Release" class="mono">v1.2.2 <span class="badge failed">yanked</span></td>
+            <td data-label="Build"><span class="mono">sha256:77aa…90cc</span>
+              <button class="btn small ghost" data-copy="sha256:77aa11c04be8b3f0aa11c27d7e54bb8f1c90aa3e4d5f6a7890abcdef1290cc">Copy</button></td>
+            <td data-label="Arch" class="mono">x86_64</td>
+            <td data-label="Size">18 MB</td>
+            <td data-label="Pushed" class="muted">2d ago · CI #477</td>
+            <td class="controls no-label">
+              <button class="btn small" disabled title="Yanked — hidden from stable/latest. Existing deploys keep running.">Deploy</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+      <p class="muted small">Release rows are immutable; yanking hides a release from channels without deleting bytes (GC keeps pinned builds until grace expires).</p>
+
+      <div class="callout" style="margin-top:14px">
+        <strong>No releases yet? Push from CI.</strong>
+        <ul>
+          <li>The repo must be allowlisted for this app; pushes mint a 10-minute OIDC token — no long-lived secrets.</li>
+          <li class="mono">gh workflow run build.yml --ref main</li>
+        </ul>
+      </div>
+
+      <div class="section-band"><h2>Platform</h2><span class="muted small">operator view — same release model, reserved namespace</span></div>
+      <div class="callout">
+        <strong>turaes v0.1.4 (x86_64) · edge v0.1.4</strong>
+        <ul>
+          <li>stable → v0.1.4 · latest → v0.1.5-rc.2</li>
+          <li>Install: <span class="mono">curl …/releases/v0.1.4/manifest | sh</span> · bootstrap: <span class="mono">turaes server bootstrap --turaes-version stable</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="modal-backdrop" id="deployModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="deployTitle">
+    <h2 id="deployTitle">Deploy beruang?</h2>
+    <p class="muted small" id="deploySummary">v1.3.0-rc.1 (sha256:41be…77e9, x86_64, 18 MB, CI #482)</p>
+    <label>Release
+      <select id="deploySel">
+        <option value="v1.3.0-rc.1">latest — v1.3.0-rc.1</option>
+        <option value="v1.2.3">stable — v1.2.3 (current)</option>
+      </select>
+    </label>
+    <div class="confirm-consequences"><strong>This will</strong>
+      <ul><li>Restart the active process; expect a brief interruption.</li><li>Run the blue/green health gate before cutover.</li></ul>
+    </div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="deployCancel">Cancel</button>
+      <button class="btn" id="deployConfirm">Deploy</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="promoteModal" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="promoteTitle">
+    <h2 id="promoteTitle">Promote release?</h2>
+    <p class="muted small" id="promoteSummary">Move channel pointer. Existing deploys keep running.</p>
+    <label>Channel
+      <select id="promoteSel"><option>stable</option><option>beta</option></select>
+    </label>
+    <div class="modal-actions">
+      <button class="btn ghost" id="promoteCancel">Cancel</button>
+      <button class="btn" id="promoteConfirm">Promote</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast-host" id="toasts" aria-live="polite"></div>
+
+<script>
+(function () {
+  var toasts = document.getElementById("toasts");
+  function toast(kind, msg) {
+    var el = document.createElement("div");
+    el.className = "toast " + kind;
+    el.setAttribute("role", kind === "error" ? "alert" : "status");
+    var span = document.createElement("span");
+    span.textContent = msg;
+    var x = document.createElement("button");
+    x.className = "toast-x";
+    x.textContent = "✕";
+    x.setAttribute("aria-label", "Dismiss");
+    x.onclick = function () { el.remove(); };
+    el.appendChild(span);
+    el.appendChild(x);
+    toasts.appendChild(el);
+    setTimeout(function () { if (el.isConnected) el.remove(); }, 6000);
+  }
+
+  // Theme toggle mirrors index.html localStorage behaviour.
+  var root = document.documentElement;
+  try { root.dataset.theme = localStorage.getItem("turaes-theme") || root.dataset.theme || "dark"; } catch (e) {}
+  var themeBtn = document.getElementById("themeBtn");
+  function syncTheme() { themeBtn.setAttribute("aria-pressed", root.dataset.theme === "light" ? "true" : "false"); }
+  themeBtn.onclick = function () {
+    root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("turaes-theme", root.dataset.theme); } catch (e) {}
+    syncTheme();
+  };
+  syncTheme();
+
+  // Role gating preview: viewer/developer see releases + deploy; promote is admin-only.
+  var roleSel = document.getElementById("roleSel");
+  function syncRole() {
+    var admin = roleSel.value === "admin";
+    document.querySelectorAll(".admin-only").forEach(function (b) {
+      b.hidden = !admin;
+    });
+    if (!admin) closeModal(promoteModal);
+  }
+  roleSel.onchange = function () {
+    syncRole();
+    toast("info", "Preview role: " + roleSel.value + (roleSel.value === "admin" ? " — promote visible" : " — promote hidden"));
+  };
+  syncRole();
+
+  // Modals: focus confirm on open, Escape closes, backdrop click closes.
+  var deployModal = document.getElementById("deployModal");
+  var promoteModal = document.getElementById("promoteModal");
+  var deploySel = document.getElementById("deploySel");
+  var deploySummary = document.getElementById("deploySummary");
+  var promoteSummary = document.getElementById("promoteSummary");
+  var lastFocus = null;
+  var META = {
+    "v1.3.0-rc.1": "v1.3.0-rc.1 (sha256:41be…77e9, x86_64, 18 MB, CI #482)",
+    "v1.2.3": "v1.2.3 (sha256:9f2a…3456, x86_64, 18 MB, CI #481)"
+  };
+  function openModal(m) {
+    lastFocus = document.activeElement;
+    m.hidden = false;
+    var btn = m.querySelector(".modal-actions .btn:not(.ghost)");
+    if (btn) btn.focus();
+  }
+  function closeModal(m) {
+    m.hidden = true;
+    if (lastFocus && lastFocus.focus) { try { lastFocus.focus(); } catch (e) {} }
+  }
+  [deployModal, promoteModal].forEach(function (m) {
+    m.addEventListener("click", function (e) { if (e.target === m) closeModal(m); });
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { closeModal(deployModal); closeModal(promoteModal); }
+  });
+
+  function openDeploy(version) {
+    if (version && deploySel.querySelector('option[value="' + version + '"]')) deploySel.value = version;
+    deploySummary.textContent = META[deploySel.value] || deploySel.value;
+    openModal(deployModal);
+  }
+  deploySel.onchange = function () { deploySummary.textContent = META[deploySel.value] || deploySel.value; };
+  document.querySelectorAll("[data-deploy]").forEach(function (b) {
+    b.addEventListener("click", function () { openDeploy(b.getAttribute("data-deploy")); });
+  });
+  document.getElementById("deployStableBtn").addEventListener("click", function () { openDeploy("v1.2.3"); });
+  document.getElementById("chooseReleaseBtn").addEventListener("click", function (e) {
+    e.preventDefault();
+    openDeploy(deploySel.value);
+  });
+  document.getElementById("deployCancel").onclick = function () { closeModal(deployModal); };
+  document.getElementById("deployConfirm").onclick = function () {
+    closeModal(deployModal);
+    document.getElementById("lastDeploy").textContent = deploySel.value + " · just now";
+    toast("success", "Deployed beruang " + deploySel.value + " (preview — no backend call)");
+  };
+
+  var pendingPromote = null;
+  document.querySelectorAll("[data-promote]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      pendingPromote = b.getAttribute("data-promote");
+      promoteSummary.textContent = pendingPromote + " → " + document.getElementById("promoteSel").value + ". Existing deploys keep running.";
+      openModal(promoteModal);
+    });
+  });
+  document.getElementById("promoteCancel").onclick = function () { closeModal(promoteModal); };
+  document.getElementById("promoteConfirm").onclick = function () {
+    closeModal(promoteModal);
+    toast("success", "Promoted " + (pendingPromote || "") + " to " + document.getElementById("promoteSel").value + " (preview)");
+  };
+
+  document.querySelectorAll("[data-copy]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var v = b.getAttribute("data-copy");
+      function done() { toast("success", "Build id copied"); }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(v).then(done, function () { toast("error", "Copy failed — select the id manually"); });
+      } else { toast("error", "Copy failed — select the id manually"); }
+    });
+  });
+
+  document.getElementById("checkBtn").addEventListener("click", function () {
+    var f = document.getElementById("freshness");
+    f.textContent = "checking…";
+    setTimeout(function () {
+      f.textContent = "updated just now · resolve-only check, never deploys";
+      toast("info", "Up to date — latest is v1.3.0-rc.1");
+    }, 600);
+  });
+})();
+</script>
+</body>
+</html>
