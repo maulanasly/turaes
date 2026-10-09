@@ -310,6 +310,41 @@ Each template carries `slug`, `name`, `description`, `kind` and a `defaults`
 object whose keys map onto wizard draft fields (`#/apps?template=<slug>`
 opens the create form prefilled). Unknown keys are ignored.
 
+## Registry
+
+Versioned binary distribution for CI pushes. A push carries **bytes +
+provenance only** — the app record stays the sole authority for runtime
+config (port, health, domain, env): runtime-flavored push fields are ignored
+and reported back as `ignored_hints`, never applied. Deploys resolve
+`version`/`channel` to an immutable content hash and join the existing
+deploy path there. Two package shapes: a single ELF binary (raw bytes), or
+a gzip tarball with a top-level `manifest.json` (allowlisted keys `name`,
+`version`, `arch`, `commit`, `files`; query fields win, conflicts are `422`).
+
+| Method | Path | Role | Description |
+|---|---|---|---|
+| `POST` | `/api/v1/orgs/{org}/registry/links` | developer | Link a CI repo (`{application_id, repo: owner/name}`) |
+| `DELETE` | `/api/v1/orgs/{org}/registry/links?application_id=&repo=` | developer | Unlink a CI repo |
+| `GET` | `/api/v1/orgs/{org}/registry/{app}/links` | viewer | Linked CI repos |
+| `POST` | `/api/v1/orgs/{org}/registry/artifacts?app=&repo=&version=&commit=&arch=&build_url=&notes=` | developer | Push bytes (raw body, 256 MiB cap); `version` creates a release on `latest` |
+| `POST` | `/api/v1/orgs/{org}/registry/releases` | developer | Pin a stored hash (`{application_id, version, artifact_hash, …}`) |
+| `POST` | `/api/v1/orgs/{org}/registry/releases/{id}/promote` | admin | Move a channel pointer (`{channel}`) |
+| `POST` | `/api/v1/orgs/{org}/registry/releases/{id}/yank` | admin | Hide a release from every channel (bytes kept) |
+| `GET` | `/api/v1/orgs/{org}/registry/{app}/releases` | viewer | `{releases: [...], channels: [...]}` |
+| `GET` | `/api/v1/orgs/{org}/registry/{app}/resolve?version=&channel=` | viewer | Preview the pinned hash without deploying |
+| `POST` | `/api/v1/orgs/{org}/apps/{id}/deploy` | developer | Now accepts `{version}` or `{channel}` (exactly one); no body is the classic redeploy |
+
+Pushes require the repo to be linked (`403` otherwise); versions are strict
+semver and immutable per app (`409` on reuse); yanked releases resolve to
+`404`. Uploads are audited as `artifact.push` / `release.push`, channel
+moves as `release.promote` / `release.yank`. Example CI push:
+
+```bash
+curl -X POST 'https://turaes.rayakala.ink/api/v1/orgs/default/registry/artifacts?app=kalkulator&repo=maulanasly/kalkulator&version=1.0.0' \
+  -H "Authorization: Bearer $TURAES_TOKEN" \
+  --data-binary @target/release/kalkulator
+```
+
 ## Servers
 
 Nodes are platform-global infrastructure, so these routes stay outside the org

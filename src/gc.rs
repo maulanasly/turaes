@@ -1,7 +1,8 @@
-//! Artifact garbage collection: delete store blobs no deployment references.
+//! Artifact garbage collection: delete store blobs nothing references.
 //!
 //! A blob is *referenced* when its hash appears as `deployments.artifact_hash`
-//! (or the never-written `previous_artifact`, included defensively). Anything
+//! (or the never-written `previous_artifact`, included defensively) or is
+//! pinned by the registry metadata table. Anything else under
 //! else under `{artifact_dir}/sha256/` is unreachable — rollback can never
 //! name it — and is safe to delete. Two guards keep collection conservative:
 //! files younger than a grace period are skipped (a deploy stores the blob
@@ -33,12 +34,16 @@ pub struct GcReport {
     pub blobs_kept: usize,
 }
 
-/// Hashes any deployment row still names.
+/// Hashes any deployment row still names, plus every blob the registry
+/// metadata table pins (pushed artifacts and bundle members, even before
+/// their first deploy).
 async fn referenced_hashes(state: &AppState) -> Result<HashSet<String>> {
     let rows: Vec<Option<String>> = sqlx::query_scalar(
         "SELECT artifact_hash FROM deployments WHERE artifact_hash IS NOT NULL \
          UNION \
-         SELECT previous_artifact FROM deployments WHERE previous_artifact IS NOT NULL",
+         SELECT previous_artifact FROM deployments WHERE previous_artifact IS NOT NULL \
+         UNION \
+         SELECT hash FROM artifacts WHERE hash IS NOT NULL",
     )
     .fetch_all(&state.pool)
     .await?;
