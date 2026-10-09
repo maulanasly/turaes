@@ -28,6 +28,7 @@
   <span class="brand"><span aria-hidden="true">▲</span><span>turaes</span></span>
   <nav class="nav" aria-label="Primary"><ul class="nav-list">
     <li><a href="#" class="active" aria-current="page">Applications</a></li>
+    <li><a href="#" id="navCatalog">Catalog</a></li>
     <li><a href="#">Servers</a></li>
   </ul></nav>
   <div class="controls">
@@ -46,11 +47,15 @@
 <main id="main" tabindex="-1">
   <div class="preview-bar" role="note">
     <strong>Preview only</strong>
-    <span class="muted small">Clickable mock of <span class="mono">#/apps/beruang/releases</span> (UX review items 1–2). No backend calls; buttons toast instead of deploying.</span>
-    <span class="muted small">Open via <span class="mono">turaes serve</span> → <span class="mono">/preview/registry.html</span> so <span class="mono">../css/styles.css</span> resolves.</span>
+    <span class="seg" role="radiogroup" aria-label="Preview state">
+      <button type="button" role="radio" id="stateReleases" aria-checked="true" class="active">Releases</button>
+      <button type="button" role="radio" id="stateCatalog" aria-checked="false">Catalog</button>
+    </span>
+    <span class="muted small" id="previewHint">Clickable mock of <span class="mono">#/apps/beruang/releases</span> (UX review items 1–2). No backend calls; buttons toast instead of deploying.</span>
+    <span class="muted small">Open via <span class="mono">turaes serve</span> → <span class="mono">/preview/registry.html</span> so <span class="mono">../css/styles.css</span> resolves. Deep-link states: <span class="mono">?state=releases|catalog</span>.</span>
   </div>
 
-  <section class="panel" aria-labelledby="appName">
+  <section class="panel" id="releasesSection" aria-labelledby="appName">
     <div class="panel-head">
       <div>
         <span class="muted">← Applications</span>
@@ -179,6 +184,69 @@
       </div>
     </div>
   </section>
+
+  <section class="panel" id="catalogSection" aria-labelledby="catalogName" hidden>
+    <div class="panel-head">
+      <div>
+        <h1 id="catalogName">Catalog</h1>
+        <p class="action-note muted small">Your applications plus one-click starters. Templates open the create wizard prefilled — nothing is created until you confirm.</p>
+      </div>
+      <div class="controls">
+        <div class="seg" role="radiogroup" aria-label="Catalog sections">
+          <button type="button" role="radio" aria-checked="true" class="active">All</button>
+          <button type="button" role="radio" aria-checked="false">Applications</button>
+          <button type="button" role="radio" aria-checked="false">Templates</button>
+        </div>
+        <input class="search" placeholder="Search…" aria-label="Search catalog" />
+      </div>
+    </div>
+    <div class="section-band"><h2>Your applications</h2><span class="muted small">2 apps</span></div>
+    <div class="table-wrap"><table class="stacked">
+      <thead><tr><th>Status</th><th>Name</th><th>Server</th><th>Updated</th><th></th></tr></thead>
+      <tbody>
+        <tr>
+          <td data-label="Status"><span class="badge running"><span class="badge-glyph" aria-hidden="true">●</span>running</span></td>
+          <td data-label="Name"><a class="mono" href="#">beruang</a></td>
+          <td data-label="Server">local</td>
+          <td data-label="Updated" class="muted">2h ago</td>
+          <td class="controls no-label"><button class="btn small ghost" data-toast="Open beruang (preview)">Open</button></td>
+        </tr>
+        <tr>
+          <td data-label="Status"><span class="badge stopped"><span class="badge-glyph" aria-hidden="true">●</span>stopped</span></td>
+          <td data-label="Name"><a class="mono" href="#">kalkulator</a></td>
+          <td data-label="Server">local</td>
+          <td data-label="Updated" class="muted">3d ago</td>
+          <td class="controls no-label"><button class="btn small ghost" data-toast="Open kalkulator (preview)">Open</button></td>
+        </tr>
+      </tbody>
+    </table></div>
+    <div class="section-band"><h2>Templates</h2><span class="muted small">one-click starters</span></div>
+    <div class="grid">
+      <div class="card">
+        <h3><span>Rust web service</span></h3>
+        <div class="stat"><span>Type</span><span>Web service</span></div>
+        <div class="stat"><span>About</span><span>Long-running HTTP service with health and metrics endpoints.</span></div>
+        <div class="controls" style="margin-top:8px"><button class="btn small" data-toast="Prefilled from the Rust web service template (preview)">Use template</button></div>
+      </div>
+      <div class="card">
+        <h3><span>Static site</span></h3>
+        <div class="stat"><span>Type</span><span>Static site</span></div>
+        <div class="stat"><span>About</span><span>Directory of files served by turaes itself.</span></div>
+        <div class="controls" style="margin-top:8px"><button class="btn small" data-toast="Prefilled from the Static site template (preview)">Use template</button></div>
+      </div>
+      <div class="card">
+        <h3><span>Background worker</span></h3>
+        <div class="stat"><span>Type</span><span>Background worker</span></div>
+        <div class="stat"><span>About</span><span>Supervised process with no port and no route.</span></div>
+        <div class="controls" style="margin-top:8px"><button class="btn small" data-toast="Prefilled from the Background worker template (preview)">Use template</button></div>
+      </div>
+    </div>
+    <div class="section-band"><h2>Platform</h2></div>
+    <div class="callout" role="note">
+      <strong>turaes v0.1.0</strong>
+      <ul><li>Control plane and edge versions are reported by the serving binary; versioned platform releases arrive with the registry.</li></ul>
+    </div>
+  </section>
 </main>
 
 <div class="modal-backdrop" id="deployModal" hidden>
@@ -237,7 +305,40 @@
     setTimeout(function () { if (el.isConnected) el.remove(); }, 6000);
   }
 
-  // Theme toggle mirrors index.html localStorage behaviour.
+  // Preview state: ?state=releases (default) or ?state=catalog.
+  var releasesSection = document.getElementById("releasesSection");
+  var catalogSection = document.getElementById("catalogSection");
+  var stateReleases = document.getElementById("stateReleases");
+  var stateCatalog = document.getElementById("stateCatalog");
+  var previewHint = document.getElementById("previewHint");
+  function setState(s) {
+    var catalog = s === "catalog";
+    releasesSection.hidden = catalog;
+    catalogSection.hidden = !catalog;
+    stateReleases.classList.toggle("active", !catalog);
+    stateReleases.setAttribute("aria-checked", String(!catalog));
+    stateCatalog.classList.toggle("active", catalog);
+    stateCatalog.setAttribute("aria-checked", String(catalog));
+    previewHint.innerHTML = catalog
+      ? 'Clickable mock of <span class="mono">#/catalog</span> (P0: templates + platform).'
+      : 'Clickable mock of <span class="mono">#/apps/beruang/releases</span> (UX review items 1–2). No backend calls; buttons toast instead of deploying.';
+    document.title = catalog ? "turaes — Catalog preview" : "turaes — Registry preview (Releases tab)";
+    try {
+      var url = new URL(location.href);
+      url.searchParams.set("state", catalog ? "catalog" : "releases");
+      history.replaceState(null, "", url);
+    } catch (e) {}
+  }
+  stateReleases.onclick = function () { setState("releases"); };
+  stateCatalog.onclick = function () { setState("catalog"); };
+  document.getElementById("navCatalog").onclick = function (e) { e.preventDefault(); setState("catalog"); };
+  try {
+    if (new URLSearchParams(location.search).get("state") === "catalog") setState("catalog");
+  } catch (e) {}
+
+  document.querySelectorAll("[data-toast]").forEach(function (b) {
+    b.addEventListener("click", function () { toast("info", b.getAttribute("data-toast")); });
+  });
   var root = document.documentElement;
   try { root.dataset.theme = localStorage.getItem("turaes-theme") || root.dataset.theme || "dark"; } catch (e) {}
   var themeBtn = document.getElementById("themeBtn");

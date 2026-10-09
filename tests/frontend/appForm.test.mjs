@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  KINDS, STEPS, FIELD_STEPS, emptyDraft, kindInfo, stepError, stepErrors, buildPayload, reviewGroups,
+  KINDS, STEPS, FIELD_STEPS, emptyDraft, applyTemplate, kindInfo, stepError, stepErrors, buildPayload, reviewGroups,
   createConsequences, deployConsequences, restartConsequences, stopConsequences,
   startConsequences, rollbackConsequences, lifecycleSummary, mapIssuesToFields,
   validateCommandLines, parseCommandArgv, textPatch, argvPatch,
@@ -188,4 +188,27 @@ test("lifecycle consequences are always explained", () => {
   assert.ok(rollbackConsequences({ kind: "service" }, "deadbeef").join(" ").includes("deadbeef"));
   assert.match(rollbackConsequences({ kind: "worker" }).join(" "), /no HTTP health check/);
   assert.match(lifecycleSummary({ kind: "worker" }), /no HTTP route/);
+});
+
+test("applyTemplate overlays known draft fields and validates kind", () => {
+  const d = emptyDraft("s1");
+  const applied = applyTemplate(d, { kind: "static", port: 8001, description: "Docs", bogus: 1 });
+  assert.equal(d.kind, "static");
+  assert.equal(d.port, 8001);
+  assert.equal(d.description, "Docs");
+  assert.equal(d.server_id, "s1");
+  assert.ok(!("bogus" in d));
+  assert.ok(applied.includes("kind") && applied.includes("port"));
+});
+
+test("applyTemplate ignores bad kinds and non-objects", () => {
+  const d = emptyDraft();
+  assert.deepEqual(applyTemplate(d, { kind: "bogus" }), []);
+  assert.equal(d.kind, "service");
+  assert.deepEqual(applyTemplate(d, null), []);
+  assert.deepEqual(applyTemplate(d, "x"), []);
+  const d2 = emptyDraft();
+  applyTemplate(d2, { server_id: "elsewhere", port: "8000" });
+  assert.equal(d2.server_id, "local");
+  assert.equal(d2.port, "8000");
 });

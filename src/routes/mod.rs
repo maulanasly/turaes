@@ -24,6 +24,7 @@ pub mod app_validation;
 pub mod apps;
 pub mod artifacts;
 pub mod audit;
+pub mod catalog;
 pub mod deployments;
 pub mod domains;
 pub mod env;

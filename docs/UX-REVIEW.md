@@ -55,6 +55,7 @@ barely surfaced.
 |---|---|
 | `#/apps` | Applications |
 | `#/apps/:id/:tab` | App detail — `overview` / `deployments` / `environment` / `logs` / `settings` |
+| `#/catalog` | Catalog — org apps plus one-click starter templates (`?template=` prefills the create wizard) |
 | `#/servers` | Servers |
 | `#/servers/:id` | Server detail (agent status + its apps) |
 

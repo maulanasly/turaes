@@ -295,6 +295,21 @@ The deploy is idempotent. On failure the app is marked `failed` and the error is
 > Stats/visitors are populated by the monitoring loop (M3); in M0 the arrays are
 > empty until that loop lands.
 
+## Catalog
+
+Curated starter templates for one-click app creation, plus the serving
+platform version. Templates are platform-global (identical for every org);
+the route is org-scoped only so membership is enforced like every other
+read. Per-app release roll-ups join this response in P1.
+
+| Method | Path | Role | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/orgs/{org}/catalog` | viewer | `{templates: [...], platform: {version}}` |
+
+Each template carries `slug`, `name`, `description`, `kind` and a `defaults`
+object whose keys map onto wizard draft fields (`#/apps?template=<slug>`
+opens the create form prefilled). Unknown keys are ignored.
+
 ## Servers
 
 Nodes are platform-global infrastructure, so these routes stay outside the org
