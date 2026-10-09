@@ -53,6 +53,28 @@ pub fn build_router(state: AppState) -> Router {
         .route("/deployments/{id}", get(routes::deployments::get))
         .route("/audit", get(routes::audit::list))
         .route("/catalog", get(routes::catalog::get))
+        .route(
+            "/registry/links",
+            post(routes::registry::create_link).delete(routes::registry::delete_link),
+        )
+        // Raw-bytes upload: disable the repo-wide 2 MiB default; the
+        // handler enforces the 256 MiB registry ceiling while streaming.
+        .route(
+            "/registry/artifacts",
+            post(routes::registry::upload).layer(axum::extract::DefaultBodyLimit::disable()),
+        )
+        .route("/registry/releases", post(routes::registry::create_release))
+        .route(
+            "/registry/releases/{id}/promote",
+            post(routes::registry::promote),
+        )
+        .route("/registry/releases/{id}/yank", post(routes::registry::yank))
+        .route("/registry/{app}/links", get(routes::registry::list_links))
+        .route(
+            "/registry/{app}/releases",
+            get(routes::registry::list_releases),
+        )
+        .route("/registry/{app}/resolve", get(routes::registry::resolve))
         .route("/alerts", get(routes::alerts::list))
         .route("/alerts/{id}/resolve", post(routes::alerts::resolve))
         .route("/quota", get(routes::quotas::get).put(routes::quotas::put))

@@ -23,6 +23,7 @@ use crate::audit;
 use crate::authz::{self, CurrentUser, Role};
 use crate::routes::app_validation::{self, CheckedDraft, PreflightReport};
 use crate::routes::quotas;
+use crate::routes::registry::{self, DeployBody};
 use crate::state::AppState;
 use turaes_core::FieldIssue;
 
@@ -1013,14 +1014,61 @@ pub async fn delete(
 }
 
 /// `POST /api/v1/orgs/{org}/apps/{id}/deploy`
+///
+/// Without a body, redeploys the app's configured binary path (existing
+/// behavior). With `{version}` or `{channel}`, deploys the pinned registry
+/// hash instead (registry holds service binaries in v1).
 pub async fn deploy(
     State(state): State<AppState>,
     Extension(user): Extension<CurrentUser>,
     Path((org, id)): Path<(String, String)>,
+    body: Option<Json<DeployBody>>,
 ) -> Result<Json<serde_json::Value>> {
     let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
     let app = fetch_org_app(&state.pool, &org_id, &id).await?;
-    let (dep_id, out) = deploy_app(&state, &app).await?;
+    // A body naming neither version nor channel is the classic redeploy.
+    let pinned = body.and_then(|b| {
+        let b = b.0;
+        match (b.version, b.channel) {
+            (None, None) => None,
+            (version, channel) => Some((version, channel)),
+        }
+    });
+    let (dep_id, out, version) = match pinned {
+        None => {
+            let (dep_id, out) = deploy_app(&state, &app).await?;
+            (dep_id, out, None)
+        }
+        Some((version, channel)) => {
+            if app.kind != "service" || app.command.is_some() {
+                return Err(Error::BadRequest(format!(
+                    "versioned deploys hold service binaries in v1; '{}' is {}",
+                    app.name,
+                    if app.command.is_some() {
+                        "a command app"
+                    } else {
+                        "not a service"
+                    }
+                )));
+            }
+            let (release, hash) = registry::resolve_release(
+                &state.pool,
+                &org_id,
+                &app.id,
+                version.as_deref(),
+                channel.as_deref(),
+            )
+            .await?;
+            if !state.artifacts.has(&hash) {
+                return Err(Error::NotFound(format!(
+                    "release {} pins {} which is not in the store",
+                    release.version, hash
+                )));
+            }
+            let (dep_id, out) = deploy_app_hash(&state, &app, &hash).await?;
+            (dep_id, out, Some(release.version))
+        }
+    };
     audit::record(
         &state,
         Some(&org_id),
@@ -1029,13 +1077,14 @@ pub async fn deploy(
         "app.deploy",
         Some("deployment"),
         Some(&dep_id),
-        Some(&serde_json::json!({"artifact": out.artifact_hash}).to_string()),
+        Some(&serde_json::json!({"artifact": out.artifact_hash, "version": version}).to_string()),
     )
     .await?;
     Ok(Json(serde_json::json!({
         "deployment_id": dep_id,
         "state": out.state,
         "artifact_hash": out.artifact_hash,
+        "version": version,
         "log": out.log,
     })))
 }
@@ -1097,10 +1146,22 @@ pub async fn deploy_app(state: &AppState, app: &Application) -> Result<(String, 
         .put_file(std::path::Path::new(&app.binary_path))
         .await?;
 
+    deploy_app_hash(state, app, &hash).await
+}
+
+/// Deploy an already-stored content hash, sharing the local/remote branch
+/// between classic redeploys (hash just snapshotted) and registry version
+/// pins (hash resolved from a release). Callers must ensure the blob is in
+/// the store.
+pub async fn deploy_app_hash(
+    state: &AppState,
+    app: &Application,
+    hash: &str,
+) -> Result<(String, DeployOutcome)> {
     if app.server_id == "local" {
         let source = state
             .artifacts
-            .path_for(&hash)?
+            .path_for(hash)?
             .to_string_lossy()
             .to_string();
         return deploy_app_source(state, app, source).await;
@@ -1114,7 +1175,7 @@ pub async fn deploy_app(state: &AppState, app: &Application) -> Result<(String, 
     )
     .bind(&dep_id)
     .bind(&app.id)
-    .bind(&hash)
+    .bind(hash)
     .execute(&state.pool)
     .await?;
     sqlx::query(
@@ -1127,7 +1188,7 @@ pub async fn deploy_app(state: &AppState, app: &Application) -> Result<(String, 
     Ok((
         dep_id,
         DeployOutcome {
-            artifact_hash: hash,
+            artifact_hash: hash.to_string(),
             state: RunState::Unknown,
             log: "queued for agent".into(),
         },

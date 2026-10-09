@@ -33,6 +33,7 @@ pub mod logs;
 pub mod me;
 pub mod orgs;
 pub mod quotas;
+pub mod registry;
 pub mod servers;
 pub mod static_assets;
 pub mod tokens;

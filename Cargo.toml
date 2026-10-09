@@ -85,6 +85,10 @@ urlencoding = "2"
 # static assets
 rust-embed = "8"
 
+# registry bundle intake (gzip + tar, pure Rust, no system deps)
+flate2 = "1"
+tar = "0.4"
+
 # proxy (optional, enabled in turaes-proxy with the `pingora` feature)
 pingora = "0.9"
 arc-swap = "1"
@@ -127,6 +131,9 @@ tonic = { version = "0.12", features = ["transport"] }
 prost = "0.13"
 
 rust-embed.workspace = true
+
+flate2.workspace = true
+tar.workspace = true
 
 [build-dependencies]
 tonic-build = "0.12"

@@ -3887,6 +3887,616 @@ async fn maintenance_toggle_parks_hostnames_in_router() {
     assert_eq!(router_handle.resolve("held.test").unwrap().port, 8400);
 }
 
+// --- Registry -----------------------------------------------------------
+
+/// Minimal ELF bytes with the given machine id (uploads require ELF).
+fn elf_bytes(machine: u16) -> Vec<u8> {
+    let mut b = vec![0u8; 64];
+    b[0..4].copy_from_slice(b"\x7fELF");
+    b[4] = 2;
+    b[5] = 1;
+    b[6] = 1;
+    b[16..18].copy_from_slice(&2u16.to_le_bytes());
+    b[18..20].copy_from_slice(&machine.to_le_bytes());
+    b
+}
+
+/// gzip tarball with a top-level manifest.json plus `files/` members.
+fn bundle_bytes(manifest: &str, files: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    use std::io::Write;
+    let mut tar_data = Vec::new();
+    {
+        let mut tar = tar::Builder::new(&mut tar_data);
+        let mut header = tar::Header::new_gnu();
+        header.set_size(manifest.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append_data(&mut header, "manifest.json", manifest.as_bytes())
+            .unwrap();
+        for (name, bytes) in files {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            tar.append_data(&mut header, format!("files/{name}"), &bytes[..])
+                .unwrap();
+        }
+        tar.finish().unwrap();
+    }
+    let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    enc.write_all(&tar_data).unwrap();
+    enc.finish().unwrap()
+}
+
+/// Remote app (agent-reconciled, so deploys queue without executing) with a
+/// linked CI repo. Returns the app id.
+async fn registry_app(state: &AppState, router: &axum::Router, name: &str) -> String {
+    sqlx::query(
+        "INSERT OR IGNORE INTO servers (id, name, address) VALUES ('edge1', 'edge1', '10.0.0.1')",
+    )
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    let payload = json!({
+        "name": name,
+        "binary_path": format!("/srv/{name}/bin"),
+        "port": 19000,
+        "server_id": "edge1",
+    });
+    let created = body_json(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/orgs/default/apps")
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    let id = created["application"]["id"].as_str().unwrap().to_string();
+    let link = json!({"application_id": id, "repo": "acme/regapp"});
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/registry/links")
+                .header("content-type", "application/json")
+                .body(Body::from(link.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    id
+}
+
+fn upload_uri(app: &str, query: &str) -> String {
+    format!("/api/v1/orgs/default/registry/artifacts?app={app}&repo=acme%2Fregapp{query}")
+}
+
+#[tokio::test]
+async fn registry_push_binary_creates_release_on_latest() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+    let id = registry_app(&state, &router, "regpush").await;
+
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(upload_uri("regpush", "&version=1.0.0&commit=abc123"))
+                .body(Body::from(elf_bytes(62)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = body_json(resp).await;
+    assert_eq!(body["release"]["version"], "1.0.0");
+    assert_eq!(body["release"]["channel"], "latest");
+    assert!(body["artifact"]["hash"]
+        .as_str()
+        .unwrap()
+        .starts_with("sha256:"));
+    assert_eq!(body["artifact"]["arch"], "x86_64");
+    assert!(body["ignored_hints"].as_array().unwrap().is_empty());
+
+    // Listed with its channel pointer; resolve pins the same hash.
+    let listed = body_json(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/orgs/default/registry/{id}/releases"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(listed["releases"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["channels"][0]["channel"], "latest");
+    assert_eq!(listed["channels"][0]["version"], "1.0.0");
+    let resolved = body_json(
+        router
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/orgs/default/registry/{id}/resolve?channel=latest"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(resolved["hash"], body["artifact"]["hash"]);
+}
+
+#[tokio::test]
+async fn registry_deploy_by_version_queues_remote_hash() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+    let id = registry_app(&state, &router, "regdeploy").await;
+    let pushed = body_json(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(upload_uri("regdeploy", "&version=2.1.0"))
+                    .body(Body::from(elf_bytes(183)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    let hash = pushed["artifact"]["hash"].as_str().unwrap().to_string();
+
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/default/apps/{id}/deploy"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"version":"2.1.0"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let out = body_json(resp).await;
+    assert_eq!(out["version"], "2.1.0");
+    assert_eq!(out["artifact_hash"], hash);
+    // Remote path queues without executing: deployment row pins the hash.
+    let row: Option<String> = sqlx::query_scalar(
+        "SELECT artifact_hash FROM deployments WHERE application_id = ? ORDER BY rowid DESC LIMIT 1",
+    )
+    .bind(&id)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap()
+    .flatten();
+    assert_eq!(row, Some(hash));
+
+    // Unknown versions and yanked channels never deploy.
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/default/apps/{id}/deploy"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"version":"9.9.9"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/default/apps/{id}/deploy"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"version":"2.1.0","channel":"stable"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn registry_push_rejects_unlinked_repo_and_bad_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+    registry_app(&state, &router, "regreject").await;
+
+    // Unlinked repo: forbidden with a linking hint.
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/registry/artifacts?app=regreject&repo=acme%2Fstranger&version=1.0.0")
+                .body(Body::from(elf_bytes(62)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // Bad semver names the field.
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(upload_uri("regreject", "&version=latest"))
+                .body(Body::from(elf_bytes(62)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = body_json(resp).await;
+    assert_eq!(body["field"], "version");
+
+    // Non-binaries are refused.
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(upload_uri("regreject", "&version=1.0.0"))
+                .body(Body::from("#!/bin/sh\necho hi\n"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Runtime hints are reported, never applied.
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(upload_uri(
+                    "regreject",
+                    "&version=1.0.1&port=9999&domain=evil.test",
+                ))
+                .body(Body::from(elf_bytes(62)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = body_json(resp).await;
+    let hints: Vec<&str> = body["ignored_hints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert!(hints.contains(&"port") && hints.contains(&"domain"));
+
+    // Duplicate versions conflict.
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(upload_uri("regreject", "&version=1.0.1"))
+                .body(Body::from(elf_bytes(62)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn registry_bundle_push_validates_manifest() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+    let id = registry_app(&state, &router, "regbundle").await;
+
+    let manifest = r#"{"name":"regbundle","version":"3.0.0","arch":"x86_64","commit":"def456","files":[{"path":"app"},{"path":"helper"}]}"#;
+    let bundle = bundle_bytes(
+        manifest,
+        &[("app", elf_bytes(62)), ("helper", elf_bytes(62))],
+    );
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(upload_uri("regbundle", "&version=3.0.0"))
+                .body(Body::from(bundle))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let body = body_json(resp).await;
+    assert_eq!(body["release"]["version"], "3.0.0");
+    assert_eq!(body["release"]["files"].as_array().unwrap().len(), 2);
+    let resolved = body_json(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/orgs/default/registry/{id}/resolve?version=3.0.0"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(resolved["hash"], body["artifact"]["hash"]);
+
+    // Unknown manifest keys are rejected.
+    let bad = bundle_bytes(
+        r#"{"name":"regbundle","port":9999}"#,
+        &[("app", elf_bytes(62))],
+    );
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(upload_uri("regbundle", ""))
+                .body(Body::from(bad))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Query/manifest version conflicts fail instead of merging silently.
+    let clash = bundle_bytes(
+        r#"{"name":"regbundle","version":"3.0.1"}"#,
+        &[("app", elf_bytes(62))],
+    );
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(upload_uri("regbundle", "&version=3.0.2"))
+                .body(Body::from(clash))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn registry_promote_and_yank_move_channels() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+    let id = registry_app(&state, &router, "regchan").await;
+
+    // Artifact-only push, then pin it via the releases endpoint.
+    let pushed = body_json(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(upload_uri("regchan", ""))
+                    .body(Body::from(elf_bytes(62)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(pushed.get("release").unwrap().is_null());
+    let hash = pushed["artifact"]["hash"].as_str().unwrap().to_string();
+    let rel = body_json(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/orgs/default/registry/releases")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({"application_id": id, "version": "4.0.0", "artifact_hash": hash})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    let rel_id = rel["release"]["id"].as_str().unwrap().to_string();
+
+    // Promote to stable (dev resolves to owner in tests).
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/orgs/default/registry/releases/{rel_id}/promote"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"channel":"stable"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let resolved = body_json(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/orgs/default/registry/{id}/resolve?channel=stable"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(resolved["version"], "4.0.0");
+
+    // Yank hides the release from every channel and from resolve.
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/orgs/default/registry/releases/{rel_id}/yank"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/orgs/default/registry/{id}/resolve?channel=stable"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/orgs/default/registry/{id}/resolve?version=4.0.0"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn registry_links_crud_and_scoping() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+    let id = registry_app(&state, &router, "reglinks").await;
+
+    // Duplicate links conflict.
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/registry/links")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"application_id": id, "repo": "acme/regapp"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+
+    // Bad repo shapes name the field.
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/registry/links")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"application_id": id, "repo": "not-a-repo"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Unlink, then unlinking again is 404.
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!(
+                    "/api/v1/orgs/default/registry/links?application_id={id}&repo=acme%2Fregapp"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!(
+                    "/api/v1/orgs/default/registry/links?application_id={id}&repo=acme%2Fregapp"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // Another org cannot see this org's registry surface.
+    sqlx::query("INSERT INTO organizations (id, slug, name) VALUES ('other', 'other', 'Other')")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/orgs/other/registry/{id}/releases"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
 #[tokio::test]
 async fn catalog_returns_seeded_templates_and_platform() {
     let dir = tempfile::tempdir().unwrap();

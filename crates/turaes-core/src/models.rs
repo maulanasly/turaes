@@ -411,3 +411,70 @@ pub struct CatalogTemplate {
     /// Creation timestamp.
     pub created_at: String,
 }
+
+/// A CI repo linked to an app: pushes claiming this repo may land here.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct RegistryLink {
+    /// UUID.
+    pub id: String,
+    /// Owning organization.
+    pub org_id: String,
+    /// Linked application.
+    pub application_id: String,
+    /// CI repository (`owner/name`).
+    pub repo: String,
+    /// Linking user, when known.
+    pub created_by: Option<String>,
+    /// Creation timestamp.
+    pub created_at: String,
+}
+
+/// Metadata for one stored blob. Bytes live in the `ArtifactStore` on disk.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct RegistryArtifact {
+    /// UUID.
+    pub id: String,
+    /// Owning organization.
+    pub org_id: String,
+    /// Content hash (`sha256:<hex>`).
+    pub hash: String,
+    /// Blob size in bytes.
+    pub size_bytes: i64,
+    /// MIME type (`application/octet-stream` for ELF binaries).
+    pub media_type: String,
+    /// CPU architecture (`x86_64`, `aarch64`), when known.
+    pub arch: Option<String>,
+    /// Uploading user, when known.
+    pub created_by: Option<String>,
+    /// Creation timestamp.
+    pub created_at: String,
+}
+
+/// An immutable named pointer to one artifact (plus bundle members).
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct Release {
+    /// UUID.
+    pub id: String,
+    /// Owning organization.
+    pub org_id: String,
+    /// Owning application.
+    pub application_id: String,
+    /// Strict semver (`1.2.3`, never a channel name).
+    pub version: String,
+    /// Primary artifact row.
+    pub artifact_id: String,
+    /// Source commit, when reported by CI.
+    pub commit_sha: Option<String>,
+    /// CI run URL, when reported.
+    pub build_url: Option<String>,
+    /// Free-form release notes.
+    pub notes: Option<String>,
+    /// Bundle members (`[{path, hash, mode}]`); first entry deploys.
+    pub files_json: String,
+    /// Yanked releases resolve to 404 but keep their bytes.
+    pub is_yanked: bool,
+    /// Uploading user, when known.
+    pub created_by: Option<String>,
+    /// Creation timestamp.
+    pub created_at: String,
+}
