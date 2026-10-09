@@ -10,6 +10,9 @@
      styles.css primitives (panel, resource-row, table.stacked, badge, menu). */
   .preview-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
     border: 1px dashed var(--border); border-radius: 8px; padding: 8px 12px; margin-bottom: 14px; }
+  /* styles.css sets .modal-backdrop to display:flex, which overrides the
+     `hidden` attribute — without this both mock modals render on load. */
+  .modal-backdrop[hidden] { display: none; }
   .channel-row { display: grid; grid-template-columns: minmax(180px, 280px) 1fr auto;
     gap: 12px; align-items: center; padding: 10px 2px; border-bottom: 1px solid var(--border); }
   .channel-row:last-child { border-bottom: 0; }
@@ -350,6 +353,11 @@
   };
   syncTheme();
 
+  // Modal element handles are declared before any caller (role gating
+  // below closes the promote modal for non-admins on load).
+  var deployModal = document.getElementById("deployModal");
+  var promoteModal = document.getElementById("promoteModal");
+
   // Role gating preview: viewer/developer see releases + deploy; promote is admin-only.
   var roleSel = document.getElementById("roleSel");
   function syncRole() {
@@ -366,8 +374,6 @@
   syncRole();
 
   // Modals: focus confirm on open, Escape closes, backdrop click closes.
-  var deployModal = document.getElementById("deployModal");
-  var promoteModal = document.getElementById("promoteModal");
   var deploySel = document.getElementById("deploySel");
   var deploySummary = document.getElementById("deploySummary");
   var promoteSummary = document.getElementById("promoteSummary");
