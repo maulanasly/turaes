@@ -15,6 +15,7 @@ import { ServerDetailView } from "./views/ServerDetailView.js";
 import { TokensView } from "./views/TokensView.js";
 import { OrgView } from "./views/OrgView.js";
 import { AboutView } from "./views/AboutView.js";
+import { CatalogView } from "./views/CatalogView.js";
 import { LoginView } from "./views/LoginView.js";
 
 function useTheme() {
@@ -46,6 +47,7 @@ function ThemeIcon({ theme }) {
 const VIEW_TITLES = {
   apps: "Applications",
   app: "Application",
+  catalog: "Catalog",
   servers: "Servers",
   server: "Server",
   tokens: "API tokens",
@@ -284,6 +286,7 @@ function Shell() {
         onClick=${(e) => { if (e.target && e.target.closest && e.target.closest("a")) setMenuOpen(false); }}>
         <ul class="nav-list">
           <li><${NavLink} route=${route} view="apps" match="app" label="Applications" badge=${attention} /></li>
+          <li><${NavLink} route=${route} view="catalog" label="Catalog" /></li>
           ${isOperator && html`<li><${NavLink} route=${route} view="servers" match="server" label="Servers" /></li>`}
         </ul>
       </nav>
@@ -321,6 +324,7 @@ function Shell() {
         title=${`Warnings (${warns.length})`} items=${warns} />`}
       ${route.view === "apps" && html`<${AppsView} key=${org} user=${user} servers=${servers} />`}
       ${route.view === "app" && html`<${AppDetailView} key=${org} id=${route.id} tab=${route.tab} range=${route.range} user=${user} servers=${servers} />`}
+      ${route.view === "catalog" && html`<${CatalogView} key=${org} user=${user} servers=${servers} />`}
       ${route.view === "servers" && html`<${ServersView} key=${org} user=${user} onChanged=${loadServers} />`}
       ${route.view === "server" && html`<${ServerDetailView} key=${org} id=${route.id} />`}
       ${route.view === "tokens" && html`<${TokensView} key=${org} user=${user} />`}

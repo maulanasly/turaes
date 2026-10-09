@@ -6,7 +6,7 @@ import { toast } from "../lib/toast.js";
 import { serverName, runtimeLabel, fmtTime } from "../lib/format.js";
 import { sortApps, filterApps } from "../lib/sort.js";
 import {
-  KINDS, STEPS, emptyDraft, kindInfo, stepErrors, buildPayload, reviewGroups, createConsequences,
+  KINDS, STEPS, emptyDraft, applyTemplate, kindInfo, stepErrors, buildPayload, reviewGroups, createConsequences,
   mapIssuesToFields, validateCommandLines,
 } from "../lib/appForm.js";
 import { StatusBadge } from "../components/StatusBadge.js";
@@ -60,8 +60,12 @@ function FieldError({ errors, name }) {
     : null;
 }
 
-function NewAppForm({ servers, onCreated }) {
-  const [draft, setDraft] = useState(() => emptyDraft(servers[0] ? servers[0].id : "local"));
+function NewAppForm({ servers, onCreated, initial }) {
+  const [draft, setDraft] = useState(() => {
+    const base = emptyDraft(servers[0] ? servers[0].id : "local");
+    if (initial) applyTemplate(base, initial);
+    return base;
+  });
   const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
   const [fieldErrors, setFieldErrors] = useState({});
@@ -393,6 +397,15 @@ export function AppsView({ user, servers }) {
     try { return sessionStorage.getItem("turaes-apps-sort") || "name"; } catch { return "name"; }
   });
   const [filter, setFilter] = useState("all");
+  const [templateSlug, setTemplateSlug] = useState(() => {
+    try {
+      const hash = location.hash || "";
+      const qi = hash.indexOf("?");
+      if (qi < 0) return "";
+      return new URLSearchParams(hash.slice(qi + 1)).get("template") || "";
+    } catch { return ""; }
+  });
+  const [templateDefaults, setTemplateDefaults] = useState(null);
   const [view, setView] = useState(() => {
     try { return sessionStorage.getItem("turaes-apps-view") || "list"; } catch { return "list"; }
   });
@@ -423,6 +436,28 @@ export function AppsView({ user, servers }) {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Deep link from the Catalog (`#/apps?template=<slug>`): prefill the
+  // wizard from the template defaults and open it. Consumed once so a
+  // refresh does not re-apply it over the user's own edits.
+  useEffect(() => {
+    if (!templateSlug || !user) return undefined;
+    let live = true;
+    oapi("/catalog").then((c) => {
+      if (!live) return;
+      const t = (c.templates || []).find((x) => x.slug === templateSlug);
+      if (t) {
+        setTemplateDefaults(t.defaults || {});
+        setShowAdd(true);
+        toast.info(`Prefilled from the “${t.name}” template — give it a name and create.`);
+      } else {
+        toast.error(`Unknown template “${templateSlug}”.`);
+      }
+      try { history.replaceState(null, "", "#/apps"); } catch {}
+      setTemplateSlug("");
+    }).catch((e) => { if (live) toast.error(e.message); });
+    return () => { live = false; };
+  }, [templateSlug, user]);
 
   const retry = () => { setError(null); load(); };
 
@@ -481,7 +516,7 @@ export function AppsView({ user, servers }) {
           </button>`}
         </div>
       </div>
-      ${showAdd && user && html`<div class="form-wrap"><${NewAppForm} servers=${servers} onCreated=${created} /></div>`}
+      ${showAdd && user && html`<div class="form-wrap"><${NewAppForm} servers=${servers} initial=${templateDefaults} onCreated=${created} /></div>`}
       ${error
         ? html`<p class="muted">Could not load applications: ${error}</p>
           <div><button class="btn" onClick=${retry}>Retry</button></div>`

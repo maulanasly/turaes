@@ -387,3 +387,27 @@ pub struct AuditLog {
     /// Event timestamp.
     pub created_at: String,
 }
+
+/// A curated starter template for the Catalog page.
+///
+/// Templates are platform-global (identical for every org). `defaults_json`
+/// keys map onto wizard draft fields; unknown keys are ignored by the UI.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct CatalogTemplate {
+    /// Stable id (`tmpl_<slug>` for seeds).
+    pub id: String,
+    /// URL-safe key used by `?template=<slug>` deep links.
+    pub slug: String,
+    /// Display name.
+    pub name: String,
+    /// One-line blurb.
+    pub description: String,
+    /// `service`, `static`, or `worker`.
+    pub kind: String,
+    /// JSON object of wizard draft defaults.
+    pub defaults_json: String,
+    /// Display order (ascending).
+    pub sort_order: i64,
+    /// Creation timestamp.
+    pub created_at: String,
+}

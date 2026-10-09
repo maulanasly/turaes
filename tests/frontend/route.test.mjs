@@ -28,6 +28,12 @@ test("servers and server detail", () => {
   assert.deepEqual(parseRoute("#/servers/s1"), { view: "server", id: "s1" });
 });
 
+test("catalog", () => {
+  assert.deepEqual(parseRoute("#/catalog"), { view: "catalog" });
+  assert.equal(pathFor({ view: "catalog" }), "#/catalog");
+  assert.deepEqual(parseRoute(pathFor({ view: "catalog" })), { view: "catalog" });
+});
+
 test("about view", () => {
   assert.deepEqual(parseRoute("#/about"), { view: "about" });
   assert.equal(pathFor({ view: "about" }), "#/about");

@@ -42,6 +42,9 @@ export function parseRoute(hash) {
   if (parts[0] === "servers") {
     return parts[1] ? { view: "server", id: parts[1] } : { view: "servers" };
   }
+  if (parts[0] === "catalog") {
+    return { view: "catalog" };
+  }
   if (parts[0] === "tokens") {
     return { view: "tokens" };
   }
@@ -65,6 +68,7 @@ export function parseRoute(hash) {
 export function pathFor(route) {
   if (!route || route.view === "apps") return "#/apps";
   if (route.view === "servers") return "#/servers";
+  if (route.view === "catalog") return "#/catalog";
   if (route.view === "server") return `#/servers/${route.id}`;
   if (route.view === "tokens") return "#/tokens";
   if (route.view === "org") return "#/org";

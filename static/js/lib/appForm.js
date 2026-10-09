@@ -93,6 +93,28 @@ export function emptyDraft(serverId = "local") {
   };
 }
 
+// Overlay catalog-template defaults onto a draft. Only known scalar draft
+// fields apply (kind is validated); `server_id` is deliberately excluded so
+// a template can never point an app at a server that does not exist here.
+// Returns the list of applied keys for user feedback.
+export function applyTemplate(draft, defaults) {
+  const applied = [];
+  if (!defaults || typeof defaults !== "object") return applied;
+  const kind = defaults.kind;
+  if (kind === "service" || kind === "static" || kind === "worker") {
+    draft.kind = kind;
+    applied.push("kind");
+  }
+  for (const key of ["description", "port", "health_path", "domain", "publish_dir", "runtime", "workdir", "args", "mem_limit_mb", "cpu_quota_pct"]) {
+    const v = defaults[key];
+    if (typeof v === "string" || typeof v === "number") {
+      draft[key] = v;
+      applied.push(key);
+    }
+  }
+  return applied;
+}
+
 // Split an argv textarea (one argument per line) into lines, mirroring the
 // API rule: non-empty argv, executable without spaces (no shell involved).
 export function validateCommandLines(text) {

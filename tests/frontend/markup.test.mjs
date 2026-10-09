@@ -39,7 +39,7 @@ test("error-wired inputs carry names so errors can focus them", () => {
 
 test("topbar uses a flat primary nav with the account section in an avatar menu", () => {
   const src = readFileSync(new URL("../../static/js/app.js", import.meta.url), "utf8");
-  // No grouped clusters: primary nav is Applications + Servers only.
+  // No grouped clusters: primary nav is Applications + Catalog + Servers.
   assert.ok(src.includes('class="nav-list"'), "primary nav renders a flat nav-list");
   assert.ok(!src.includes("nav-group"), "grouped nav clusters are gone");
   assert.ok(!src.includes("nav-label"), "nav section labels are gone");
@@ -54,6 +54,8 @@ test("topbar uses a flat primary nav with the account section in an avatar menu"
   assert.ok(!src.includes("${health ? \"Healthy\""), "separate Healthy/Unreachable text is gone");
   // Triage aid: firing alerts badge on Applications.
   assert.ok(src.includes("nav-badge"), "Applications carries an attention badge");
+  // Catalog is a first-class peer in the primary nav, not the account menu.
+  assert.ok(src.includes('view="catalog"'), "Catalog is a primary nav entry");
   // Disclosures stay accessible.
   assert.ok(src.includes('aria-haspopup="menu"'), "avatar button exposes the menu");
   assert.ok(src.includes('aria-expanded=${userMenuOpen}'), "avatar menu reports expanded state");

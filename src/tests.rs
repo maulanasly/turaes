@@ -3886,3 +3886,68 @@ async fn maintenance_toggle_parks_hostnames_in_router() {
     assert!(router_handle.is_parked("held.test").is_none());
     assert_eq!(router_handle.resolve("held.test").unwrap().port, 8400);
 }
+
+#[tokio::test]
+async fn catalog_returns_seeded_templates_and_platform() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/orgs/default/catalog")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let templates = body["templates"].as_array().unwrap();
+    assert_eq!(templates.len(), 3);
+    let slugs: Vec<&str> = templates
+        .iter()
+        .map(|t| t["slug"].as_str().unwrap())
+        .collect();
+    assert_eq!(slugs, vec!["axum-service", "static-site", "worker"]);
+    for t in templates {
+        assert!(!t["name"].as_str().unwrap().is_empty());
+        assert!(t["defaults"].is_object());
+    }
+    assert!(!body["platform"]["version"].as_str().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn catalog_is_org_scoped() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+    sqlx::query("INSERT INTO organizations (id, slug, name) VALUES ('other', 'other', 'Other')")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+    // An org the caller is not a member of is forbidden...
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/orgs/other/catalog")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // ...while an unknown org is not found.
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/orgs/nope/catalog")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
