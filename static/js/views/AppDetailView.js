@@ -70,7 +70,7 @@ function RecentActivity({ entries, appId }) {
     </ul>`;
 }
 
-function Overview({ data, range, onRange, updatedAt, loading, onRefresh, activity, appId }) {
+function Overview({ data, range, onRange, updatedAt, loading, onRefresh, activity, appId, metricsError }) {
   const hours = rangeToHours(range);
   const rangeLabel = fmtRangeLabel(range);
   const metrics = data.metrics || [];
@@ -878,7 +878,7 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
       <div class="tab-body" role="tabpanel">
         ${tab === "overview" && html`<${Overview} data=${data} range=${range} onRange=${changeRange}
           updatedAt=${metricsAt} loading=${metricsLoading} onRefresh=${refreshMetrics}
-          activity=${activity} appId=${id} />`}
+          activity=${activity} appId=${id} metricsError=${metricsError} />`}
         ${tab === "deployments" && html`<${Deployments} deployments=${deployments}
           onRollbackTo=${app.command || app.kind === "static" ? null : rollbackTo}
           rollbackNote=${app.command
