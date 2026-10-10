@@ -5741,12 +5741,6 @@ async fn rollback_rejects_foreign_hash() {
     assert!(body["detail"].as_str().unwrap().contains("never ran under"));
 }
 
-    assert_eq!(action.as_deref(), Some("server.validate"));
-}
-
-#[test]
-#[cfg(unix)]
-fn doctor_flags_world_readable_secrets() {
 #[tokio::test]
 async fn quota_put_and_validate_are_audited() {
     let dir = tempfile::tempdir().unwrap();
