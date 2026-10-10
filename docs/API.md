@@ -323,11 +323,11 @@ a gzip tarball with a top-level `manifest.json` (allowlisted keys `name`,
 
 | Method | Path | Role | Description |
 |---|---|---|---|
-| `POST` | `/api/v1/orgs/{org}/registry/links` | developer | Link a CI repo (`{application_id, repo: owner/name}`) |
-| `DELETE` | `/api/v1/orgs/{org}/registry/links?application_id=&repo=` | developer | Unlink a CI repo |
+| `POST` | `/api/v1/orgs/{org}/registry/links` | admin | Link a CI repo (`{application_id, repo: owner/name}`) |
+| `DELETE` | `/api/v1/orgs/{org}/registry/links?application_id=&repo=` | admin | Unlink a CI repo |
 | `GET` | `/api/v1/orgs/{org}/registry/{app}/links` | viewer | Linked CI repos |
-| `POST` | `/api/v1/orgs/{org}/registry/artifacts?app=&repo=&version=&commit=&arch=&build_url=&notes=` | developer | Push bytes (raw body, 256 MiB cap); `version` creates a release on `latest` |
-| `POST` | `/api/v1/orgs/{org}/registry/releases` | developer | Pin a stored hash (`{application_id, version, artifact_hash, …}`) |
+| `POST` | `/api/v1/orgs/{org}/registry/artifacts?app=&repo=&version=&commit=&arch=&build_url=&notes=` | admin | Push bytes (raw body, 256 MiB cap); `version` creates a release (promote separately to move channels) |
+| `POST` | `/api/v1/orgs/{org}/registry/releases` | admin | Pin a stored hash (`{application_id, version, artifact_hash, …}`) |
 | `POST` | `/api/v1/orgs/{org}/registry/releases/{id}/promote` | admin | Move a channel pointer (`{channel}`) |
 | `POST` | `/api/v1/orgs/{org}/registry/releases/{id}/yank` | admin | Hide a release from every channel (bytes kept) |
 | `GET` | `/api/v1/orgs/{org}/registry/{app}/releases` | viewer | `{releases: [...], channels: [...]}` |

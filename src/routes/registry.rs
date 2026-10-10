@@ -324,7 +324,7 @@ pub async fn create_link(
     Path(org): Path<String>,
     Json(input): Json<HashMap<String, String>>,
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
-    let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Admin).await?;
     let app_ref = input.get("application_id").cloned().unwrap_or_default();
     let repo = input.get("repo").cloned().unwrap_or_default();
     if app_ref.is_empty() {
@@ -388,7 +388,7 @@ pub async fn delete_link(
     Path(org): Path<String>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<StatusCode> {
-    let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Admin).await?;
     let app_ref = params.get("application_id").cloned().unwrap_or_default();
     let repo = params.get("repo").cloned().unwrap_or_default();
     let app = fetch_app_ref(&state.pool, &org_id, &app_ref).await?;
@@ -572,7 +572,7 @@ pub async fn upload(
     Query(params): Query<HashMap<String, String>>,
     body: Body,
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
-    let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Admin).await?;
     let app_ref = params.get("app").cloned().unwrap_or_default();
     if app_ref.is_empty() {
         return Err(Error::FieldValidation {
@@ -895,7 +895,9 @@ pub async fn upload(
             .bind(&user.login)
             .execute(&state.pool)
             .await?;
-            set_channel(&state.pool, &org_id, &app.id, "latest", &id).await?;
+            // No auto-promotion: `latest` moves only via the explicit,
+            // Admin-gated promote call, so a push can never silently
+            // redirect the channel other deploys resolve.
             audit::record(
                 &state,
                 Some(&org_id),
@@ -909,7 +911,7 @@ pub async fn upload(
             .await?;
             Some(serde_json::json!({
                 "id": id, "version": v, "hash": primary_hash,
-                "channel": "latest", "files": files_json,
+                "files": files_json,
             }))
         }
         None => None,
@@ -934,7 +936,7 @@ pub async fn create_release(
     Path(org): Path<String>,
     Json(input): Json<HashMap<String, String>>,
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
-    let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Admin).await?;
     let app_ref = input.get("application_id").cloned().unwrap_or_default();
     let version = input.get("version").cloned().unwrap_or_default();
     let hash = input.get("artifact_hash").cloned().unwrap_or_default();
