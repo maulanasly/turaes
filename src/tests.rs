@@ -5741,6 +5741,12 @@ async fn rollback_rejects_foreign_hash() {
     assert!(body["detail"].as_str().unwrap().contains("never ran under"));
 }
 
+    assert_eq!(action.as_deref(), Some("server.validate"));
+}
+
+#[test]
+#[cfg(unix)]
+fn doctor_flags_world_readable_secrets() {
 #[tokio::test]
 async fn quota_put_and_validate_are_audited() {
     let dir = tempfile::tempdir().unwrap();
@@ -5784,4 +5790,38 @@ async fn quota_put_and_validate_are_audited() {
             .await
             .unwrap();
     assert_eq!(action.as_deref(), Some("server.validate"));
+}
+
+#[test]
+#[cfg(unix)]
+fn doctor_flags_world_readable_secrets() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+
+    // Missing paths pass (nothing to protect).
+    assert!(crate::check_private_file("db.mode", dir.path().join("nope.db").to_str().unwrap()).ok);
+
+    // 0644 database fails; 0600 passes.
+    let db = dir.path().join("t.db");
+    std::fs::write(&db, b"x").unwrap();
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let check = crate::check_private_file("db.mode", db.to_str().unwrap());
+    assert!(!check.ok);
+    assert!(check.detail.contains("0600"));
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(crate::check_private_file("db.mode", db.to_str().unwrap()).ok);
+
+    // Env dir audit names the offender and clears once fixed.
+    let envdir = dir.path().join("env");
+    std::fs::create_dir(&envdir).unwrap();
+    std::fs::write(envdir.join("a.env"), b"K=1").unwrap();
+    std::fs::set_permissions(envdir.join("a.env"), std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::fs::write(envdir.join("b.env"), b"K=2").unwrap();
+    std::fs::set_permissions(envdir.join("b.env"), std::fs::Permissions::from_mode(0o600)).unwrap();
+    let check = crate::check_env_file_modes(envdir.to_str().unwrap());
+    assert!(!check.ok);
+    assert!(check.detail.contains("a.env"));
+    std::fs::set_permissions(envdir.join("a.env"), std::fs::Permissions::from_mode(0o600)).unwrap();
+    let check = crate::check_env_file_modes(envdir.to_str().unwrap());
+    assert!(check.ok);
 }

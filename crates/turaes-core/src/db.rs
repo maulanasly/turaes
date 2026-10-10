@@ -29,7 +29,29 @@ pub async fn connect(url: &str) -> Result<Pool> {
         .acquire_timeout(Duration::from_secs(10))
         .connect_with(options)
         .await?;
+    // The database holds sealed secrets and token hashes: keep it
+    // owner-only regardless of umask, on creation and every open (heals
+    // pre-existing world-readable files).
+    if let Ok(path) = db_file_path(url) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
+    }
     Ok(pool)
+}
+
+/// Filesystem path for a `sqlite://` URL, if it names a local file.
+fn db_file_path(url: &str) -> Result<std::path::PathBuf> {
+    let path = url
+        .strip_prefix("sqlite://")
+        .ok_or_else(|| Error::Config(format!("invalid database url '{url}'")))?;
+    let path = path.split('?').next().unwrap_or(path);
+    if path.is_empty() || path == ":memory:" {
+        return Err(Error::Config(format!("invalid database url '{url}'")));
+    }
+    Ok(std::path::PathBuf::from(path))
 }
 
 /// Apply all pending migrations.

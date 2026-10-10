@@ -186,9 +186,15 @@ mod pingora_impl {
                         return;
                     }
                 }
+                // SNI presented but unknown: refuse rather than serve the
+                // dashboard certificate. Leaving the certificate unset fails
+                // the handshake, so scanners and misdirected clients cannot
+                // habituate to name mismatches.
+                return;
             }
 
-            // Fall back to the default (dashboard) certificate, reloading on change.
+            // No SNI (legacy clients, direct IP): fall back to the default
+            // (dashboard) certificate, reloading on change.
             let mut default = self.default.lock().unwrap();
             let paths = self.certs.paths(&self.default_host);
             let mtime = std::fs::metadata(&paths.fullchain)
