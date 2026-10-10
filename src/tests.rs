@@ -5969,3 +5969,13 @@ async fn alert_webhook_outbox_retries_then_delivers_resolution() {
     assert_eq!(events, vec!["firing", "resolved"]);
     assert_eq!(server.await.unwrap(), vec!["firing", "firing", "resolved"]);
 }
+
+#[test]
+fn doctor_parses_df_available_kib() {
+    let output = "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/vda1 1000000 1000 998000 1% /\n";
+    assert_eq!(
+        crate::parse_df_available_bytes(output),
+        Some(998_000 * 1024)
+    );
+    assert_eq!(crate::parse_df_available_bytes("bad output\n"), None);
+}

@@ -25,6 +25,7 @@ mod state;
 mod tests;
 
 use std::path::PathBuf;
+use std::process::Command as StdCommand;
 use std::sync::Arc;
 
 use clap::Parser;
@@ -270,6 +271,105 @@ fn check_private_file(name: &'static str, path: &str) -> Check {
     }
 }
 
+const MIN_FREE_BYTES: u64 = 512 * 1024 * 1024;
+const CERT_WARNING_SECONDS: u64 = 30 * 24 * 60 * 60;
+
+fn parse_df_available_bytes(output: &str) -> Option<u64> {
+    let line = output.lines().rev().find(|l| !l.trim().is_empty())?;
+    // POSIX `df -Pk`: filesystem, blocks, used, available, capacity, mount.
+    let available_kib = line.split_whitespace().nth(3)?.parse::<u64>().ok()?;
+    available_kib.checked_mul(1024)
+}
+
+fn check_disk_space(path: &str) -> Check {
+    let output = match StdCommand::new("df").args(["-Pk", path]).output() {
+        Ok(output) if output.status.success() => output,
+        Ok(output) => {
+            return check_fail(
+                "disk.free",
+                format!(
+                    "df failed for {path}: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ),
+            );
+        }
+        Err(e) => return check_fail("disk.free", format!("cannot run df: {e}")),
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    let Some(bytes) = parse_df_available_bytes(&text) else {
+        return check_fail("disk.free", format!("cannot parse df output for {path}"));
+    };
+    if bytes < MIN_FREE_BYTES {
+        check_fail(
+            "disk.free",
+            format!("{path} has {bytes} free bytes, below the 512 MiB reserve"),
+        )
+    } else {
+        check_ok("disk.free", format!("{path} has {bytes} free bytes"))
+    }
+}
+
+fn check_cert_expiry(path: &std::path::Path) -> Check {
+    if !path.is_file() {
+        return check_fail("tls.expiry", format!("{} is missing", path.display()));
+    }
+    let check = |seconds: u64| {
+        StdCommand::new("openssl")
+            .args([
+                "x509",
+                "-in",
+                path.to_str().unwrap_or_default(),
+                "-checkend",
+                &seconds.to_string(),
+                "-noout",
+            ])
+            .output()
+            .map(|o| o.status.success())
+    };
+    match check(0) {
+        Ok(false) => check_fail(
+            "tls.expiry",
+            format!("{} is expired or invalid", path.display()),
+        ),
+        Err(e) => check_fail("tls.expiry", format!("cannot run openssl: {e}")),
+        Ok(true) => match check(CERT_WARNING_SECONDS) {
+            Ok(true) => check_ok(
+                "tls.expiry",
+                format!("{} valid beyond 30 days", path.display()),
+            ),
+            Ok(false) => check_ok(
+                "tls.expiry",
+                format!("warning: {} expires within 30 days", path.display()),
+            ),
+            Err(e) => check_fail("tls.expiry", format!("cannot run openssl: {e}")),
+        },
+    }
+}
+
+async fn check_systemd_timer(timer: &'static str) -> Check {
+    #[cfg(target_os = "linux")]
+    {
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            tokio::process::Command::new("systemctl")
+                .args(["is-active", "--quiet", timer])
+                .output(),
+        )
+        .await;
+        return match output {
+            Ok(Ok(o)) if o.status.success() => check_ok(timer, "active"),
+            Ok(Ok(_)) => check_fail(timer, "not active (enable and start this timer)"),
+            Ok(Err(e)) => check_fail(timer, format!("cannot run systemctl: {e}")),
+            Err(_) => check_fail(timer, "systemctl timed out"),
+        };
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = timer;
+        check_ok("systemd.timers", "systemd checks are Linux-only")
+    }
+}
+
 /// Every rendered app env file (`{env_dir}/*.env`) holds decrypted secrets.
 fn check_env_file_modes(env_dir: &str) -> Check {
     let mut offenders = Vec::new();
@@ -349,12 +449,23 @@ async fn doctor(cfg: &Config, json: bool) -> turaes_core::Result<()> {
             .to_string_lossy(),
     ));
     checks.push(check_env_file_modes(&cfg.runtime.env_dir));
+    // Disk reserve on the filesystems that grow with operation: DB backups
+    // and content-addressed artifacts. `df -Pk` reports filesystem-wide free
+    // space, so duplicate mounts can produce duplicate but useful checks.
+    checks.push(check_disk_space(&cfg.backup.dir));
+    checks.push(check_disk_space(&cfg.runtime.artifact_dir));
+    if let Ok(db_path) = backup::db_path(&cfg.database.url) {
+        if let Some(parent) = db_path.parent() {
+            checks.push(check_disk_space(&parent.to_string_lossy()));
+        }
+    }
     if cfg.proxy.enabled {
         match cfg.dashboard_host() {
             Some(host) => {
                 let cert = format!("{}/{host}/fullchain.pem", cfg.proxy.cert_dir);
                 if std::path::Path::new(&cert).is_file() {
                     checks.push(check_ok("tls.cert", format!("{cert} present")));
+                    checks.push(check_cert_expiry(std::path::Path::new(&cert)));
                 } else {
                     checks.push(check_fail(
                         "tls.cert",
@@ -366,6 +477,35 @@ async fn doctor(cfg: &Config, json: bool) -> turaes_core::Result<()> {
                 "tls.cert",
                 "no dashboard hostname derivable from server.public_url".to_string(),
             )),
+        }
+        let mut found_cert = false;
+        let dashboard_host = cfg.dashboard_host();
+        if let Ok(entries) = std::fs::read_dir(&cfg.proxy.cert_dir) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                let cert = entry.path().join("fullchain.pem");
+                if cert.is_file() {
+                    found_cert = true;
+                    // Dashboard was already checked above.
+                    if dashboard_host.as_deref() != entry.file_name().to_str() {
+                        checks.push(check_cert_expiry(&cert));
+                    }
+                }
+            }
+        }
+        if !found_cert {
+            checks.push(check_fail(
+                "tls.expiry",
+                format!("no live certificates found under {}", cfg.proxy.cert_dir),
+            ));
+        }
+    }
+    if cfg.runtime.driver == "systemd" {
+        for timer in [
+            "turaes-backup.timer",
+            "turaes-certs.timer",
+            "turaes-gc.timer",
+        ] {
+            checks.push(check_systemd_timer(timer).await);
         }
     }
 
