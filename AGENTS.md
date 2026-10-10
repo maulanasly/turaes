@@ -27,6 +27,21 @@ Rust (Axum + SQLite) + embedded zero-build UI. The proxy is
 - Always interact in English — chat, commits, PR titles/bodies, code comments.
 - App UI strings and user-provided Indonesian domain terms stay as-is.
 
+## AI guide rail (anti-slop)
+
+- This repo's AI output filter is [anti-slop](https://github.com/miqdadbadjuber/anti-slop)
+  (MIT): rules that reject generic AI-generated UI, filler copy, and AI-shaped
+  code. It is a **filter, not a style guide** — direction stays here
+  (`docs/UX-REVIEW.md`, palette tokens, zero-build UI) and in this file.
+- Load it per task, not wholesale: `antislop` (always), `antislop-code` (Rust
+  comments — keep what explains why, drop what restates the code),
+  `antislop-ui` / `antislop-copywriting` / `antislop-human` /
+  `antislop-layoutmobile` (dashboard static/ work only).
+- Single-file fallback (no install): `curl -o antislop.md https://raw.githubusercontent.com/miqdadbadjuber/anti-slop/main/antislop.md`.
+  Full install: `npx antislop-ai` (or `npx skills add miqdadbadjuber/anti-slop).
+- Close every change with its Delivery Gate report (PASS/FAIL) alongside
+  `make verify` in the PR body.
+
 ## Feature / Bug Fix Workflow (MANDATORY)
 
 1. **Read context first** — run `graphify query "..."` (or read the docs below)
