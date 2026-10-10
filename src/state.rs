@@ -1,5 +1,6 @@
 //! Shared application state handed to every request handler.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use sqlx::SqlitePool;
@@ -25,11 +26,36 @@ pub struct AppState {
     pub http: reqwest::Client,
     /// Reverse-proxy routing table, when the proxy is enabled.
     pub proxy_router: Option<std::sync::Arc<turaes_proxy::Router>>,
+    /// Named mutexes for check-then-act sequences that SQLite cannot constrain
+    /// (`deploy:{app}`, `create:{org}`).
+    keyed_locks: Arc<tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     /// When true (debug builds + `AUTH_DISABLED=1`), requests run as a dev user.
     pub auth_disabled: bool,
 }
 
 impl AppState {
+    async fn key_lock(&self, key: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        let slot = {
+            let mut locks = self.keyed_locks.lock().await;
+            locks.entry(key.to_string()).or_default().clone()
+        };
+        slot.lock_owned().await
+    }
+
+    /// Serialize deploys per application: slot pick → install → cutover must
+    /// not interleave, or two concurrent deploys can install the same slot
+    /// and the second drain can stop the just-cut-over slot.
+    pub async fn deploy_lock(&self, app_id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        self.key_lock(&format!("deploy:{app_id}")).await
+    }
+
+    /// Serialize app create/update per org so quota check-then-act cannot
+    /// over-admit under concurrent requests. (Local CLI one-shots are a
+    /// separate process and stay admin-operated.)
+    pub async fn org_create_lock(&self, org_id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        self.key_lock(&format!("create:{org_id}")).await
+    }
+
     /// Build state from configuration and a database pool.
     pub fn new(cfg: Arc<Config>, pool: SqlitePool) -> Self {
         let auth_disabled = cfg!(debug_assertions)
@@ -56,6 +82,7 @@ impl AppState {
             },
             http: reqwest::Client::new(),
             proxy_router: None,
+            keyed_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             auth_disabled,
             cfg,
             pool,

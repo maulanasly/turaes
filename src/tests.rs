@@ -5151,6 +5151,16 @@ async fn registry_rollback_refuses_yanked_without_force_admin() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    // The yanked build ran here before (deployment history is the
+    // ownership proof rollback demands).
+    sqlx::query(
+        "INSERT INTO deployments (id, application_id, status, artifact_hash, started_at) \
+         VALUES ('d-rb', (SELECT id FROM applications WHERE name = 'localrb'), 'running', ?, datetime('now'))",
+    )
+    .bind(&hash)
+    .execute(&state.pool)
+    .await
+    .unwrap();
 
     // Yanked hash cannot come back by default...
     let resp = router
@@ -5339,4 +5349,392 @@ async fn registry_gc_expires_orphans_and_delete_endpoint_guards_pins() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     let _ = app_id;
+}
+
+#[tokio::test]
+async fn deploy_locks_serialize_per_app() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<&str>(4);
+    // First holder takes the app-1 lock, then signals it holds it.
+    let s1 = state.clone();
+    let tx1 = tx.clone();
+    let t1 = tokio::spawn(async move {
+        let _guard = s1.deploy_lock("app-1").await;
+        tx1.send("t1-in").await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        tx1.send("t1-out").await.unwrap();
+    });
+    assert_eq!(rx.recv().await.unwrap(), "t1-in");
+    // A contender for the same app, plus an unrelated app that must proceed.
+    let s2 = state.clone();
+    let tx2 = tx.clone();
+    let t2 = tokio::spawn(async move {
+        let _guard = s2.deploy_lock("app-1").await;
+        tx2.send("t2-in").await.unwrap();
+    });
+    let s3 = state.clone();
+    let t3 = tokio::spawn(async move {
+        let _guard = s3.deploy_lock("app-2").await;
+    });
+    t1.await.unwrap();
+    t2.await.unwrap();
+    t3.await.unwrap();
+    drop(tx);
+    let mut order = Vec::new();
+    while let Some(m) = rx.recv().await {
+        order.push(m);
+    }
+    // t2 entered only after t1 released: same-app deploys serialize.
+    assert_eq!(order, vec!["t1-out", "t2-in"]);
+}
+
+#[tokio::test]
+async fn monitor_set_status_never_leaves_stopped() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    sqlx::query(
+        "INSERT INTO applications (id, name, binary_path, port, server_id, org_id, status) \
+         VALUES ('a1', 'stopped-app', '/bin/true', 19999, 'local', 'default', 'stopped')",
+    )
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    crate::monitor::set_status(&state, "a1", "running")
+        .await
+        .unwrap();
+    let status: String = sqlx::query_scalar("SELECT status FROM applications WHERE id = 'a1'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "stopped");
+
+    sqlx::query("UPDATE applications SET status = 'running' WHERE id = 'a1'")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    crate::monitor::set_status(&state, "a1", "unhealthy")
+        .await
+        .unwrap();
+    let status: String = sqlx::query_scalar("SELECT status FROM applications WHERE id = 'a1'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "unhealthy");
+}
+
+#[tokio::test]
+async fn app_create_parks_hostname_until_first_deploy() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut state = test_state(dir.path()).await;
+    let router_handle = Arc::new(turaes_proxy::Router::new("localhost", Default::default()));
+    state.proxy_router = Some(router_handle.clone());
+    let router = app::build_router(state.clone());
+
+    let payload = json!({
+        "name": "fresh",
+        "binary_path": "/srv/fresh/bin",
+        "port": 19800,
+        "domain": "fresh.test"
+    });
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/apps")
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    // The create handler republishes: never-deployed hostname parks as
+    // Stopped instead of 404ing.
+    let parked = router_handle.is_parked("fresh.test").expect("host parked");
+    assert_eq!(parked.app, "fresh");
+    assert!(router_handle.resolve("fresh.test").is_none());
+}
+
+#[tokio::test]
+async fn agent_report_republishes_parked_routes() {
+    use crate::grpc::pb::RegisterRequest;
+
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let reg = crate::grpc::register(
+        &state,
+        RegisterRequest {
+            join_token: "test-join".into(),
+            name: "w9".into(),
+            address: "10.0.0.19".into(),
+            version: "0".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let mut state = state;
+    let router_handle = Arc::new(turaes_proxy::Router::new("localhost", Default::default()));
+    state.proxy_router = Some(router_handle.clone());
+    let router = app::build_router(state.clone());
+
+    let payload = json!({
+        "name": "nodeapp",
+        "binary_path": "/srv/nodeapp/bin",
+        "port": 19700,
+        "domain": "nodeapp.test",
+        "server_id": reg.server_id,
+    });
+    let created = body_json(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/orgs/default/apps")
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    let app_name = created["application"]["name"].as_str().unwrap().to_string();
+
+    // Agent reports stopped: routes republish with the host parked.
+    crate::grpc::report(
+        &state,
+        crate::grpc::pb::ReportRequest {
+            agent_token: reg.agent_token.clone(),
+            app_name: app_name.clone(),
+            status: "stopped".into(),
+            message: "halted".into(),
+            artifact_hash: String::new(),
+        },
+    )
+    .await
+    .unwrap();
+    let parked = router_handle
+        .is_parked("nodeapp.test")
+        .expect("host parked");
+    assert_eq!(parked.app, app_name);
+
+    // Agent reports running: routes restore.
+    crate::grpc::report(
+        &state,
+        crate::grpc::pb::ReportRequest {
+            agent_token: reg.agent_token.clone(),
+            app_name,
+            status: "running".into(),
+            message: "back".into(),
+            artifact_hash: String::new(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(router_handle.is_parked("nodeapp.test").is_none());
+}
+
+#[tokio::test]
+async fn quota_gate_serializes_concurrent_creates() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+    sqlx::query("INSERT OR IGNORE INTO org_quotas (org_id) VALUES ('default')")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE org_quotas SET max_apps = 1 WHERE org_id = 'default'")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+    let mk = |name: &str, port: u16| {
+        let router = router.clone();
+        let payload = json!({"name": name, "binary_path": "/srv/x/bin", "port": port}).to_string();
+        async move {
+            router
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/v1/orgs/default/apps")
+                        .header("content-type", "application/json")
+                        .body(Body::from(payload))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+        }
+    };
+    let (a, b) = tokio::join!(mk("quota-a", 21101), mk("quota-b", 21102));
+    let mut statuses = vec![a, b];
+    statuses.sort();
+    // Exactly one admits; the loser sees the quota, never two apps.
+    assert_eq!(statuses, vec![StatusCode::CREATED, StatusCode::CONFLICT]);
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM applications WHERE org_id = 'default'")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn port_pair_range_and_zero_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    // Slot B overflows u16 (test slot offset is 1000).
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/apps")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"name": "bigport", "binary_path": "/srv/x/bin", "port": 65000})
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let created = body_json(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/orgs/default/apps")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({"name": "porty", "binary_path": "/srv/x/bin", "port": 21200})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    let id = created["application"]["id"].as_str().unwrap().to_string();
+    // Zeroing a service port and overflowing the pair both fail on update.
+    for payload in [json!({"port": 0}), json!({"port": 65000})] {
+        let resp = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/v1/orgs/default/apps/{id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+}
+
+#[tokio::test]
+async fn placement_change_resets_slot_and_asks_redeploy() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = test_router(dir.path()).await;
+    let created = body_json(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/orgs/default/apps")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({"name": "mover", "binary_path": "/srv/x/bin", "port": 21300})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    let id = created["application"]["id"].as_str().unwrap().to_string();
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/orgs/default/apps/{id}"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"port": 21400}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert!(body["application"]["active_port"].is_null());
+    assert_eq!(body["application"]["port"], 21400);
+    assert!(body["note"].as_str().unwrap().contains("redeploy"));
+}
+
+#[tokio::test]
+async fn rollback_rejects_foreign_hash() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+    for (name, port) in [("owner-a", 21501), ("owner-b", 21502)] {
+        let payload = json!({"name": name, "binary_path": "/srv/x/bin", "port": port});
+        let resp = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/orgs/default/apps")
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+    }
+    // B ran hash H (deployment row + blob in store); A never did.
+    let hash = format!("sha256:{}", "ab".repeat(32));
+    sqlx::query(
+        "INSERT INTO deployments (id, application_id, status, artifact_hash, started_at) \
+         VALUES ('d-b', (SELECT id FROM applications WHERE name = 'owner-b'), 'running', ?, datetime('now'))",
+    )
+    .bind(&hash)
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    let bare = "ab".repeat(32);
+    std::fs::create_dir_all(dir.path().join("artifacts").join("sha256")).unwrap();
+    std::fs::write(
+        dir.path().join("artifacts").join("sha256").join(&bare),
+        b"fake-bytes",
+    )
+    .unwrap();
+    let app_a: String = sqlx::query_scalar("SELECT id FROM applications WHERE name = 'owner-a'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/default/apps/{app_a}/rollback"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"artifact_hash": hash}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let body = body_json(resp).await;
+    assert!(body["detail"].as_str().unwrap().contains("never ran under"));
 }

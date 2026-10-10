@@ -354,6 +354,17 @@ pub(crate) async fn ensure_port_free(
     offset: i64,
     except_id: &str,
 ) -> Result<()> {
+    // The blue/green pair must fit the 16-bit range: without this, slot B
+    // truncates on `as u16` and the proxy dials a phantom port.
+    if port <= 0 || port > 65535 || port + offset > 65535 {
+        return Err(Error::FieldValidation {
+            field: "port".into(),
+            detail: format!(
+                "port {port} (or its blue/green pair at {}) is outside 1-65535",
+                port + offset
+            ),
+        });
+    }
     let paired = port + offset;
     let clash: Option<String> = sqlx::query_scalar(
         "SELECT name FROM applications \
@@ -388,8 +399,11 @@ pub fn active_spec(cfg: &Config, app: &Application) -> AppSpec {
     let offset = cfg.runtime.slot_offset as i64;
     match app.active_port {
         Some(ap) if ap == app.port + offset => spec_for_slot(cfg, app, Some(Slot::B), ap as u16),
-        Some(ap) => spec_for_slot(cfg, app, Some(Slot::A), ap as u16),
-        None => spec_for(cfg, app),
+        Some(ap) if ap == app.port => spec_for_slot(cfg, app, Some(Slot::A), ap as u16),
+        // Stale or absent: never fabricate a slot identity from a foreign
+        // port. Placement changes reset active_port, so this only meets
+        // legacy rows — act on the unslotted unit instead of the wrong slot.
+        _ => spec_for(cfg, app),
     }
 }
 
@@ -836,6 +850,9 @@ pub async fn create(
     Json(input): Json<CreateApp>,
 ) -> Result<(StatusCode, Json<serde_json::Value>)> {
     let org_id = authz::authorize_org(&state, &user, &org, Role::Admin).await?;
+    // Hold across quota check and INSERT so concurrent creates cannot
+    // over-admit past the org budgets.
+    let _org_guard = state.org_create_lock(&org_id).await;
     validate_name(&input.name).map_err(|error| at_field(error, "name"))?;
     let (kind, port, binary_path) = resolve_kind_shape(&input).await?;
     let id = uuid::Uuid::new_v4().to_string();
@@ -953,6 +970,10 @@ pub async fn create(
         Some(&serde_json::json!({"name": inserted.name, "port": inserted.port}).to_string()),
     )
     .await?;
+
+    // Publish so the new hostname resolves immediately (parked, until the
+    // first deploy cuts a live slot over) instead of 404ing.
+    let _ = refresh_proxy_routes(&state).await;
 
     Ok((
         StatusCode::CREATED,
@@ -1311,7 +1332,6 @@ async fn cutover(
     previous: Option<AppSpec>,
     prev_legacy: bool,
 ) -> Result<()> {
-    let runtime = runtime_for(&state.cfg, &app.runtime);
     sqlx::query(
         "UPDATE applications SET active_port = ?, status = 'running', updated_at = datetime('now') \
          WHERE id = ?",
@@ -1331,15 +1351,21 @@ async fn cutover(
     .await?;
     let _ = refresh_proxy_routes(state).await;
 
-    // Drain/replace the previous instance after a short window.
+    // Drain/replace the previous instance after a short window, off the
+    // request path: holding the deploy response (or a client disconnect
+    // cancelling it) must never strand both slots running.
     if let Some(prev) = previous {
-        tokio::time::sleep(std::time::Duration::from_secs(state.cfg.runtime.drain_secs)).await;
-        if prev_legacy {
-            // Legacy unslotted unit is superseded by the slots.
-            let _ = runtime.remove(&prev).await;
-        } else {
-            let _ = runtime.stop(&prev).await;
-        }
+        let runtime = runtime_for(&state.cfg, &app.runtime);
+        let drain_secs = state.cfg.runtime.drain_secs;
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(drain_secs)).await;
+            if prev_legacy {
+                // Legacy unslotted unit is superseded by the slots.
+                let _ = runtime.remove(&prev).await;
+            } else {
+                let _ = runtime.stop(&prev).await;
+            }
+        });
     }
     Ok(())
 }
@@ -1347,6 +1373,8 @@ async fn cutover(
 /// Deploy a `static` app: sync the publish dir into the inactive slot's public
 /// directory, serve it, gate on the always-200 health endpoint, then cut over.
 pub async fn deploy_static(state: &AppState, app: &Application) -> Result<(String, DeployOutcome)> {
+    // Same per-app serialization as binary deploys (see deploy_artifact).
+    let _guard = state.deploy_lock(&app.id).await;
     let publish_dir = app
         .publish_dir
         .as_deref()
@@ -1496,6 +1524,10 @@ async fn deploy_artifact(
     app: &Application,
     artifact: Artifact,
 ) -> Result<(String, DeployOutcome)> {
+    // Serialize with concurrent deploys of the same app: without this, two
+    // deploys can pick the same inactive slot and the second drain can stop
+    // the just-cut-over slot.
+    let _guard = state.deploy_lock(&app.id).await;
     let env = load_env(state, &app.id).await?;
 
     // Target the inactive slot; remember the previous slot to drain on success.
@@ -1693,6 +1725,28 @@ pub async fn rollback(
             "build {previous} is no longer in the store"
         )));
     }
+    // A hash must have run under this app: store-wide hashes are unguessable
+    // but can leak via logs and dashboards, and cross-app redeploys would
+    // otherwise need no access to the victim.
+    let bare = previous
+        .strip_prefix("sha256:")
+        .unwrap_or(&previous)
+        .to_string();
+    let owned: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM deployments \
+         WHERE application_id = ? AND (artifact_hash = ? OR artifact_hash = ?)",
+    )
+    .bind(&app.id)
+    .bind(&previous)
+    .bind(&bare)
+    .fetch_one(&state.pool)
+    .await?;
+    if owned == 0 {
+        return Err(Error::NotFound(format!(
+            "build {previous} never ran under '{}'",
+            app.name
+        )));
+    }
     // Yanked releases stay redeployable only deliberately: explicit force by
     // an admin. Otherwise a yanked (bad) binary comes straight back.
     let bare = previous
@@ -1884,6 +1938,8 @@ pub async fn update(
     Json(input): Json<UpdateApp>,
 ) -> Result<Json<serde_json::Value>> {
     let org_id = authz::authorize_org(&state, &user, &org, Role::Admin).await?;
+    // Same quota race as create: hold across check and UPDATE.
+    let _org_guard = state.org_create_lock(&org_id).await;
     let app = fetch_org_app(&state.pool, &org_id, &id).await?;
 
     let runtime = input.runtime.unwrap_or_else(|| app.runtime.clone());
@@ -1910,6 +1966,12 @@ pub async fn update(
         return Err(Error::FieldValidation {
             field: "port".into(),
             detail: "workers do not listen on a port".into(),
+        });
+    }
+    if app.kind != "worker" && port == 0 {
+        return Err(Error::FieldValidation {
+            field: "port".into(),
+            detail: "is required for a service or static site".into(),
         });
     }
     if port != 0 && port != app.port {
@@ -2034,7 +2096,9 @@ pub async fn update(
         Some(argv) => argv[0].clone(),
         None => app.binary_path.clone(),
     };
-    let updated = sqlx::query_as::<_, Application>(
+    // Snapshot the previous placement before the UPDATE below moves app fields.
+    let prev_placement = (app.port, app.server_id.clone(), app.runtime.clone());
+    let mut updated = sqlx::query_as::<_, Application>(
         "UPDATE applications SET description = ?, args = ?, port = ?, health_path = ?, \
           metrics_path = ?, domain = ?, runtime = ?, auto_restart = ?, server_id = ?, \
          mem_limit_mb = ?, cpu_quota_pct = ?, binary_path = ?, command = ?, workdir = ?, \
@@ -2074,6 +2138,44 @@ pub async fn update(
         .execute(&state.pool)
         .await?;
 
+    // A moved app must cut over fresh: reset the slot pointer so lifecycle
+    // and monitor never address the previous ports, stop the previous local
+    // slots best-effort, and tell the caller to redeploy. Remote orphans
+    // converge on the next deploy via the agent.
+    let mut note = None;
+    let (prev_port, prev_server, prev_runtime) = prev_placement;
+    if updated.port != prev_port || server_id != prev_server || runtime != prev_runtime {
+        sqlx::query(
+            "UPDATE applications SET active_port = NULL, updated_at = datetime('now') WHERE id = ?",
+        )
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
+        updated.active_port = None;
+        if prev_server == "local" {
+            let rt = runtime_for(&state.cfg, &prev_runtime);
+            let offset = state.cfg.runtime.slot_offset as i64;
+            // Unit names derive from the app name + slot; reuse the updated
+            // row with the previous port filled back in.
+            let mut prev_app = updated.clone();
+            prev_app.port = prev_port;
+            for slot_port in [prev_port, prev_port + offset] {
+                if let Ok(p) = u16::try_from(slot_port) {
+                    let slot = if slot_port == prev_port + offset {
+                        Slot::B
+                    } else {
+                        Slot::A
+                    };
+                    let _ = rt
+                        .stop(&spec_for_slot(&state.cfg, &prev_app, Some(slot), p))
+                        .await;
+                }
+            }
+            let _ = rt.stop(&spec_for(&state.cfg, &prev_app)).await;
+        }
+        note = Some("placement changed; redeploy to cut over to the new port/server");
+    }
+
     audit::record(
         &state,
         Some(&org_id),
@@ -2087,7 +2189,9 @@ pub async fn update(
     .await?;
 
     let _ = refresh_proxy_routes(&state).await;
-    Ok(Json(serde_json::json!({ "application": updated })))
+    Ok(Json(
+        serde_json::json!({ "application": updated, "note": note }),
+    ))
 }
 
 /// `GET /api/v1/orgs/{org}/apps/{id}/stats`
@@ -2158,8 +2262,13 @@ pub async fn deployments(
 
 #[cfg(test)]
 mod tests {
-    use super::{parked_reason, partition_hosts, select_previous_artifact, PatchValue, UpdateApp};
+    use super::{
+        active_spec, parked_reason, partition_hosts, select_previous_artifact, PatchValue,
+        UpdateApp,
+    };
     use std::collections::HashMap;
+    use turaes_core::config::Config;
+    use turaes_core::models::Application;
     use turaes_proxy::{ParkedReason, Upstream};
 
     #[test]
@@ -2188,6 +2297,58 @@ mod tests {
             port,
             tls: false,
         }
+    }
+
+    fn spec_app(port: i64, active_port: Option<i64>) -> Application {
+        Application {
+            id: "x".into(),
+            name: "phantom".into(),
+            description: None,
+            binary_path: "/bin/true".into(),
+            args: None,
+            port,
+            active_port,
+            health_path: "/health".into(),
+            metrics_path: None,
+            domain: None,
+            server_id: "local".into(),
+            org_id: "default".into(),
+            mem_limit_mb: None,
+            cpu_quota_pct: None,
+            kind: "service".into(),
+            command: None,
+            workdir: None,
+            publish_dir: None,
+            runtime: "systemd".into(),
+            auto_restart: true,
+            status: "running".into(),
+            maintenance: false,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn active_spec_never_fabricates_a_slot() {
+        let cfg = Config::from_toml(include_str!("../../config/default.toml")).unwrap();
+        // Slot A and B resolve by exact port match (offset 10000 in defaults).
+        assert_eq!(
+            active_spec(&cfg, &spec_app(8000, Some(8000))).instance(),
+            "phantom-a"
+        );
+        assert_eq!(
+            active_spec(&cfg, &spec_app(8000, Some(18000))).instance(),
+            "phantom-b"
+        );
+        // Stale ports fall back to the unslotted unit instead of a wrong slot.
+        assert_eq!(
+            active_spec(&cfg, &spec_app(9000, Some(18000))).instance(),
+            "phantom"
+        );
+        assert_eq!(
+            active_spec(&cfg, &spec_app(9000, None)).instance(),
+            "phantom"
+        );
     }
 
     #[test]

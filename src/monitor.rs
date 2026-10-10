@@ -30,6 +30,16 @@ struct Bucket {
     visits: HashMap<String, (i64, i64)>,
 }
 
+/// Counter delta that never counts a lifetime total as one minute: first
+/// sight baselines at zero, restarts-from-zero count in full.
+fn visit_delta(previous: Option<i64>, current: i64) -> i64 {
+    match previous {
+        None => 0,
+        Some(prev) if current >= prev => current - prev,
+        _ => current,
+    }
+}
+
 /// Per-app state kept in memory between ticks (never persisted).
 #[derive(Default)]
 struct AppMemo {
@@ -73,7 +83,16 @@ async fn tick(
             .await?;
 
     for app in &apps {
-        let entry = memo.entry(app.id.clone()).or_default();
+        let entry = memo.entry(app.id.clone()).or_insert_with(|| AppMemo {
+            // Apps already running stay believed-healthy across restarts;
+            // anything else starts unknown until probes prove otherwise.
+            threshold: if app.status == "running" {
+                health::Threshold::healthy()
+            } else {
+                health::Threshold::default()
+            },
+            ..Default::default()
+        });
         if let Err(e) = watch_app(state, app, entry).await {
             tracing::debug!(app = %app.name, error = %e, "app monitor step failed");
         }
@@ -317,12 +336,13 @@ async fn scrape_metrics(state: &AppState, app: &Application, base: &str, memo: &
     };
     let samples = scrape::parse(&body);
     for visit in scrape::visitor_samples(&samples) {
-        let prev = memo.visit_counters.get(&visit.region).copied().unwrap_or(0);
-        let delta = if visit.visits >= prev {
-            visit.visits - prev
-        } else {
-            visit.visits
-        };
+        // First sight of a region baselines without adding: the in-memory
+        // counters reset on every monitor restart, and counting the whole
+        // lifetime counter as one minute of visits would inflate history.
+        let delta = visit_delta(
+            memo.visit_counters.get(&visit.region).copied(),
+            visit.visits,
+        );
         memo.visit_counters
             .insert(visit.region.clone(), visit.visits);
         let entry = memo.bucket.visits.entry(visit.region).or_insert((0, 0));
@@ -437,8 +457,14 @@ async fn read_proc_reading(
     Some(stats::proc_to_stats(parsed, 100, 4096))
 }
 
-async fn set_status(state: &AppState, id: &str, status: &str) -> turaes_core::Result<()> {
-    sqlx::query("UPDATE applications SET status = ?, updated_at = datetime('now') WHERE id = ?")
+pub(crate) async fn set_status(
+    state: &AppState,
+    id: &str,
+    status: &str,
+) -> turaes_core::Result<()> {
+    // Never resurrect an explicitly stopped app from a stale tick snapshot:
+    // only lifecycle actions may leave `stopped`.
+    sqlx::query("UPDATE applications SET status = ?, updated_at = datetime('now') WHERE id = ? AND status != 'stopped'")
         .bind(status)
         .bind(id)
         .execute(&state.pool)
@@ -516,5 +542,15 @@ mod tests {
         assert_eq!(live_port(&app(8000, None)), 8000);
         assert_eq!(live_port(&app(8000, Some(8000))), 8000);
         assert_eq!(live_port(&app(8000, Some(18000))), 18000);
+    }
+
+    #[test]
+    fn visit_delta_baselines_first_sight() {
+        // A lifetime counter seen first must not count as one minute.
+        assert_eq!(visit_delta(None, 1_000_000), 0);
+        // Normal increments pass through; counter resets count in full.
+        assert_eq!(visit_delta(Some(100), 150), 50);
+        assert_eq!(visit_delta(Some(200), 30), 30);
+        assert_eq!(visit_delta(Some(100), 100), 0);
     }
 }

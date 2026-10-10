@@ -15,6 +15,7 @@ use tonic::{Request, Response, Status};
 use turaes_core::crypto::{random_token, token_hash};
 use turaes_core::models::Server;
 
+use crate::routes::apps::refresh_proxy_routes;
 use crate::state::AppState;
 
 /// Generated protobuf/tonic types (`turaes.v1`).
@@ -389,6 +390,9 @@ pub async fn report(state: &AppState, req: ReportRequest) -> Result<ReportRespon
     .map_err(internal)?;
 
     tracing::info!(server = %server.name, app = %req.app_name, status = %req.status, "agent reported");
+    // A reported status flips routability (stopped/failed park the host);
+    // republish so the proxy follows without waiting for another trigger.
+    let _ = refresh_proxy_routes(state).await;
     Ok(ReportResponse { ok: true })
 }
 

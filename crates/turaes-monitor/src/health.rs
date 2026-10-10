@@ -104,6 +104,16 @@ impl Threshold {
         Self::default()
     }
 
+    /// Create a tracker believing healthy. Use for apps already `running`
+    /// when monitoring (re)starts, so the first ticks don't park live
+    /// traffic before the healthy threshold is re-proven.
+    pub fn healthy() -> Self {
+        Self {
+            healthy: true,
+            ..Default::default()
+        }
+    }
+
     /// Current belief.
     pub fn is_healthy(&self) -> bool {
         self.healthy
@@ -191,6 +201,26 @@ mod tests {
         t.record(&fail(), &cfg);
         t.record(&ok(), &cfg); // resets failure streak
         assert_eq!(t.record(&fail(), &cfg), None); // only 1 after reset
+        assert!(!t.is_healthy());
+    }
+
+    #[test]
+    fn healthy_start_needs_no_reproof() {
+        let cfg = HealthConfig {
+            healthy_threshold: 2,
+            unhealthy_threshold: 3,
+            ..Default::default()
+        };
+        // Apps already running start believed-healthy: single oks stay
+        // quiet instead of emitting a spurious BecameHealthy.
+        let mut t = Threshold::healthy();
+        assert!(t.is_healthy());
+        assert_eq!(t.record(&ok(), &cfg), None);
+        assert!(t.is_healthy());
+        // ...while real outages still trip after the fail threshold.
+        assert_eq!(t.record(&fail(), &cfg), None);
+        assert_eq!(t.record(&fail(), &cfg), None);
+        assert_eq!(t.record(&fail(), &cfg), Some(Transition::BecameUnhealthy));
         assert!(!t.is_healthy());
     }
 }
