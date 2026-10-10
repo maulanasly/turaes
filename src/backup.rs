@@ -37,6 +37,13 @@ fn timestamp() -> String {
 pub async fn snapshot_to(pool: &Pool, dest: &Path) -> Result<()> {
     if let Some(parent) = dest.parent() {
         tokio::fs::create_dir_all(parent).await.map_err(Error::Io)?;
+        #[cfg(unix)]
+        {
+            // Snapshots contain sealed secrets and token hashes: owner-only.
+            use std::os::unix::fs::PermissionsExt;
+            let _ =
+                tokio::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).await;
+        }
     }
     // The destination is operator configuration, not user input; quote it for
     // SQL by doubling single quotes (bound parameters are not accepted here).
@@ -44,6 +51,13 @@ pub async fn snapshot_to(pool: &Pool, dest: &Path) -> Result<()> {
     sqlx::query(&format!("VACUUM INTO '{quoted}'"))
         .execute(pool)
         .await?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o600))
+            .await
+            .map_err(Error::Io)?;
+    }
     Ok(())
 }
 
@@ -118,7 +132,38 @@ pub fn restore_file(src: &Path, dest: &Path) -> Result<()> {
             "snapshot and destination are the same file".into(),
         ));
     }
+    // Refuse while the service holds the database: a live writer's WAL would
+    // replay stale pages over the restored file on next boot. Best-effort on
+    // non-systemd platforms (the --force contract covers the rest).
+    #[cfg(target_os = "linux")]
+    {
+        if std::process::Command::new("systemctl")
+            .arg("is-active")
+            .arg("--quiet")
+            .arg("turaes")
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            return Err(Error::BadRequest(
+                "turaes is still running (systemctl stop turaes first)".into(),
+            ));
+        }
+    }
     std::fs::copy(src, dest).map_err(Error::Io)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o600))
+            .map_err(Error::Io)?;
+    }
+    // Drop WAL sidecars next to the destination: they belong to the
+    // pre-restore generation and would replay over the restored file.
+    for ext in ["-wal", "-shm", "-journal"] {
+        let mut sidecar = dest.as_os_str().to_owned();
+        sidecar.push(ext);
+        let _ = std::fs::remove_file(std::path::Path::new(&sidecar));
+    }
     Ok(())
 }
 
@@ -225,5 +270,44 @@ mod tests {
         std::fs::write(&bad, b"junk").unwrap();
         assert!(restore_file(&bad, &dest).is_err());
         verify_sqlite(&dest).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn mode_of(path: &std::path::Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn snapshots_are_owner_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = test_pool(dir.path()).await;
+        let dest = dir.path().join("backups").join("turaes-test.db");
+        snapshot_to(&pool, &dest).await.unwrap();
+        assert_eq!(mode_of(&dest), 0o600);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn restore_sets_owner_only_and_drops_wal_sidecars() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        // Minimal valid SQLite header so verify_sqlite passes.
+        let snap = dir.path().join("snap.db");
+        {
+            let mut f = std::fs::File::create(&snap).unwrap();
+            f.write_all(b"SQLite format 3\0").unwrap();
+            f.write_all(&[0u8; 100]).unwrap();
+        }
+        let dest = dir.path().join("live.db");
+        std::fs::write(&dest, b"junk").unwrap();
+        // Stale sidecars from the pre-restore generation must not survive.
+        std::fs::write(dir.path().join("live.db-wal"), b"stale").unwrap();
+        std::fs::write(dir.path().join("live.db-shm"), b"stale").unwrap();
+        restore_file(&snap, &dest).unwrap();
+        assert_eq!(mode_of(&dest), 0o600);
+        assert!(!dir.path().join("live.db-wal").exists());
+        assert!(!dir.path().join("live.db-shm").exists());
     }
 }

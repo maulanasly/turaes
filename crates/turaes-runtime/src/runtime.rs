@@ -170,6 +170,42 @@ pub async fn install_binary(src: &str, dest: &str) -> Result<()> {
     Ok(())
 }
 
+/// Write an env file with owner-only permissions. These files hold decrypted
+/// secrets: the mode is set explicitly (never inherited from umask) and
+/// normalized on every write so pre-existing world-readable files heal.
+pub async fn write_env_file(path: &str, body: &str) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+    use turaes_core::Error;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .await
+            .map_err(|e| Error::Internal(format!("failed to write {path}: {e}")))?;
+        // Mode applies at creation only; normalize unconditionally.
+        tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).await?;
+        file.write_all(body.as_bytes())
+            .await
+            .map_err(|e| Error::Internal(format!("failed to write {path}: {e}")))?;
+        file.flush()
+            .await
+            .map_err(|e| Error::Internal(format!("failed to write {path}: {e}")))?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::fs::write(path, body)
+            .await
+            .map_err(|e| Error::Internal(format!("failed to write {path}: {e}")))?;
+        Ok(())
+    }
+}
+
 /// Sync a publish directory to `dest`, replacing it.
 ///
 /// Removes `dest` first so deleted files disappear, then copies recursively.
@@ -247,6 +283,7 @@ pub trait Runtime: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::install_binary;
+    use super::write_env_file;
 
     #[tokio::test]
     async fn install_binary_replaces_and_sets_exec() {
@@ -277,5 +314,49 @@ mod tests {
                 .mode();
             assert_eq!(mode & 0o777, 0o755);
         }
+    }
+
+    #[tokio::test]
+    async fn write_env_file_is_owner_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("app.env");
+        write_env_file(dest.to_str().unwrap(), "SECRET=abc\n")
+            .await
+            .unwrap();
+        assert_eq!(
+            tokio::fs::read_to_string(&dest).await.unwrap(),
+            "SECRET=abc\n"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = tokio::fs::metadata(&dest)
+                .await
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn write_env_file_heals_world_readable() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("app.env");
+        tokio::fs::write(&dest, b"OLD=1\n").await.unwrap();
+        tokio::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o644))
+            .await
+            .unwrap();
+        write_env_file(dest.to_str().unwrap(), "SECRET=abc\n")
+            .await
+            .unwrap();
+        let mode = tokio::fs::metadata(&dest)
+            .await
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 }

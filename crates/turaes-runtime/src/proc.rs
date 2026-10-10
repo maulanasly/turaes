@@ -92,7 +92,7 @@ impl Runtime for ProcRuntime {
                 .iter()
                 .map(|(k, v)| format!("{k}={v}\n"))
                 .collect::<String>();
-            tokio::fs::write(env_file, body).await?;
+            crate::runtime::write_env_file(env_file, &body).await?;
         }
         Ok(())
     }
