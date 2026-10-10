@@ -356,12 +356,12 @@ async fn check_systemd_timer(timer: &'static str) -> Check {
                 .output(),
         )
         .await;
-        return match output {
+        match output {
             Ok(Ok(o)) if o.status.success() => check_ok(timer, "active"),
             Ok(Ok(_)) => check_fail(timer, "not active (enable and start this timer)"),
             Ok(Err(e)) => check_fail(timer, format!("cannot run systemctl: {e}")),
             Err(_) => check_fail(timer, "systemctl timed out"),
-        };
+        }
     }
     #[cfg(not(target_os = "linux"))]
     {
