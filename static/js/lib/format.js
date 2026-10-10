@@ -24,7 +24,7 @@ export function fmtClock(d) {
 // Full date-time for long chart windows (>= 7d): "Oct 1, 02:30 PM".
 export function fmtFullDate(d) {
   const dt = new Date(d);
-  if (Number.isNaN(dt.getTime())) return "—";
+  if (Number.isNaN(dt.getTime())) return "n/a";
   return dt.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
@@ -55,7 +55,7 @@ export function fmtAxisTick(d, hours) {
 
 // Local, readable datetime for tables.
 export function fmtTime(s) {
-  if (!s) return "—";
+  if (!s) return "n/a";
   const d = new Date(parseTs(s));
   return Number.isNaN(d.getTime()) ? String(s) : d.toLocaleString();
 }
@@ -75,7 +75,7 @@ export function timeAgo(ms) {
 }
 
 export function shortHash(h) {
-  return h ? `${h.slice(7, 15)}…${h.slice(-4)}` : "—";
+  return h ? `${h.slice(7, 15)}…${h.slice(-4)}` : "n/a";
 }
 
 // Resolve a server id to its display name.

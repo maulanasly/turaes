@@ -39,7 +39,7 @@ function Activity({ entries }) {
             <td data-label="When" class="mono small">${fmtTime(e.created_at)}</td>
             <td data-label="Actor">${e.actor_login || "system"}</td>
             <td data-label="Action" class="mono">${e.action}</td>
-            <td data-label="Detail" class="mono small muted">${e.metadata || "—"}</td>
+            <td data-label="Detail" class="mono small muted">${e.metadata || "n/a"}</td>
           </tr>`)}
       </tbody>
     </table>`;
@@ -65,7 +65,7 @@ function RecentActivity({ entries, appId }) {
         <span class="mono small muted">${fmtTime(e.created_at)}</span>
         <span class=${"t-dot " + (/fail|unhealthy|error/i.test(e.action || "") ? "bad" : /deploy|restart|start/i.test(e.action || "") ? "warn" : "ok")} aria-hidden="true"></span>
         <span><a href=${`#/apps/${appId}/activity`}>${e.action}</a>
-          <span class="muted"> — ${e.actor_login || "system"}</span></span>
+          <span class="muted"> · ${e.actor_login || "system"}</span></span>
       </li>`)}
     </ul>`;
 }
@@ -104,7 +104,7 @@ function Overview({ data, range, onRange, updatedAt, loading, onRefresh, activit
     : null;
   const memPeak = metrics.length ? Math.max(...metrics.map((m) => m.mem_bytes)) : null;
   const freshness = updatedAt ? `updated ${timeAgo(Date.now() - updatedAt)}` : "loading…";
-  const emptyHint = `No samples in the ${rangeLabel} — the app may have been down, or samples aged out of retention.`;
+  const emptyHint = `No samples in the ${rangeLabel}: the app may have been down, or samples aged out of retention.`;
 
   return html`
     <div class="detail">
@@ -123,8 +123,8 @@ function Overview({ data, range, onRange, updatedAt, loading, onRefresh, activit
         </div>
       </div>
       <div class="kpis">
-        <${Kpi} label=${`CPU avg (${rangeLabel})`} value=${cpuAvg === null ? "—" : `${cpuAvg.toFixed(1)}%`} />
-        <${Kpi} label=${`Memory peak (${rangeLabel})`} value=${memPeak === null ? "—" : fmtBytes(memPeak)} />
+        <${Kpi} label=${`CPU avg (${rangeLabel})`} value=${cpuAvg === null ? "n/a" : `${cpuAvg.toFixed(1)}%`} />
+        <${Kpi} label=${`Memory peak (${rangeLabel})`} value=${memPeak === null ? "n/a" : fmtBytes(memPeak)} />
         <${Kpi} label=${`Visits (${rangeLabel})`} value=${totalVisits} />
         <${Kpi} label="Unique visitors (latest per region)" value=${maxUniques} />
       </div>
@@ -159,7 +159,7 @@ function Deployments({ deployments, onRollbackTo, rollbackNote }) {
   return html`
     <div class="table-wrap">
     ${rollbackNote && html`<p class="muted small">${rollbackNote}</p>`}
-    ${pending && html`<p class="muted small" role="status">A deployment is still in progress — this list refreshes automatically.</p>`}
+    ${pending && html`<p class="muted small" role="status">A deployment is still in progress, and this list refreshes automatically.</p>`}
     <table class="stacked">
       <thead><tr><th>Status</th><th>Version</th><th>Started</th><th>Finished</th><th></th></tr></thead>
       <tbody>
@@ -173,7 +173,7 @@ function Deployments({ deployments, onRollbackTo, rollbackNote }) {
                   await navigator.clipboard.writeText(d.artifact_hash);
                   toast.success("Version id copied");
                 } catch {
-                  toast.error("Copy failed — select the id manually");
+                  toast.error("Copy failed. Select the id manually");
                 }
               }}>Copy</button>`}
               ${d.artifact_hash && html`<details><summary class="muted small">full id</summary>
@@ -484,10 +484,10 @@ function EditForm({ app, servers, onSaved }) {
             defaultValue=${(initialArgv || []).join("\n")}
             aria-invalid=${fieldErrors.command ? "true" : null}
             aria-describedby=${fieldErrors.command ? "field-error-command" : null}></textarea>
-          <span class="muted small">The first line is the executable — no shell. ${app.command ? "To go back to the stored binary, choose Stored binary above." : "Setting a command supersedes the stored binary and flat arguments."}</span>
+          <span class="muted small">The first line is the executable (no shell). ${app.command ? "To go back to the stored binary, choose Stored binary above." : "Setting a command supersedes the stored binary and flat arguments."}</span>
           <${FieldError} errors=${fieldErrors} name="command" />
         </label>` : html`
-        <p class="muted small">Runs <span class="mono">${app.command ? "the configured argv" : app.binary_path}</span> — no shell is involved.</p>`}
+        <p class="muted small">Runs <span class="mono">${app.command ? "the configured argv" : app.binary_path}</span>. No shell is involved.</p>`}
       <label>Working directory <input name="workdir" defaultValue=${app.workdir ?? ""} placeholder="app state directory" />
         <span class="muted small">Where the process runs. Empty the field to revert to the default.</span>
       </label>
@@ -693,7 +693,7 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
     try {
       const result = await oapi(`/apps/${encodeURIComponent(id)}/deploy`, { method: "POST" });
       if (result.state === "unknown") {
-        toast.info(`Deploy queued for ${serverName(servers, app.server_id)} — watch it land on the Deployments tab.`);
+        toast.info(`Deploy queued for ${serverName(servers, app.server_id)}, watch it land on the Deployments tab.`);
         navigate(`#/apps/${id}/deployments`);
       } else toast.success(`Deployed ${app.name}`);
       loadApp();
@@ -836,7 +836,7 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
             <div class="stat"><span>Server</span><span class="mono">${serverName(servers, app.server_id)}</span></div>
             ${app.kind === "worker"
               ? html`<div class="stat"><span>Workload</span><span>Background worker</span></div>`
-              : html`<div class="stat"><span>Route</span><span class="mono">${app.domain || "—"}</span></div>
+              : html`<div class="stat"><span>Route</span><span class="mono">${app.domain || "n/a"}</span></div>
                 <div class="stat"><span>Port</span><span class="mono">:${app.port}</span></div>`}
             <div class="stat"><span>Managed by</span><span>${runtimeLabel(app.runtime)}</span></div>
             <div class="stat"><span>Last deploy</span><span>${latest

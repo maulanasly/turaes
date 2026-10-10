@@ -6,9 +6,9 @@ import { confirmAction } from "../lib/confirm.js";
 import { fmtTime } from "../lib/format.js";
 
 const SCOPES = [
-  ["read", "Read — apps, metrics, history"],
-  ["deploy", "Deploy — read plus deploys, lifecycle, env, domains"],
-  ["admin", "Admin — deploy plus apps, tokens (never owner)"],
+  ["read", "Read: apps, metrics, history"],
+  ["deploy", "Deploy: read plus deploys, lifecycle, env, domains"],
+  ["admin", "Admin: deploy plus apps, tokens (never owner)"],
 ];
 
 export function TokensView({ user }) {
@@ -67,7 +67,7 @@ export function TokensView({ user }) {
       await navigator.clipboard.writeText(text);
       toast.success("Copied");
     } catch {
-      toast.error("Copy failed — select the token manually");
+      toast.error("Copy failed. Select the token manually");
     }
   };
 
@@ -77,7 +77,7 @@ export function TokensView({ user }) {
       <p class="muted small">Programmatic access for CI (use <span class="mono">Authorization: Bearer …</span>).
         Tokens are bound to this organization and can never manage members.</p>
       ${fresh && html`<div class="notice">
-        <div><strong>${fresh.name}</strong> — copy it now, it is never shown again.</div>
+        <div><strong>${fresh.name}</strong>. Copy it now, it is never shown again.</div>
         <div class="mono">${fresh.plaintext}
           <button class="btn small ghost" onClick=${() => copy(fresh.plaintext)}>Copy</button>
           <button class="btn small ghost" onClick=${() => setFresh(null)}>Dismiss</button>
@@ -91,7 +91,7 @@ export function TokensView({ user }) {
         : tokens === "denied"
           ? html`<p class="muted">Token management needs an admin of this organization.</p>`
           : tokens.length === 0
-          ? html`<p class="muted">No tokens yet — create one below for CI access.</p>`
+          ? html`<p class="muted">No tokens yet. Create one below for CI access.</p>`
           : html`<div class="table-wrap"><table class="stacked">
               <thead><tr><th>Name</th><th>Scope</th><th>Created</th><th>Last used</th><th></th></tr></thead>
               <tbody>
@@ -99,7 +99,7 @@ export function TokensView({ user }) {
                   <tr>
                     <td data-label="Name" class="mono">${t.name}</td>
                     <td data-label="Scope"><span class="mono small muted">${t.scopes}</span></td>
-                    <td data-label="Created" class="muted">${t.created_at ? fmtTime(t.created_at) : "—"}</td>
+                    <td data-label="Created" class="muted">${t.created_at ? fmtTime(t.created_at) : "n/a"}</td>
                     <td data-label="Last used" class="muted">${t.last_used_at ? fmtTime(t.last_used_at) : "never"}</td>
                     <td class="controls no-label">
                       ${user && html`<button class="btn small ghost" disabled=${busy !== null} onClick=${() => revoke(t)}>Revoke</button>`}

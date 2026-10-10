@@ -78,7 +78,7 @@ export function ServerDetailView({ id }) {
   const cpu = metrics.map((m) => ({ x: parseTs(m.recorded_at), y: m.cpu_pct }));
   const mem = metrics.map((m) => ({ x: parseTs(m.recorded_at), y: m.mem_bytes }));
   const latest = metrics[metrics.length - 1];
-  const emptyHint = `No host samples in the ${fmtRangeLabel(range)}${server.is_local ? "" : " — remote nodes report capacity once their agent lands"}.`;
+  const emptyHint = `No host samples in the ${fmtRangeLabel(range)}${server.is_local ? "" : ", remote nodes report capacity once their agent lands"}.`;
 
   return html`
     <section class="panel">
@@ -88,8 +88,8 @@ export function ServerDetailView({ id }) {
         <tbody>
           <tr><th>Address</th><td class="mono break">${server.address}</td></tr>
           <tr><th>Status</th><td>${server.status}</td></tr>
-          <tr><th>Last seen</th><td>${server.last_seen_at ? fmtTime(server.last_seen_at) : "—"}</td></tr>
-          <tr><th>Agent version</th><td class="mono">${server.agent_version || "—"}</td></tr>
+          <tr><th>Last seen</th><td>${server.last_seen_at ? fmtTime(server.last_seen_at) : "n/a"}</td></tr>
+          <tr><th>Agent version</th><td class="mono">${server.agent_version || "n/a"}</td></tr>
           <tr><th>Role</th><td>${server.is_local ? "control plane" : "worker"}</td></tr>
         </tbody>
       </table></div>

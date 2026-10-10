@@ -12,7 +12,7 @@ test("fmtBytes scales", () => {
 test("shortHash trims the sha256 prefix", () => {
   const h = "sha256:" + "a".repeat(64);
   assert.equal(shortHash(h).startsWith("aaaaaaa"), true);
-  assert.equal(shortHash(null), "—");
+  assert.equal(shortHash(null), "n/a");
 });
 
 test("serverName resolves id -> name", () => {
@@ -56,8 +56,8 @@ test("fmtFullDate is a human datetime (never NaN text)", () => {
   const t = Date.UTC(2026, 9, 4, 12, 30); // Oct 4, 2026 12:30 UTC
   const s = fmtFullDate(t);
   assert.equal(s.includes("Oct"), true);
-  assert.equal(s === "—", false);
-  assert.equal(fmtFullDate(NaN), "—");
+  assert.equal(s === "n/a", false);
+  assert.equal(fmtFullDate(NaN), "n/a");
 });
 
 test("fmtAxisTick uses clock for short windows, full date for week+", () => {

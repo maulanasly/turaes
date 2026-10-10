@@ -9,10 +9,10 @@ export const KINDS = [
     label: "Web service",
     blurb: "A long-running process that listens on a port. turaes routes a domain to it through the proxy.",
     constraints: [
-      "Runs a prebuilt binary already on the server — turaes never builds or containers it.",
+      "Runs a prebuilt binary already on the server; turaes never builds or containers it.",
       "The port must be free on the chosen server.",
       "Arguments are passed literally: there is no shell, so no pipes, globs or quoting.",
-      "For a custom executable or working directory, use Advanced launch below — or define command/workdir in turaes.yaml.",
+      "For a custom executable or working directory, use Advanced launch below, or define command/workdir in turaes.yaml.",
     ],
   },
   {
@@ -20,7 +20,7 @@ export const KINDS = [
     label: "Static site",
     blurb: "A directory of files that turaes serves itself. No process is started.",
     constraints: [
-      "turaes serves the directory directly — there is no build step.",
+      "turaes serves the directory directly; there is no build step.",
       "Needs a free port for its internal file server.",
       "Files are synced to the server on the next deploy.",
     ],
@@ -28,12 +28,12 @@ export const KINDS = [
   {
     id: "worker",
     label: "Background worker",
-    blurb: "A long-running process with no port and no route — queues, jobs, watch loops.",
+    blurb: "A long-running process with no port and no route: queues, jobs, watch loops.",
     constraints: [
       "Runs a prebuilt binary already on the server.",
       "No port and no domain: nothing can reach it over HTTP.",
       "It is supervised and restarted on failure; watch it in the logs tab.",
-      "For a custom executable or working directory, use Advanced launch below — or define command/workdir in turaes.yaml.",
+      "For a custom executable or working directory, use Advanced launch below, or define command/workdir in turaes.yaml.",
     ],
   },
 ];
@@ -270,26 +270,26 @@ export function buildPayload(draft) {
 // Grouped rows for the review-before-create summary.
 export function reviewGroups(draft, serverLabel) {
   const kind = kindInfo(draft.kind);
-  const identity = [["Name", draft.name.trim() || "—"]];
+  const identity = [["Name", draft.name.trim() || "n/a"]];
   if (draft.description.trim()) identity.push(["Description", draft.description.trim()]);
 
   const process = [];
   const useCommand = draft.kind !== "static" && draft.launchMode === "command";
   process.push(["Launch", useCommand ? "Explicit argv command" : draft.kind === "static" ? "Built-in file server" : "Prebuilt binary"]);
-  if (draft.kind === "static") process.push(["Source directory", draft.publish_dir.trim() || "—"]);
+  if (draft.kind === "static") process.push(["Source directory", draft.publish_dir.trim() || "n/a"]);
   else if (useCommand) {
     const { lines } = validateCommandLines(draft.command);
-    process.push(["Command", lines.length > 0 ? lines.join(" ") : "—"]);
-  } else process.push(["Binary", draft.binary_path.trim() || "—"]);
+    process.push(["Command", lines.length > 0 ? lines.join(" ") : "n/a"]);
+  } else process.push(["Binary", draft.binary_path.trim() || "n/a"]);
   if (!useCommand && draft.args.trim()) process.push(["Arguments", draft.args.trim()]);
   if (draft.workdir.trim()) process.push(["Working directory", draft.workdir.trim()]);
   if (draft.kind !== "worker") {
-    process.push(["Port", draft.port || "—"]);
+    process.push(["Port", draft.port || "n/a"]);
     process.push(["Health path", draft.health_path.trim() || "/health (default)"]);
   }
 
-  const placement = [["Server", serverLabel || draft.server_id || "—"]];
-  if (draft.kind !== "worker") placement.push(["Domain", draft.domain.trim() || "— (no route)"]);
+  const placement = [["Server", serverLabel || draft.server_id || "n/a"]];
+  if (draft.kind !== "worker") placement.push(["Domain", draft.domain.trim() || "no route"]);
   placement.push(["Managed by", draft.runtime === "proc" ? "turaes (proc)" : "systemd"]);
   placement.push(["Restart when unhealthy", draft.auto_restart ? "yes" : "no"]);
   if (draft.mem_limit_mb !== "") placement.push(["Memory limit", `${draft.mem_limit_mb} MiB`]);
@@ -305,10 +305,10 @@ export function reviewGroups(draft, serverLabel) {
 
 // What creating the app does (it does not start anything yet).
 export function createConsequences(kind, domain = "") {
-  const notes = ["Creating only records the app — it starts as stopped and is not reachable until you deploy."];
+  const notes = ["Creating only records the app. It starts as stopped and is not reachable until you deploy."];
   if (kind === "static") {
     notes.push(domain
-      ? "On deploy, turaes serves the files and routes this domain — no build runs."
+      ? "On deploy, turaes serves the files and routes this domain. No build runs."
       : "On deploy, turaes serves the files; no public domain route is configured and no build runs.");
   } else if (kind === "worker") {
     notes.push("On deploy, turaes installs the binary and starts the process; there is no port or route to swap.");

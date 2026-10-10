@@ -46,7 +46,7 @@ export function CatalogView({ user, servers }) {
 
   const useTemplate = (slug, name) => {
     navigate(`#/apps?template=${encodeURIComponent(slug)}`);
-    toast.info(`Starting “${name}” from a template — review and create it below.`);
+    toast.info(`Starting “${name}” from a template, review and create it below.`);
   };
 
   const retry = () => { setError(null); load(); };
@@ -62,7 +62,7 @@ export function CatalogView({ user, servers }) {
       <div class="panel-head">
         <div>
           <h1>Catalog</h1>
-          <p class="action-note muted small">Your applications plus one-click starters. Templates open the create wizard prefilled — nothing is created until you confirm.</p>
+          <p class="action-note muted small">Your applications plus one-click starters. Templates open the create wizard prefilled. Nothing is created until you confirm.</p>
         </div>
         <div class="controls">
           <div class="seg" role="radiogroup" aria-label="Catalog sections">
@@ -83,7 +83,7 @@ export function CatalogView({ user, servers }) {
           ${showApps && html`
             <div class="section-band"><h2>Your applications</h2><span class="muted small">${shownApps.length} app${shownApps.length === 1 ? "" : "s"}</span></div>
             ${shownApps.length === 0
-              ? html`<p class="muted">${q ? "No applications match this search." : "No applications yet — start one from a template below."}</p>`
+              ? html`<p class="muted">${q ? "No applications match this search." : "No applications yet. Start one from a template below."}</p>`
               : html`<div class="table-wrap"><table class="stacked">
                   <thead><tr><th>Status</th><th>Name</th><th>Server</th><th>Updated</th><th></th></tr></thead>
                   <tbody>
@@ -106,7 +106,7 @@ export function CatalogView({ user, servers }) {
                     <div class="card">
                       <h3><span>${t.name}</span></h3>
                       <div class="stat"><span>Type</span><span>${(kindInfo(t.kind) || {}).label || t.kind}</span></div>
-                      <div class="stat"><span>About</span><span>${t.description || "—"}</span></div>
+                      <div class="stat"><span>About</span><span>${t.description || "n/a"}</span></div>
                       <div class="controls" style="margin-top:8px">
                         ${user
                           ? html`<button class="btn small" onClick=${() => useTemplate(t.slug, t.name)}>Use template</button>`
@@ -116,7 +116,7 @@ export function CatalogView({ user, servers }) {
                 </div>`}`}
           <div class="section-band"><h2>Platform</h2></div>
           <div class="callout" role="note">
-            <strong>turaes v${(catalog.platform || {}).version || "—"}</strong>
+            <strong>turaes v${(catalog.platform || {}).version || "n/a"}</strong>
             <ul><li>Control plane and edge versions are reported by the serving binary; versioned platform releases arrive with the registry.</li></ul>
           </div>`}
     </section>`;
