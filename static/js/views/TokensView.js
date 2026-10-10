@@ -23,7 +23,8 @@ export function TokensView({ user }) {
       setTokens(r.tokens || []);
       setError(null);
     } catch (e) {
-      if (e.status === 403 || e.status === 401) { setTokens("denied"); setError(null); }
+      if (e.status === 401) return;
+      else if (e.status === 403) { setTokens("denied"); setError(null); }
       else { setError(e.message); toast.error(e.message); }
     }
   }, []);

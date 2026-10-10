@@ -2,7 +2,7 @@
 import { render } from "preact";
 import { useEffect, useState, useCallback, useRef } from "preact/hooks";
 import { html } from "./lib/html.js";
-import { api, setOrg, getOrg, oapi } from "./lib/api.js";
+import { api, setOrg, getOrg, oapi, onUnauthorized } from "./lib/api.js";
 import { toast } from "./lib/toast.js";
 import { useRoute, pathFor } from "./lib/router.js";
 import { Toasts } from "./components/Toasts.js";
@@ -168,6 +168,15 @@ function Shell() {
   }, []);
 
   useEffect(() => { loadUser(); }, [loadUser]);
+
+  // Session-expiry fan-out: any view hitting 401 re-checks the session.
+  // A dead session flips user to null (LoginView); a live one keeps state.
+  // The ref avoids resubscribing (and stampeding loadUser) on every render.
+  const userRef = useRef(user);
+  userRef.current = user;
+  useEffect(() => onUnauthorized(() => {
+    if (userRef.current) loadUser();
+  }), [loadUser]);
 
   // Only poll once authenticated. Alerts are org-scoped, so refetch when the
   // active org changes.

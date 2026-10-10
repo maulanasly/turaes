@@ -48,7 +48,9 @@ export function ServersView({ user, onChanged }) {
       setServers(r.servers || []);
       setError(null);
     } catch (e) {
-      if (e.status === 401) { setServers([]); setError(null); }
+      // 401 is handled centrally (Shell re-checks the session): keep prior
+      // data instead of faking an empty fleet.
+      if (e.status === 401) return;
       else { setError(e.message); toast.error(e.message); }
     }
     try {

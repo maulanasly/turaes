@@ -47,8 +47,10 @@ export function ServerDetailView({ id }) {
         setStatsErr(null);
       } catch (e) {
         if (cancelled) return;
+        // 401 is handled centrally (Shell re-checks the session): keep
+        // prior metrics instead of clearing or erroring.
+        if (e.status === 401) return;
         if (e.status === 403) setStatsErr("operator access required");
-        else if (e.status === 401) setStatsErr(null);
         else setStatsErr(e.message);
       }
     })();

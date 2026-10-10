@@ -15,9 +15,12 @@ export function LogViewer({ appId, height = 300 }) {
     let ws;
     let retry;
 
+    // Fresh app, fresh lines: never flash the previous app's logs.
+    setLines([]);
+
     const connect = () => {
       const proto = location.protocol === "https:" ? "wss" : "ws";
-      ws = new WebSocket(`${proto}://${location.host}${orgPath(`/apps/${appId}/logs`)}`);
+      ws = new WebSocket(`${proto}://${location.host}${orgPath(`/apps/${encodeURIComponent(appId)}/logs`)}`);
       setStatus("connecting…");
       ws.onopen = () => setStatus("live");
       ws.onmessage = (ev) => {

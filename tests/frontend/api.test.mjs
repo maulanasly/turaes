@@ -63,3 +63,41 @@ test("api preserves multi-error arrays alongside the first field", async () => {
     globalThis.fetch = previousFetch;
   }
 });
+
+test("api merges caller headers without dropping the JSON default", async () => {
+  const previousFetch = globalThis.fetch;
+  let seen;
+  globalThis.fetch = async (url, options) => {
+    seen = options;
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  };
+  try {
+    await api("/api/v1/test", { headers: { "x-extra": "1" } });
+    assert.equal(seen.headers["content-type"], "application/json");
+    assert.equal(seen.headers["x-extra"], "1");
+    assert.equal(seen.credentials, "same-origin");
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("api notifies unauthorized subscribers on 401 only", async () => {
+  const { onUnauthorized } = await import("../../static/js/lib/api.js");
+  const previousFetch = globalThis.fetch;
+  let calls = 0;
+  const off = onUnauthorized(() => { calls += 1; });
+  try {
+    globalThis.fetch = async () => new Response("{}", { status: 401 });
+    await assert.rejects(api("/api/v1/test"), (err) => err.status === 401);
+    assert.equal(calls, 1);
+    globalThis.fetch = async () => new Response("{}", { status: 403 });
+    await assert.rejects(api("/api/v1/test"));
+    assert.equal(calls, 1);
+    off();
+    globalThis.fetch = async () => new Response("{}", { status: 401 });
+    await assert.rejects(api("/api/v1/test"));
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
