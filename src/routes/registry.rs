@@ -271,8 +271,9 @@ fn elf_arch(bytes: &[u8]) -> Result<Option<&'static str>> {
     }
 }
 
-/// Ensure an `artifacts` metadata row exists for `hash` (idempotent adopt),
-/// returning its id.
+/// Ensure an `artifacts` metadata row exists for `hash` **in this org**
+/// (idempotent adopt), returning its id. Dedup is per-org: knowing a foreign
+/// hash never grants a row here.
 async fn ensure_artifact_row(
     pool: &Pool,
     org_id: &str,
@@ -281,9 +282,18 @@ async fn ensure_artifact_row(
     arch: Option<&str>,
     actor: &str,
 ) -> Result<String> {
+    if let Some(id) =
+        sqlx::query_scalar::<_, String>("SELECT id FROM artifacts WHERE hash = ? AND org_id = ?")
+            .bind(hash)
+            .bind(org_id)
+            .fetch_optional(pool)
+            .await?
+    {
+        return Ok(id);
+    }
     let id = uuid::Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT OR IGNORE INTO artifacts (id, org_id, hash, size_bytes, media_type, arch, created_by) \
+    let inserted = sqlx::query(
+        "INSERT INTO artifacts (id, org_id, hash, size_bytes, media_type, arch, created_by) \
          VALUES (?, ?, ?, ?, 'application/octet-stream', ?, ?)",
     )
     .bind(&id)
@@ -293,12 +303,18 @@ async fn ensure_artifact_row(
     .bind(arch)
     .bind(actor)
     .execute(pool)
-    .await?;
-    sqlx::query_scalar("SELECT id FROM artifacts WHERE hash = ?")
-        .bind(hash)
-        .fetch_one(pool)
-        .await
-        .map_err(Error::Db)
+    .await;
+    match inserted {
+        Ok(_) => Ok(id),
+        // Lost a same-org push race: re-read the winner's row.
+        Err(e) => sqlx::query_scalar("SELECT id FROM artifacts WHERE hash = ? AND org_id = ?")
+            .bind(hash)
+            .bind(org_id)
+            .fetch_one(pool)
+            .await
+            .map_err(|_| e)
+            .map_err(Error::Db),
+    }
 }
 
 /// Required-string manifest field: present-but-not-a-string is a 400, so
@@ -494,6 +510,53 @@ impl Drop for StagedTemp {
             let _ = std::fs::remove_file(p);
         }
     }
+}
+
+/// Provenance field ceilings (stored verbatim in release rows and echoed by
+/// list endpoints — unbounded strings bloat pinned rows forever).
+const MAX_COMMIT_LEN: usize = 128;
+const MAX_BUILD_URL_LEN: usize = 2048;
+const MAX_NOTES_LEN: usize = 4096;
+/// Architectures the fleet schedules. Unknown machines fail closed here
+/// instead of being inventoried under a typo.
+const KNOWN_ARCHES: &[&str] = &["x86_64", "aarch64"];
+
+/// Cap an optional metadata field.
+fn capped_field(value: Option<String>, field: &str, max: usize) -> Result<Option<String>> {
+    match value {
+        Some(v) if v.len() > max => Err(Error::FieldValidation {
+            field: field.into(),
+            detail: format!("{field} exceeds {max} characters"),
+        }),
+        v => Ok(v),
+    }
+}
+
+fn validate_build_url(url: &str) -> Result<()> {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(Error::FieldValidation {
+            field: "build_url".into(),
+            detail: "build_url must be an http(s) URL".into(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_arch_name(arch: &str) -> Result<()> {
+    if !KNOWN_ARCHES.contains(&arch) {
+        return Err(Error::FieldValidation {
+            field: "arch".into(),
+            detail: "unknown arch (want one of x86_64, aarch64)".into(),
+        });
+    }
+    Ok(())
+}
+
+/// Both accepted spellings of an artifact hash (`sha256:hex` and bare hex)
+/// for SQL comparisons — stored rows use the prefixed form, callers vary.
+fn hash_forms(hash: &str) -> (String, String) {
+    let bare = hash.strip_prefix("sha256:").unwrap_or(hash).to_lowercase();
+    (format!("sha256:{bare}"), bare)
 }
 
 /// Map SQLite unique violations to 409 with the offending field; anything
@@ -772,6 +835,26 @@ pub async fn upload(
             detail: "unknown query fields (did you misspell one?)".into(),
         });
     }
+    // Provenance caps up front: reject absurd metadata before buffering
+    // hundreds of megabytes around it.
+    if let Some(a) = params.get("arch").filter(|s| !s.is_empty()) {
+        validate_arch_name(a)?;
+    }
+    if let Some(u) = params.get("build_url").filter(|s| !s.is_empty()) {
+        validate_build_url(u)?;
+    }
+    capped_field(params.get("commit").cloned(), "commit", MAX_COMMIT_LEN)?;
+    capped_field(
+        params.get("commit_sha").cloned(),
+        "commit_sha",
+        MAX_COMMIT_LEN,
+    )?;
+    capped_field(
+        params.get("build_url").cloned(),
+        "build_url",
+        MAX_BUILD_URL_LEN,
+    )?;
+    capped_field(params.get("notes").cloned(), "notes", MAX_NOTES_LEN)?;
 
     let (tmp, _size) = buffer_upload(&state, body).await?;
     let head = read_head(tmp.path()).await?;
@@ -843,6 +926,7 @@ pub async fn upload(
                     }
                     Some(_) => {}
                     None => {
+                        validate_arch_name(&ma)?;
                         release_arch = Some(ma);
                     }
                 }
@@ -1041,9 +1125,20 @@ pub async fn upload(
         }
     }
 
-    let commit = release_commit;
-    let build_url = params.get("build_url").cloned().filter(|s| !s.is_empty());
-    let notes = params.get("notes").cloned().filter(|s| !s.is_empty());
+    let commit = capped_field(release_commit, "commit", MAX_COMMIT_LEN)?;
+    let build_url = capped_field(
+        params.get("build_url").cloned().filter(|s| !s.is_empty()),
+        "build_url",
+        MAX_BUILD_URL_LEN,
+    )?;
+    if let Some(u) = &build_url {
+        validate_build_url(u)?;
+    }
+    let notes = capped_field(
+        params.get("notes").cloned().filter(|s| !s.is_empty()),
+        "notes",
+        MAX_NOTES_LEN,
+    )?;
     audit::record(
         &state,
         Some(&org_id),
@@ -1131,11 +1226,45 @@ pub async fn create_release(
     let hash = input.get("artifact_hash").cloned().unwrap_or_default();
     let app = fetch_app_ref(&state.pool, &org_id, &app_ref).await?;
     validate_version(&version)?;
-    if hash.is_empty() || !state.artifacts.has(&hash) {
-        return Err(Error::FieldValidation {
-            field: "artifact_hash".into(),
-            detail: "artifact_hash must name a blob already in the store".into(),
-        });
+    capped_field(
+        input.get("commit_sha").cloned(),
+        "commit_sha",
+        MAX_COMMIT_LEN,
+    )?;
+    capped_field(
+        input.get("build_url").cloned(),
+        "build_url",
+        MAX_BUILD_URL_LEN,
+    )?;
+    if let Some(u) = input.get("build_url").filter(|s| !s.is_empty()) {
+        validate_build_url(u)?;
+    }
+    capped_field(input.get("notes").cloned(), "notes", MAX_NOTES_LEN)?;
+    // Ownership first: the hash must already belong to this org (pushed here
+    // or pinned by one of its releases). A bare store hit is not enough —
+    // knowing a foreign hash must never adopt foreign bytes.
+    let (prefixed, bare) = hash_forms(&hash);
+    let owned: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM artifacts WHERE org_id = ? AND (hash = ? OR hash = ?)",
+    )
+    .bind(&org_id)
+    .bind(&prefixed)
+    .bind(&bare)
+    .fetch_one(&state.pool)
+    .await?;
+    let released: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM releases r JOIN artifacts t ON t.id = r.artifact_id \
+         WHERE r.org_id = ? AND (t.hash = ? OR t.hash = ?)",
+    )
+    .bind(&org_id)
+    .bind(&prefixed)
+    .bind(&bare)
+    .fetch_one(&state.pool)
+    .await?;
+    if hash.is_empty() || (owned == 0 && released == 0) {
+        return Err(Error::NotFound(
+            "unknown artifact hash for this organization".into(),
+        ));
     }
     let dup: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM releases WHERE org_id = ? AND application_id = ? AND version = ?",
@@ -1290,6 +1419,71 @@ pub async fn yank(
     Ok(Json(serde_json::json!({
         "yanked": release.version, "release_id": release.id,
     })))
+}
+
+/// `DELETE /api/v1/orgs/{org}/registry/artifacts/{hash}` — remove an
+/// unreferenced blob and its metadata rows (Admin). Refuses 409 while any
+/// deployment or release (primary or bundle member) still pins it; yanked
+/// releases keep pinning until deleted, so yank alone never frees bytes.
+pub async fn delete_artifact(
+    State(state): State<AppState>,
+    Extension(user): Extension<CurrentUser>,
+    Path((org, hash)): Path<(String, String)>,
+) -> Result<StatusCode> {
+    let org_id = authz::authorize_org(&state, &user, &org, Role::Admin).await?;
+    let (prefixed, bare) = hash_forms(&hash);
+    let pinned: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM (
+           SELECT 1 FROM deployments d JOIN applications a ON a.id = d.application_id \
+            WHERE a.org_id = ? AND (d.artifact_hash = ? OR d.artifact_hash = ?)
+           UNION
+           SELECT 1 FROM releases r JOIN artifacts t ON t.id = r.artifact_id \
+            WHERE r.org_id = ? AND (t.hash = ? OR t.hash = ?)
+           UNION
+           SELECT 1 FROM releases r \
+            WHERE r.org_id = ? AND r.files_json LIKE '%' || ? || '%'
+         )",
+    )
+    .bind(&org_id)
+    .bind(&prefixed)
+    .bind(&bare)
+    .bind(&org_id)
+    .bind(&prefixed)
+    .bind(&bare)
+    .bind(&org_id)
+    .bind(&bare)
+    .fetch_one(&state.pool)
+    .await?;
+    if pinned > 0 {
+        return Err(Error::Conflict(format!(
+            "artifact {hash} is still referenced and cannot be deleted"
+        )));
+    }
+    let deleted = sqlx::query("DELETE FROM artifacts WHERE org_id = ? AND (hash = ? OR hash = ?)")
+        .bind(&org_id)
+        .bind(&prefixed)
+        .bind(&bare)
+        .execute(&state.pool)
+        .await?
+        .rows_affected();
+    if deleted == 0 {
+        return Err(Error::NotFound(format!("artifact {hash}")));
+    }
+    if let Ok(path) = state.artifacts.path_for(&prefixed) {
+        let _ = tokio::fs::remove_file(path).await;
+    }
+    audit::record(
+        &state,
+        Some(&org_id),
+        Some(&user),
+        None,
+        "artifact.delete",
+        Some("artifact"),
+        None,
+        Some(&serde_json::json!({"hash": prefixed}).to_string()),
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// One row of the releases list: release fields plus the artifact hash.

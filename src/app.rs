@@ -65,6 +65,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/registry/releases", post(routes::registry::create_release))
         .route(
+            "/registry/artifacts/{hash}",
+            delete(routes::registry::delete_artifact),
+        )
+        .route(
             "/registry/releases/{id}/promote",
             post(routes::registry::promote),
         )

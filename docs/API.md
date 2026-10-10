@@ -135,7 +135,7 @@ roles yield `403`.
 | `PATCH` | `/api/v1/orgs/{org}/apps/{id}` | admin | Edit fields + placement |
 | `DELETE` | `/api/v1/orgs/{org}/apps/{id}` | admin | Remove app + stop it (`204`) |
 | `POST` | `/api/v1/orgs/{org}/apps/{id}/deploy` | developer | Apply a workload version (binary, static files, or worker) using slots |
-| `POST` | `/api/v1/orgs/{org}/apps/{id}/rollback` | developer | Roll back a binary build or previous static slot; command apps do not retain prior argv for rollback |
+| `POST` | `/api/v1/orgs/{org}/apps/{id}/rollback` | developer | Roll back a binary build or previous static slot; command apps do not retain prior argv for rollback; yanked builds refuse unless `{"force":true}` as admin |
 | `POST` | `/api/v1/orgs/{org}/apps/{id}/{stop,start,restart}` | developer | Lifecycle (local apps) |
 | `POST` | `/api/v1/orgs/{org}/apps/{id}/maintenance` | developer | Toggle maintenance page (`{"enabled":bool}`); units keep running |
 | `GET/POST` | `/api/v1/orgs/{org}/apps/{id}/domains` | viewer / developer | List / add domain aliases |
@@ -326,12 +326,13 @@ a gzip tarball with a top-level `manifest.json` (allowlisted keys `name`,
 | `POST` | `/api/v1/orgs/{org}/registry/links` | admin | Link a CI repo (`{application_id, repo: owner/name}`) |
 | `DELETE` | `/api/v1/orgs/{org}/registry/links?application_id=&repo=` | admin | Unlink a CI repo |
 | `GET` | `/api/v1/orgs/{org}/registry/{app}/links` | viewer | Linked CI repos |
-| `POST` | `/api/v1/orgs/{org}/registry/artifacts?app=&repo=&version=&commit=&arch=&build_url=&notes=` | admin | Push bytes (raw body, 256 MiB cap); `version` creates a release (promote separately to move channels) |
-| `POST` | `/api/v1/orgs/{org}/registry/releases` | admin | Pin a stored hash (`{application_id, version, artifact_hash, …}`) |
+| `POST` | `/api/v1/orgs/{org}/registry/artifacts?app=&repo=&version=&commit_sha=&sha256=&arch=&build_url=&notes=` | admin | Push bytes (raw body, 256 MiB cap); `version` creates a release (promote separately to move channels); `sha256` pins the expected digest |
+| `POST` | `/api/v1/orgs/{org}/registry/releases` | admin | Pin a stored hash (`{application_id, version, artifact_hash, …}`) — hash must already belong to the org |
 | `POST` | `/api/v1/orgs/{org}/registry/releases/{id}/promote` | admin | Move a channel pointer (`{channel}`) |
 | `POST` | `/api/v1/orgs/{org}/registry/releases/{id}/yank` | admin | Hide a release from every channel (bytes kept) |
 | `GET` | `/api/v1/orgs/{org}/registry/{app}/releases` | viewer | `{releases: [...], channels: [...]}` |
 | `GET` | `/api/v1/orgs/{org}/registry/{app}/resolve?version=&channel=` | viewer | Preview the pinned hash without deploying |
+| `DELETE` | `/api/v1/orgs/{org}/registry/artifacts/{hash}` | admin | Delete an unreferenced blob + metadata (`409` while any deployment or release pins it) |
 | `POST` | `/api/v1/orgs/{org}/apps/{id}/deploy` | developer | Now accepts `{version}` or `{channel}` (exactly one); no body is the classic redeploy |
 
 Pushes require the repo to be linked (`403` otherwise); versions are strict
