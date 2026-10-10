@@ -116,7 +116,7 @@ function Overview({ data, range, onRange, updatedAt, loading, onRefresh, activit
               onClick=${() => onRange(r)} title=${fmtRangeLabel(r)}>${r}</button>`)}
         </div>
         <div class="controls">
-          <span class="muted small" role="status">${freshness} · ${rangeLabel}</span>
+          <span class="muted small" role="status" title=${metricsError || ""}>${freshness} · ${rangeLabel}${metricsError ? " · stale" : ""}</span>
           <button type="button" class="btn small ghost" disabled=${loading} onClick=${onRefresh}>
             ${loading ? "Refreshing…" : "Refresh"}
           </button>
@@ -541,12 +541,17 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
   const [error, setError] = useState(null);
   const [data, setData] = useState({});
   const [metricsAt, setMetricsAt] = useState(null);
+  const [metricsError, setMetricsError] = useState(null);
   const [metricsLoading, setMetricsLoading] = useState(false);
   const [deployments, setDeployments] = useState(null);
   const [activity, setActivity] = useState(null);
   const [env, setEnv] = useState(null);
   const [busy, setBusy] = useState(false);
   const [latest, setLatest] = useState(null);
+  // Stale-response guard: loaders capture their route id and drop results
+  // that resolve after navigation moved on (the view does not remount).
+  const routeIdRef = useRef(null);
+  useEffect(() => { routeIdRef.current = id; }, [id]);
 
   // Single range drives CPU, memory and visitors together. URL wins, then
   // the stored preference, then the default — all normalized.
@@ -568,11 +573,14 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
 
   const loadApp = useCallback(async () => {
     try {
-      const r = await oapi(`/apps/${id}`);
+      const r = await oapi(`/apps/${encodeURIComponent(id)}`);
+      if (id !== routeIdRef.current) return;
       setApp(r.application);
       setError(null);
     } catch (e) {
+      if (id !== routeIdRef.current) return;
       if (e.status === 404) setNotFound(true);
+      else if (e.status === 401) return;
       else { setError(e.message); toast.error(e.message); }
     }
   }, [id]);
@@ -584,36 +592,45 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
     try {
       const h = hours ?? rangeToHours(range);
       const [m, v] = await Promise.all([
-        oapi(`/apps/${id}/stats?hours=${h}`),
-        oapi(`/apps/${id}/visitors?hours=${h}`),
+        oapi(`/apps/${encodeURIComponent(id)}/stats?hours=${h}`),
+        oapi(`/apps/${encodeURIComponent(id)}/visitors?hours=${h}`),
       ]);
       if (document.hidden) return;
+      if (id !== routeIdRef.current) return;
       setData({ metrics: m.metrics || [], visitors: v.visitors || [] });
       setMetricsAt(Date.now());
-    } catch { /* ignore */ } finally {
+      setMetricsError(null);
+    } catch (e) {
+      // Keep prior data on failure (stale badge), never blank the charts.
+      if (id !== routeIdRef.current) return;
+      if (e.status !== 401) setMetricsError(e.message);
+    } finally {
       setMetricsLoading(false);
     }
   }, [id, range]);
 
   const loadDeployments = useCallback(async () => {
     try {
-      const r = await oapi(`/apps/${id}/deployments?limit=15`);
+      const r = await oapi(`/apps/${encodeURIComponent(id)}/deployments?limit=15`);
+      if (id !== routeIdRef.current) return;
       setDeployments(r.deployments || []);
-    } catch { setDeployments([]); }
+    } catch { if (id === routeIdRef.current) setDeployments([]); }
   }, [id]);
 
   const loadEnv = useCallback(async () => {
     try {
-      const r = await oapi(`/apps/${id}/env`);
+      const r = await oapi(`/apps/${encodeURIComponent(id)}/env`);
+      if (id !== routeIdRef.current) return;
       setEnv(r.env || []);
-    } catch { setEnv([]); }
+    } catch { if (id === routeIdRef.current) setEnv([]); }
   }, [id]);
 
   const loadActivity = useCallback(async () => {
     try {
       const r = await oapi(`/audit?app=${encodeURIComponent(id)}&limit=50`);
+      if (id !== routeIdRef.current) return;
       setActivity(r.audit || []);
-    } catch { setActivity([]); }
+    } catch { if (id === routeIdRef.current) setActivity([]); }
   }, [id]);
 
   useEffect(() => {
@@ -626,18 +643,19 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
     const r = normalizeRange(next);
     setRange(r);
     try { localStorage.setItem("turaes-range", r); } catch {}
-    // Deep-linkable + back-button safe; the route effect picks it up.
+    // Deep-linkable + back-button safe; the tab/range effect below picks up
+    // the fetch — no direct call here (avoids double-fetch races).
     navigate(`#/apps/${id}/overview${r === DEFAULT_RANGE ? "" : `?range=${r}`}`);
-    loadMetrics(rangeToHours(r));
-  }, [id, loadMetrics]);
+  }, [id]);
 
   const refreshMetrics = useCallback(() => { loadMetrics(); }, [loadMetrics]);
 
   const loadLatest = useCallback(async () => {
     try {
-      const r = await oapi(`/apps/${id}/deployments?limit=1`);
+      const r = await oapi(`/apps/${encodeURIComponent(id)}/deployments?limit=1`);
+      if (id !== routeIdRef.current) return;
       setLatest((r.deployments || [])[0] || null);
-    } catch { setLatest(null); }
+    } catch { if (id === routeIdRef.current) setLatest(null); }
   }, [id]);
 
   useEffect(() => {
@@ -673,7 +691,7 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
     }))) return;
     setBusy(true);
     try {
-      const result = await oapi(`/apps/${id}/deploy`, { method: "POST" });
+      const result = await oapi(`/apps/${encodeURIComponent(id)}/deploy`, { method: "POST" });
       if (result.state === "unknown") {
         toast.info(`Deploy queued for ${serverName(servers, app.server_id)} — watch it land on the Deployments tab.`);
         navigate(`#/apps/${id}/deployments`);
@@ -700,7 +718,7 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
     }))) return;
     setBusy(true);
     try {
-      await oapi(`/apps/${id}/rollback`, { method: "POST" });
+      await oapi(`/apps/${encodeURIComponent(id)}/rollback`, { method: "POST" });
       toast.success("Rolled back");
       loadApp();
       loadDeployments();
@@ -724,7 +742,7 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
     }))) return;
     setBusy(true);
     try {
-      await oapi(`/apps/${id}/rollback`, {
+      await oapi(`/apps/${encodeURIComponent(id)}/rollback`, {
         method: "POST",
         body: JSON.stringify({ artifact_hash: hash }),
       });
@@ -759,7 +777,7 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
     }))) return;
     setBusy(true);
     try {
-      await oapi(`/apps/${id}/${a}`, { method: "POST" });
+      await oapi(`/apps/${encodeURIComponent(id)}/${a}`, { method: "POST" });
       toast.success(`${a[0].toUpperCase()}${a.slice(1)} ${app.name}`);
       loadApp();
     } catch (e) {
@@ -780,7 +798,7 @@ export function AppDetailView({ id, tab, range: routeRange, user, servers }) {
     }))) return;
     setBusy(true);
     try {
-      await oapi(`/apps/${id}/maintenance`, {
+      await oapi(`/apps/${encodeURIComponent(id)}/maintenance`, {
         method: "POST",
         body: JSON.stringify({ enabled: on }),
       });

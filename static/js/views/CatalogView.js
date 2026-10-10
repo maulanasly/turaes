@@ -1,5 +1,5 @@
 import { html } from "../lib/html.js";
-import { useEffect, useState, useCallback } from "preact/hooks";
+import { useEffect, useState, useCallback, useRef } from "preact/hooks";
 import { navigate } from "../lib/router.js";
 import { oapi } from "../lib/api.js";
 import { toast } from "../lib/toast.js";
@@ -21,15 +21,23 @@ export function CatalogView({ user, servers }) {
   const [q, setQ] = useState("");
   const [section, setSection] = useState("all");
 
+  // Sequence guard: overlapping loads (retry while fetching) resolve in
+  // order — a stale response never paints over fresher state.
+  const loadSeq = useRef(0);
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     try {
       const [c, a] = await Promise.all([oapi("/catalog"), oapi("/apps")]);
       if (document.hidden) return;
+      if (seq !== loadSeq.current) return;
       setCatalog(c);
       setApps(a.applications || []);
       setError(null);
     } catch (e) {
-      if (e.status === 401) { setCatalog({ templates: [], platform: {} }); setApps([]); setError(null); }
+      if (seq !== loadSeq.current) return;
+      // 401 is handled centrally (Shell re-checks the session): keep prior
+      // data instead of faking an empty catalog.
+      if (e.status === 401) return;
       else { setError(e.message); toast.error(e.message); }
     }
   }, []);

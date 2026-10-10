@@ -67,3 +67,22 @@ test("app detail exposes the maintenance toggle and parked hint", () => {
   assert.ok(src.includes("Maintenance on") && src.includes("Maintenance off"), "toggle labels both states");
   assert.ok(src.includes("Visitors see the maintenance page"), "parked hint explains visitor impact");
 });
+
+test("expired sessions never render as empty data", () => {
+  for (const file of ["views/AppsView.js", "views/ServersView.js", "views/CatalogView.js"]) {
+    const src = readFileSync(new URL(`../../static/js/${file}`, import.meta.url), "utf8");
+    assert.ok(!src.includes("setApps([]); setError(null)"), `${file} must not fake empty data on 401`);
+    assert.ok(!src.includes("setServers([]); setError(null)"), `${file} must not fake empty data on 401`);
+  }
+  const app = readFileSync(new URL("../../static/js/app.js", import.meta.url), "utf8");
+  assert.ok(app.includes("onUnauthorized"), "Shell subscribes to session expiry");
+});
+
+test("detail loaders drop stale responses and flag stale metrics", () => {
+  const src = readFileSync(new URL("../../static/js/views/AppDetailView.js", import.meta.url), "utf8");
+  assert.ok(src.includes("routeIdRef"), "loaders guard against route changes");
+  assert.ok(src.includes("metricsError"), "metrics failures surface instead of blanking");
+  assert.ok(src.includes("· stale"), "stale metrics are labeled");
+  const logViewer = readFileSync(new URL("../../static/js/components/LogViewer.js", import.meta.url), "utf8");
+  assert.ok(logViewer.includes("setLines([])"), "log viewer clears lines on app change");
+});

@@ -31,7 +31,10 @@ export function OrgView({ user, onOrgChange }) {
       setMembers(r.members || []);
       setError(null);
     } catch (e) {
-      if (e.status === 403 || e.status === 401 || e.status === 404) { setMembers("denied"); setError(null); }
+      // 401 is handled centrally (Shell re-checks the session). 403 means
+      // insufficient role; 404 means the org is gone — never "not a member".
+      if (e.status === 401) return;
+      else if (e.status === 403) { setMembers("denied"); setError(null); }
       else { setError(e.message); toast.error(e.message); }
     }
   }, []);
