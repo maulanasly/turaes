@@ -110,3 +110,28 @@ test("no em dashes in UI copy (R-02)", () => {
   scan(root, "");
   assert.deepEqual(offenders, [], `em dash in UI copy: ${offenders.join(", ")}`);
 });
+
+test("app overview passes and receives the metrics error prop", () => {
+  const src = readFileSync(new URL("../../static/js/views/AppDetailView.js", import.meta.url), "utf8");
+  assert.match(
+    src,
+    /function Overview\(\{[\s\S]*?metricsError \}\)/,
+    "Overview must destructure metricsError"
+  );
+  assert.match(
+    src,
+    /metricsError=\$\{metricsError\}/,
+    "the Overview call site must pass metricsError"
+  );
+});
+
+test("views render inside an error boundary so nav survives a crash", () => {
+  const src = readFileSync(new URL("../../static/js/app.js", import.meta.url), "utf8");
+  assert.ok(src.includes('from "./components/ErrorBoundary.js"'), "app imports the boundary");
+  assert.ok(src.includes("<${ErrorBoundary}"), "main content is wrapped in the boundary");
+  const boundary = readFileSync(
+    new URL("../../static/js/components/ErrorBoundary.js", import.meta.url),
+    "utf8"
+  );
+  assert.ok(boundary.includes("getDerivedStateFromError"), "boundary catches render errors");
+});

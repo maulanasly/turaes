@@ -7,6 +7,7 @@ import { toast } from "./lib/toast.js";
 import { useRoute, pathFor } from "./lib/router.js";
 import { Toasts } from "./components/Toasts.js";
 import { ConfirmHost } from "./components/ConfirmHost.js";
+import { ErrorBoundary } from "./components/ErrorBoundary.js";
 import { BrandMark } from "./components/Brand.js";
 import { AppsView } from "./views/AppsView.js";
 import { AppDetailView } from "./views/AppDetailView.js";
@@ -331,6 +332,7 @@ function Shell() {
         title=${`Critical (${crits.length})`} items=${crits} />`}
       ${warns.length > 0 && html`<${AlertSection} cls="notice-warning"
         title=${`Warnings (${warns.length})`} items=${warns} />`}
+      <${ErrorBoundary} key=${route.view + "/" + (route.id || "")}>
       ${route.view === "apps" && html`<${AppsView} key=${org} user=${user} servers=${servers} />`}
       ${route.view === "app" && html`<${AppDetailView} key=${org} id=${route.id} tab=${route.tab} range=${route.range} user=${user} servers=${servers} />`}
       ${route.view === "catalog" && html`<${CatalogView} key=${org} user=${user} servers=${servers} />`}
@@ -347,6 +349,7 @@ function Shell() {
           <a class="btn ghost" href="#/servers">Servers</a>
         </div>
       </section>`}
+      </${ErrorBoundary}>
     </main>
 
     <${Toasts} />
