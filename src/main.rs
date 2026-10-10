@@ -240,6 +240,67 @@ fn check_fail(name: &'static str, detail: impl Into<String>) -> Check {
     }
 }
 
+/// Fail when `path` exists and is readable beyond its owner (want 0600).
+fn check_private_file(name: &'static str, path: &str) -> Check {
+    let path = std::path::Path::new(path);
+    if path.as_os_str().is_empty() || !path.exists() {
+        return check_ok(name, "not present".to_string());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        match std::fs::metadata(path) {
+            Ok(meta) if meta.permissions().mode() & 0o077 == 0 => {
+                check_ok(name, format!("{} is owner-only", path.display()))
+            }
+            Ok(_) => check_fail(
+                name,
+                format!(
+                    "{} is readable beyond its owner (want 0600)",
+                    path.display()
+                ),
+            ),
+            Err(e) => check_fail(name, format!("cannot stat {}: {e}", path.display())),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        check_ok(name, "mode check is unix-only".to_string())
+    }
+}
+
+/// Every rendered app env file (`{env_dir}/*.env`) holds decrypted secrets.
+fn check_env_file_modes(env_dir: &str) -> Check {
+    let mut offenders = Vec::new();
+    let mut count = 0;
+    if let Ok(entries) = std::fs::read_dir(env_dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let p = entry.path();
+            if p.extension().is_some_and(|e| e == "env") {
+                count += 1;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(meta) = std::fs::metadata(&p) {
+                        if meta.permissions().mode() & 0o077 != 0 {
+                            offenders.push(p.display().to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if offenders.is_empty() {
+        check_ok("env.modes", format!("{count} app env file(s) owner-only"))
+    } else {
+        check_fail(
+            "env.modes",
+            format!("world-readable: {}", offenders.join(", ")),
+        )
+    }
+}
+
 /// A directory turaes must be able to create and write.
 fn check_writable_dir(name: &'static str, dir: &str) -> Check {
     if let Err(e) = std::fs::create_dir_all(dir) {
@@ -279,6 +340,15 @@ async fn doctor(cfg: &Config, json: bool) -> turaes_core::Result<()> {
     ] {
         checks.push(check_writable_dir(name, dir));
     }
+    // Secrets at rest must stay owner-only: the live database (sealed blobs,
+    // token hashes) and every rendered app env file (decrypted secrets).
+    checks.push(check_private_file(
+        "db.mode",
+        &backup::db_path(&cfg.database.url)
+            .unwrap_or_default()
+            .to_string_lossy(),
+    ));
+    checks.push(check_env_file_modes(&cfg.runtime.env_dir));
     if cfg.proxy.enabled {
         match cfg.dashboard_host() {
             Some(host) => {

@@ -148,14 +148,65 @@ async fn write_if_changed(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
             return Ok(());
         }
     }
-    tokio::fs::write(path, bytes).await?;
+    // Atomic with owner-only mode pre-set: the previous write-then-chmod left
+    // private keys world-readable between the two syscalls.
+    let tmp = path.with_extension(format!(
+        "tmp-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(mut perms) = tokio::fs::metadata(path).await.map(|m| m.permissions()) {
-            perms.set_mode(0o600);
-            let _ = tokio::fs::set_permissions(path, perms).await;
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)
+            .await?;
+        use tokio::io::AsyncWriteExt;
+        file.write_all(bytes).await?;
+        file.flush().await?;
+        drop(file);
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::fs::write(&tmp, bytes).await?;
+    }
+    tokio::fs::rename(&tmp, path).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_if_changed;
+
+    #[tokio::test]
+    async fn cert_write_is_atomic_and_owner_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("privkey.pem");
+        write_if_changed(&path, b"one").await.unwrap();
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"one");
+        // Idempotent rewrite leaves no temp files behind.
+        write_if_changed(&path, b"one").await.unwrap();
+        write_if_changed(&path, b"two").await.unwrap();
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"two");
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+            .collect();
+        assert!(leftovers.is_empty());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = tokio::fs::metadata(&path)
+                .await
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
         }
     }
-    Ok(())
 }

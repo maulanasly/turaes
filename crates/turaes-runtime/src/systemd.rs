@@ -276,7 +276,7 @@ impl Runtime for SystemdRuntime {
             if let Some(parent) = Path::new(env_file).parent() {
                 tokio::fs::create_dir_all(parent).await?;
             }
-            tokio::fs::write(env_file, render_env_file(env)).await?;
+            crate::runtime::write_env_file(env_file, &render_env_file(env)).await?;
         }
         self.chown_state(spec).await;
 

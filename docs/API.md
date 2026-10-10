@@ -132,7 +132,7 @@ roles yield `403`.
 | `POST` | `/api/v1/orgs/{org}/apps` | admin | Create an application (`201`) |
 | `POST` | `/api/v1/orgs/{org}/apps/preflight` | admin | Validate a draft without writing (`200` always; `ok:false` when `errors` is non-empty; pass `app_id` to preview an edit) |
 | `GET` | `/api/v1/orgs/{org}/apps/{id}` | viewer | Fetch one |
-| `PATCH` | `/api/v1/orgs/{org}/apps/{id}` | admin | Edit fields + placement |
+| `PATCH` | `/api/v1/orgs/{org}/apps/{id}` | admin | Edit fields + placement; port/server/runtime changes reset the slot pointer and answer a redeploy note |
 | `DELETE` | `/api/v1/orgs/{org}/apps/{id}` | admin | Remove app + stop it (`204`) |
 | `POST` | `/api/v1/orgs/{org}/apps/{id}/deploy` | developer | Apply a workload version (binary, static files, or worker) using slots |
 | `POST` | `/api/v1/orgs/{org}/apps/{id}/rollback` | developer | Roll back a binary build or previous static slot; command apps do not retain prior argv for rollback; yanked builds refuse unless `{"force":true}` as admin |
