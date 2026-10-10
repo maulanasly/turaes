@@ -21,9 +21,8 @@ pub async fn download(
     let token = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .unwrap_or("")
-        .trim();
+        .and_then(crate::auth::bearer_scheme_token)
+        .unwrap_or("");
     if token.is_empty() {
         return Err(Error::Unauthorized(
             "missing agent token (set TURAES_AGENT_TOKEN to the join token)".into(),

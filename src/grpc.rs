@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 use tonic::{Request, Response, Status};
 
-use turaes_core::crypto::{random_token, token_hash};
+use turaes_core::crypto::{random_token, secrets_equal, token_hash};
 use turaes_core::models::Server;
 
 use crate::routes::apps::refresh_proxy_routes;
@@ -114,7 +114,7 @@ pub async fn edge_certs(
     req: EdgeCertsRequest,
 ) -> Result<EdgeCertsResponse, Status> {
     let expected = &state.cfg.agent.join_token;
-    if expected.is_empty() || &req.token != expected {
+    if expected.is_empty() || !secrets_equal(&req.token, expected) {
         return Err(Status::unauthenticated("invalid edge token"));
     }
 
@@ -158,7 +158,7 @@ pub async fn edge_routes(
     use sqlx::Row;
 
     let expected = &state.cfg.agent.join_token;
-    if expected.is_empty() || &req.token != expected {
+    if expected.is_empty() || !secrets_equal(&req.token, expected) {
         return Err(Status::unauthenticated("invalid edge token"));
     }
 
@@ -404,7 +404,7 @@ pub async fn register(state: &AppState, req: RegisterRequest) -> Result<Register
             "agent registration is disabled (no join token configured)",
         ));
     }
-    if req.join_token != *expected {
+    if !secrets_equal(&req.join_token, expected) {
         return Err(Status::unauthenticated("invalid join token"));
     }
     if req.name.trim().is_empty() {
@@ -440,6 +440,19 @@ pub async fn register(state: &AppState, req: RegisterRequest) -> Result<Register
         .execute(&state.pool)
         .await
         .map_err(internal)?;
+        // Rebinding invalidates the previous agent token: audit it loudly so
+        // a takeover (leaked join token re-registering a live node) is visible.
+        let _ = crate::audit::record(
+            state,
+            None,
+            None,
+            None,
+            "agent.rebind",
+            Some("server"),
+            Some(&server.id),
+            Some(&serde_json::json!({"name": req.name, "address": req.address}).to_string()),
+        )
+        .await;
         server.id
     } else {
         let id = uuid::Uuid::new_v4().to_string();

@@ -12,6 +12,7 @@ use turaes_core::db::Pool;
 use turaes_core::models::OrgQuota;
 use turaes_core::{Error, Result};
 
+use crate::audit;
 use crate::authz::{self, CurrentUser, Role};
 use crate::state::AppState;
 
@@ -195,6 +196,7 @@ pub async fn put(
     let org_id = authz::authorize_org(&state, &user, &org, Role::Owner).await?;
     validate_body(&input)?;
     let mut quota = quota_row(&state.pool, &org_id).await?;
+    let old = quota.clone();
     if let Some(v) = input.max_apps {
         quota.max_apps = v;
     }
@@ -217,6 +219,25 @@ pub async fn put(
     .bind(quota.max_domains)
     .bind(&org_id)
     .execute(&state.pool)
+    .await?;
+    audit::record(
+        &state,
+        Some(&org_id),
+        Some(&user),
+        None,
+        "quota.set",
+        Some("organization"),
+        Some(&org_id),
+        Some(
+            &serde_json::json!({
+                "old": {"max_apps": old.max_apps, "max_mem_mb": old.max_mem_mb,
+                        "max_cpu_pct": old.max_cpu_pct, "max_domains": old.max_domains},
+                "new": {"max_apps": quota.max_apps, "max_mem_mb": quota.max_mem_mb,
+                        "max_cpu_pct": quota.max_cpu_pct, "max_domains": quota.max_domains},
+            })
+            .to_string(),
+        ),
+    )
     .await?;
     let used = usage(&state.pool, &org_id).await?;
     Ok(Json(serde_json::json!({ "quota": quota, "usage": used })))

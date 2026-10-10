@@ -39,6 +39,7 @@ pub struct Claims {
 #[derive(Clone)]
 pub struct TokenIssuer {
     key: Vec<u8>,
+    previous: Vec<Vec<u8>>,
     ttl_days: i64,
 }
 
@@ -47,8 +48,17 @@ impl TokenIssuer {
     pub fn new(secret: &str, ttl_days: i64) -> Self {
         Self {
             key: secret.as_bytes().to_vec(),
+            previous: Vec::new(),
             ttl_days,
         }
+    }
+
+    /// Accept tokens signed by a previous secret (decrypt-only fallback for
+    /// rotation: sessions minted before the switch keep working until they
+    /// expire naturally, instead of signing everyone out at once).
+    pub fn with_previous(mut self, secret: &str) -> Self {
+        self.previous.push(secret.as_bytes().to_vec());
+        self
     }
 
     /// Mint a fresh token for a signed-in user.
@@ -69,15 +79,20 @@ impl TokenIssuer {
         .map_err(|e| Error::Internal(format!("failed to mint token: {e}")))
     }
 
-    /// Verify a token and return its claims.
+    /// Verify a token and return its claims. During rotation, the previous
+    /// secret is accepted as a fallback.
     pub fn verify(&self, token: &str) -> Result<Claims> {
-        let data = jsonwebtoken::decode::<Claims>(
-            token,
-            &jsonwebtoken::DecodingKey::from_secret(&self.key),
-            &jsonwebtoken::Validation::default(),
-        )
-        .map_err(|_| Error::Unauthorized("invalid or expired session".into()))?;
-        Ok(data.claims)
+        let keys = std::iter::once(&self.key).chain(self.previous.iter());
+        for key in keys {
+            if let Ok(data) = jsonwebtoken::decode::<Claims>(
+                token,
+                &jsonwebtoken::DecodingKey::from_secret(key),
+                &jsonwebtoken::Validation::default(),
+            ) {
+                return Ok(data.claims);
+            }
+        }
+        Err(Error::Unauthorized("invalid or expired session".into()))
     }
 }
 
@@ -225,6 +240,20 @@ pub fn token_hash(token: &str) -> String {
     out
 }
 
+/// Constant-time string equality for secrets (tokens). Lengths are fixed
+/// format by construction, so only content comparison needs hardening.
+pub fn secrets_equal(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,6 +274,22 @@ mod tests {
         let b = TokenIssuer::new("secret-b-very-long-string-bbbbbbbbbb", 1);
         let token = a.mint(1, "x", None).unwrap();
         assert!(b.verify(&token).is_err());
+    }
+
+    #[test]
+    fn jwt_previous_secret_verifies_during_rotation() {
+        let old = TokenIssuer::new("secret-a-very-long-string-aaaaaaaaaa", 30);
+        let token = old.mint(7, "octocat", None).unwrap();
+        // After rotation the new primary signs, but the old secret still
+        // verifies until those sessions expire naturally.
+        let rotated = TokenIssuer::new("secret-b-very-long-string-bbbbbbbbbb", 30)
+            .with_previous("secret-a-very-long-string-aaaaaaaaaa");
+        let claims = rotated.verify(&token).unwrap();
+        assert_eq!(claims.sub, "7");
+        assert!(rotated.mint(8, "new", None).is_ok());
+        // An unrelated secret still fails.
+        let stranger = TokenIssuer::new("secret-c-very-long-string-cccccccccc", 30);
+        assert!(stranger.verify(&token).is_err());
     }
 
     #[test]
@@ -311,5 +356,13 @@ mod tests {
         assert_eq!(h, token_hash("abc"));
         assert_ne!(h, token_hash("abd"));
         assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn secrets_equal_is_exact() {
+        assert!(secrets_equal("turaes_abc", "turaes_abc"));
+        assert!(!secrets_equal("turaes_abc", "turaes_abd"));
+        assert!(!secrets_equal("turaes_abc", "turaes_ab"));
+        assert!(!secrets_equal("", "x"));
     }
 }
