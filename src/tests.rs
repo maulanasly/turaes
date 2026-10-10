@@ -3981,7 +3981,7 @@ fn upload_uri(app: &str, query: &str) -> String {
 }
 
 #[tokio::test]
-async fn registry_push_binary_creates_release_on_latest() {
+async fn registry_push_binary_creates_release_without_channel() {
     let dir = tempfile::tempdir().unwrap();
     let state = test_state(dir.path()).await;
     let router = app::build_router(state.clone());
@@ -4001,15 +4001,16 @@ async fn registry_push_binary_creates_release_on_latest() {
     assert_eq!(resp.status(), StatusCode::CREATED);
     let body = body_json(resp).await;
     assert_eq!(body["release"]["version"], "1.0.0");
-    assert_eq!(body["release"]["channel"], "latest");
+    assert!(body["release"].get("channel").is_none());
     assert!(body["artifact"]["hash"]
         .as_str()
         .unwrap()
         .starts_with("sha256:"));
     assert_eq!(body["artifact"]["arch"], "x86_64");
     assert!(body["ignored_hints"].as_array().unwrap().is_empty());
+    let rel_id = body["release"]["id"].as_str().unwrap().to_string();
 
-    // Listed with its channel pointer; resolve pins the same hash.
+    // No channel moves on push: latest does not exist yet.
     let listed = body_json(
         router
             .clone()
@@ -4024,6 +4025,50 @@ async fn registry_push_binary_creates_release_on_latest() {
     )
     .await;
     assert_eq!(listed["releases"].as_array().unwrap().len(), 1);
+    assert!(listed["channels"].as_array().unwrap().is_empty());
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/orgs/default/registry/{id}/resolve?channel=latest"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // Explicit promote moves latest; resolve pins the same hash.
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/orgs/default/registry/releases/{rel_id}/promote"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"channel":"latest"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let listed = body_json(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/orgs/default/registry/{id}/releases"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
     assert_eq!(listed["channels"][0]["channel"], "latest");
     assert_eq!(listed["channels"][0]["version"], "1.0.0");
     let resolved = body_json(
@@ -4560,4 +4605,68 @@ async fn catalog_is_org_scoped() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn registry_write_endpoints_require_admin() {
+    // A deploy-scoped token (Developer floor) must not push executables,
+    // pin releases, or manage repo links — app creation is Admin-only.
+    let dir = tempfile::tempdir().unwrap();
+    let (_, deploy_token) = mint_token(test_router(dir.path()).await, "deploy").await;
+    let router = test_router(dir.path()).await;
+    let authed = |method: &str, uri: String, body: Body| {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("authorization", format!("Bearer {deploy_token}"))
+            .header("content-type", "application/json")
+            .body(body)
+            .unwrap()
+    };
+
+    let resp = router
+        .clone()
+        .oneshot(authed(
+            "POST",
+            "/api/v1/orgs/default/registry/artifacts?app=nope".into(),
+            Body::from(vec![0x7f, b'E', b'L', b'F', 0, 1]),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    let resp = router
+        .clone()
+        .oneshot(authed(
+            "POST",
+            "/api/v1/orgs/default/registry/releases".into(),
+            Body::from(
+                json!({"application_id": "nope", "version": "1.0.0", "artifact_hash": "sha256:00"})
+                    .to_string(),
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    let resp = router
+        .clone()
+        .oneshot(authed(
+            "POST",
+            "/api/v1/orgs/default/registry/links".into(),
+            Body::from(json!({"application_id": "nope", "repo": "acme/app"}).to_string()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    let resp = router
+        .oneshot(authed(
+            "DELETE",
+            "/api/v1/orgs/default/registry/links?application_id=nope&repo=acme%2Fapp".into(),
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
