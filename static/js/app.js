@@ -82,7 +82,7 @@ function Shell() {
   // scrolling) so keyboard/SR users land on fresh content. Keyed on id/tab as
   // well as view so app→app and tab→tab moves are announced too.
   useEffect(() => {
-    document.title = `turaes — ${VIEW_TITLES[route.view] || "Applications"}`;
+    document.title = `turaes: ${VIEW_TITLES[route.view] || "Applications"}`;
     setMenuOpen(false);
     setUserMenuOpen(false);
     if (mainRef.current) {
@@ -312,7 +312,7 @@ function Shell() {
               <span class="muted small">${orgRole ? `${org} · ${orgRole}` : org}</span></div>
             ${orgs.length > 1 && html`<label class="avatar-org"><span class="avatar-org-label">Active organization</span>
               <select value=${org} onChange=${(e) => { changeOrg(e.target.value); setUserMenuOpen(false); }}>
-                ${orgs.map((o) => html`<option value=${o.slug}>${o.slug} — ${o.role}</option>`)}
+                ${orgs.map((o) => html`<option value=${o.slug}>${o.slug} · ${o.role}</option>`)}
               </select></label>`}
             <a role="menuitem" href="#/org" class=${route.view === "org" ? "active" : ""}
               onClick=${() => setUserMenuOpen(false)}>Organization</a>

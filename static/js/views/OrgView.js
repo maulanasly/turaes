@@ -158,7 +158,7 @@ export function OrgView({ user, onOrgChange }) {
                           </select>`
                         : html`<span class="muted">${m.role}</span>`}
                     </td>
-                    <td data-label="Since" class="muted">${m.created_at ? fmtTime(m.created_at) : "—"}</td>
+                    <td data-label="Since" class="muted">${m.created_at ? fmtTime(m.created_at) : "n/a"}</td>
                     <td class="controls no-label">
                       ${isOwner && html`<button class="btn small ghost" disabled=${busy !== null} onClick=${() => remove(m)}>Remove</button>`}
                     </td>

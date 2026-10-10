@@ -4,9 +4,9 @@ import { BrandMark } from "../components/Brand.js";
 // Static product + build info. `health` is the already-polled /health state,
 // so this view makes no extra requests and stays current.
 export function AboutView({ health, user, theme }) {
-  const runtime = health && health.runtime ? health.runtime : "—";
-  const version = health && health.version ? health.version : "—";
-  const proxy = !health ? "—" : health.proxy ? "enabled (Pingora)" : "disabled";
+  const runtime = health && health.runtime ? health.runtime : "n/a";
+  const version = health && health.version ? health.version : "n/a";
+  const proxy = !health ? "n/a" : health.proxy ? "enabled (Pingora)" : "disabled";
   const ok = health && health.status === "ok" ? "healthy" : "unreachable";
 
   return html`
@@ -21,7 +21,7 @@ export function AboutView({ health, user, theme }) {
           <tr><th>Runtime</th><td class="mono">${runtime}</td></tr>
           <tr><th>Proxy</th><td>${proxy}</td></tr>
           <tr><th>Status</th><td>${ok}</td></tr>
-          <tr><th>Signed in as</th><td class="mono break">${user && user.login ? user.login : "—"}</td></tr>
+          <tr><th>Signed in as</th><td class="mono break">${user && user.login ? user.login : "n/a"}</td></tr>
         </tbody>
       </table></div>
     </section>`;

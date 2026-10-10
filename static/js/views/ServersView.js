@@ -15,7 +15,7 @@ function loadClass(pct) {
 }
 
 function capSummary(cap) {
-  if (!cap) return "—";
+  if (!cap) return "n/a";
   const cpu = Math.max(0, Math.min(100, cap.cpu_pct || 0));
   return `${cpu.toFixed(0)}% · ${fmtBytes(cap.mem_bytes)}/${fmtBytes(cap.mem_total_bytes)}`;
 }
@@ -183,8 +183,8 @@ export function ServersView({ user, onChanged }) {
                   <td data-label="Name"><a class="mono" href=${`#/servers/${s.id}`}>${s.name}</a>${s.is_local ? html`<span class="muted small"> · local</span>` : null}</td>
                   <td data-label="Apps"><strong>${appsOn(s.id).length}</strong></td>
                   <td data-label="Load" class="mono small">${capSummary(s.capacity)}</td>
-                  <td data-label="Agent" class="muted mono">${s.agent_version || "—"}</td>
-                  <td data-label="Last seen" class="muted">${s.last_seen_at ? fmtTime(s.last_seen_at) : "—"}</td>
+                  <td data-label="Agent" class="muted mono">${s.agent_version || "n/a"}</td>
+                  <td data-label="Last seen" class="muted">${s.last_seen_at ? fmtTime(s.last_seen_at) : "n/a"}</td>
                   <td class="controls no-label">
                     ${user && html`<button class="btn small ghost" disabled=${busy !== null} onClick=${() => validate(s)}>
                       ${busy === `validate:${s.id}` ? "Validating…" : "Validate"}</button>`}

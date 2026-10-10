@@ -22,7 +22,7 @@ function AppList({ apps, servers }) {
             <td data-label="Status"><${StatusBadge} status=${a.status} /></td>
             <td data-label="Name"><a class="mono" href=${`#/apps/${a.id}/overview`}>${a.name}</a></td>
             <td data-label="Server">${serverName(servers, a.server_id)}</td>
-            <td data-label="Route" class="mono small break">${a.kind === "worker" ? "background worker (no route)" : a.domain || "—"}</td>
+            <td data-label="Route" class="mono small break">${a.kind === "worker" ? "background worker (no route)" : a.domain || "n/a"}</td>
             <td data-label="Updated" class="muted">${fmtTime(a.updated_at)}</td>
           </tr>`)}
       </tbody>
@@ -38,7 +38,7 @@ function AppCard({ app, servers }) {
       </h3>
       ${app.kind === "worker"
         ? html`<div class="stat"><span>Workload</span><span>Background worker</span></div>`
-        : html`<div class="stat"><span>Domain</span><span class="mono">${app.domain || "—"}</span></div>`}
+        : html`<div class="stat"><span>Domain</span><span class="mono">${app.domain || "n/a"}</span></div>`}
       <div class="stat"><span>Server</span><span class="mono">${serverName(servers, app.server_id)}</span></div>
       ${app.kind !== "worker" && html`<div class="stat"><span>Port</span><span class="mono">${app.port}</span></div>`}
       <div class="stat"><span>Managed by</span><span>${runtimeLabel(app.runtime)}</span></div>
@@ -228,7 +228,7 @@ function NewAppForm({ servers, onCreated, initial }) {
             aria-invalid=${fieldErrors.name ? "true" : null}
             aria-describedby=${fieldErrors.name ? "field-error-name" : null}
             onInput=${(e) => set({ name: e.target.value })} />
-            <span class="muted small">Lowercase slug — becomes the service name on the server.</span>
+            <span class="muted small">Lowercase slug: becomes the service name on the server.</span>
             <${FieldError} errors=${fieldErrors} name="name" />
           </label>
           <label>Description (optional) <input name="description" placeholder="What this app does" value=${draft.description}
@@ -240,7 +240,7 @@ function NewAppForm({ servers, onCreated, initial }) {
               aria-invalid=${fieldErrors.publish_dir ? "true" : null}
               aria-describedby=${fieldErrors.publish_dir ? "field-error-publish_dir" : null}
               onInput=${(e) => set({ publish_dir: e.target.value })} />
-            <span class="muted small">The files turaes serves. No build runs — sync them yourself before deploying.</span>
+            <span class="muted small">The files turaes serves. No build runs. Sync them yourself before deploying.</span>
             <${FieldError} errors=${fieldErrors} name="publish_dir" />
           </label>
           <label>Working directory (optional)
@@ -262,7 +262,7 @@ function NewAppForm({ servers, onCreated, initial }) {
                 aria-invalid=${fieldErrors.command ? "true" : null}
                 aria-describedby=${fieldErrors.command ? "field-error-command" : null}
                 onInput=${(e) => set({ command: e.target.value })}></textarea>
-              <span class="muted small">The first line is the executable — no shell, so write each argument on its own line.</span>
+              <span class="muted small">The first line is the executable (no shell), so write each argument on its own line.</span>
               <${FieldError} errors=${fieldErrors} name="command" />
             </label>` : html`
             <label>Binary path on the server
@@ -278,7 +278,7 @@ function NewAppForm({ servers, onCreated, initial }) {
                 aria-invalid=${fieldErrors.args ? "true" : null}
                 aria-describedby=${fieldErrors.args ? "field-error-args" : null}
                 onInput=${(e) => set({ args: e.target.value })} />
-              <span class="muted small">Passed as separate words, literally — no shell, so no pipes, globs or quoting.</span>
+              <span class="muted small">Passed as separate words, literally (no shell), so no pipes, globs or quoting.</span>
               <${FieldError} errors=${fieldErrors} name="args" />
             </label>`}
           <label>Working directory (optional)
@@ -451,7 +451,7 @@ export function AppsView({ user, servers }) {
       if (t) {
         setTemplateDefaults(t.defaults || {});
         setShowAdd(true);
-        toast.info(`Prefilled from the “${t.name}” template — give it a name and create.`);
+        toast.info(`Prefilled from the “${t.name}” template, give it a name and create.`);
       } else {
         toast.error(`Unknown template “${templateSlug}”.`);
       }

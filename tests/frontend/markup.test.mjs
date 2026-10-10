@@ -86,3 +86,27 @@ test("detail loaders drop stale responses and flag stale metrics", () => {
   const logViewer = readFileSync(new URL("../../static/js/components/LogViewer.js", import.meta.url), "utf8");
   assert.ok(logViewer.includes("setLines([])"), "log viewer clears lines on app change");
 });
+
+test("no em dashes in UI copy (R-02)", () => {
+  const root = new URL("../../static/js/", import.meta.url);
+  const offenders = [];
+  const scan = (url, rel) => {
+    for (const entry of readdirSync(url, { withFileTypes: true })) {
+      const path = `${url.pathname}/${entry.name}`;
+      const name = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (entry.name === "vendor") continue;
+        scan(new URL(`./${entry.name}/`, url), name);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith(".js")) continue;
+      const lines = readFileSync(path, "utf8").split("\n");
+      lines.forEach((line, i) => {
+        const code = line.replace(/\/\/.*$/, "");
+        if (code.includes("—")) offenders.push(`${name}:${i + 1}`);
+      });
+    }
+  };
+  scan(root, "");
+  assert.deepEqual(offenders, [], `em dash in UI copy: ${offenders.join(", ")}`);
+});
