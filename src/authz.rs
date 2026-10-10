@@ -232,10 +232,15 @@ pub async fn resolve_token(state: &AppState, token: &str) -> Result<CurrentUser>
     let (role_str, slug, org_name) =
         mem.ok_or_else(|| Error::Unauthorized("API token owner left the organization".into()))?;
     let role = std::cmp::min(cap, Role::parse(&role_str)?);
-    sqlx::query("UPDATE api_tokens SET last_used_at = datetime('now') WHERE id = ?")
-        .bind(&token_id)
-        .execute(&state.pool)
-        .await?;
+    // Throttled touch: per-request writes contend with monitor ticks on the
+    // single-writer SQLite file, so only record uses older than five minutes.
+    sqlx::query(
+        "UPDATE api_tokens SET last_used_at = datetime('now') WHERE id = ? \
+         AND (last_used_at IS NULL OR last_used_at < datetime('now', '-5 minutes'))",
+    )
+    .bind(&token_id)
+    .execute(&state.pool)
+    .await?;
     Ok(CurrentUser {
         id: uid,
         github_id,
