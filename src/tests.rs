@@ -5556,7 +5556,7 @@ async fn quota_gate_serializes_concurrent_creates() {
         let router = router.clone();
         let payload = json!({"name": name, "binary_path": "/srv/x/bin", "port": port}).to_string();
         async move {
-            router
+            let resp = router
                 .oneshot(
                     Request::builder()
                         .method("POST")
@@ -5566,15 +5566,21 @@ async fn quota_gate_serializes_concurrent_creates() {
                         .unwrap(),
                 )
                 .await
-                .unwrap()
-                .status()
+                .unwrap();
+            let status = resp.status();
+            let body = body_json(resp).await;
+            (status, body)
         }
     };
     let (a, b) = tokio::join!(mk("quota-a", 21101), mk("quota-b", 21102));
-    let mut statuses = vec![a, b];
+    let mut statuses = vec![a.0, b.0];
     statuses.sort();
     // Exactly one admits; the loser sees the quota, never two apps.
-    assert_eq!(statuses, vec![StatusCode::CREATED, StatusCode::CONFLICT]);
+    assert_eq!(
+        statuses,
+        vec![StatusCode::CREATED, StatusCode::CONFLICT],
+        "responses: {a:?} {b:?}"
+    );
     let count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM applications WHERE org_id = 'default'")
             .fetch_one(&state.pool)
@@ -5818,4 +5824,158 @@ fn doctor_flags_world_readable_secrets() {
     std::fs::set_permissions(envdir.join("a.env"), std::fs::Permissions::from_mode(0o600)).unwrap();
     let check = crate::check_env_file_modes(envdir.to_str().unwrap());
     assert!(check.ok);
+}
+
+#[tokio::test]
+async fn alert_webhook_outbox_retries_then_delivers_resolution() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = calls.clone();
+    let server = tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut events = Vec::new();
+        for _ in 0..3 {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut data = Vec::new();
+            let mut buf = [0u8; 4096];
+            loop {
+                let n = socket.read(&mut buf).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+                data.extend_from_slice(&buf[..n]);
+                if let Some(end) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&data[..end + 4]);
+                    let len = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (k, v) = line.split_once(':')?;
+                            k.eq_ignore_ascii_case("content-length")
+                                .then(|| v.trim().parse::<usize>().ok())
+                                .flatten()
+                        })
+                        .unwrap_or(0);
+                    if data.len() >= end + 4 + len {
+                        break;
+                    }
+                }
+            }
+            let body_start = data.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+            let body: serde_json::Value = serde_json::from_slice(&data[body_start..]).unwrap();
+            events.push(body["status"].as_str().unwrap().to_string());
+            let call = seen.fetch_add(1, Ordering::SeqCst);
+            let status = if call == 0 {
+                "500 Internal Server Error"
+            } else {
+                "200 OK"
+            };
+            let response =
+                format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            socket.write_all(response.as_bytes()).await.unwrap();
+        }
+        events
+    });
+
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("sqlite://{}/alerts.db?mode=rwc", dir.path().display());
+    let mut cfg = test_config(dir.path(), &url);
+    cfg.alerts.webhook_url = format!("http://{addr}/hook");
+    std::fs::create_dir_all(&cfg.backup.dir).unwrap();
+    std::fs::write(
+        std::path::Path::new(&cfg.backup.dir).join("recent.db"),
+        b"snapshot",
+    )
+    .unwrap();
+    let cfg = Arc::new(cfg);
+    let pool = db::connect(&cfg.database.url).await.unwrap();
+    db::migrate(&pool).await.unwrap();
+    let state = AppState::for_test(cfg, pool);
+    sqlx::query(
+        "INSERT INTO applications (id, name, binary_path, port, server_id, org_id, status) \
+         VALUES ('alert-app', 'alert-app', '/bin/true', 21900, 'local', 'default', 'unhealthy')",
+    )
+    .execute(&state.pool)
+    .await
+    .unwrap();
+
+    crate::alerts::evaluate(&state).await;
+    let ac: i64 = sqlx::query_scalar("SELECT count(*) FROM alerts")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    let dc: i64 = sqlx::query_scalar("SELECT count(*) FROM alert_deliveries")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "alerts={ac}, deliveries={dc}, webhook={}",
+        state.cfg.alerts.webhook_url
+    ); // first attempt failed
+    let pending: (i64, Option<String>) = sqlx::query_as(
+        "SELECT attempts, delivered_at FROM alert_deliveries WHERE event = 'firing'",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    assert_eq!(pending.0, 1);
+    assert!(pending.1.is_none());
+
+    // Due-time backoff is respected, then an overdue row retries and succeeds.
+    crate::alerts::drain_outbox(&state).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    sqlx::query("UPDATE alert_deliveries SET next_attempt_at = datetime('now', '-1 second') WHERE event = 'firing'")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    crate::alerts::drain_outbox(&state).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    let fired = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT delivered_at FROM alert_deliveries WHERE event = 'firing'",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    assert!(fired.is_some());
+
+    // Manual resolve uses the same durable queue path (it used to update the
+    // row directly and silently skip the webhook).
+    let alert_id: String = sqlx::query_scalar("SELECT id FROM alerts WHERE kind = 'app.unhealthy'")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    let app_router = app::build_router(state.clone());
+    let resp = app_router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/default/alerts/{alert_id}/resolve"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    let events: Vec<String> =
+        sqlx::query_scalar("SELECT event FROM alert_deliveries ORDER BY created_at, rowid")
+            .fetch_all(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(events, vec!["firing", "resolved"]);
+    assert_eq!(server.await.unwrap(), vec!["firing", "firing", "resolved"]);
+}
+
+#[test]
+fn doctor_parses_df_available_kib() {
+    let output = "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/vda1 1000000 1000 998000 1% /\n";
+    assert_eq!(
+        crate::parse_df_available_bytes(output),
+        Some(998_000 * 1024)
+    );
+    assert_eq!(crate::parse_df_available_bytes("bad output\n"), None);
 }

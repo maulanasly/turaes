@@ -12,6 +12,11 @@ use turaes_core::{Error, Result};
 
 use crate::state::AppState;
 
+// Only users without memberships take this lock; normal authenticated
+// requests never serialize here. It makes first-owner bootstrap atomic so
+// concurrent first logins cannot both become owner.
+static BOOTSTRAP_MEMBERSHIP_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Organization role. Declaration order is the privilege order (`Viewer` is
 /// weakest), so `role >= floor` checks work via the derived `Ord`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -135,7 +140,7 @@ pub async fn resolve(
         None => {
             let id = uuid::Uuid::new_v4().to_string();
             sqlx::query(
-                "INSERT INTO users (id, github_id, login, name, last_seen_at) \
+                "INSERT OR IGNORE INTO users (id, github_id, login, name, last_seen_at) \
                  VALUES (?, ?, ?, ?, datetime('now'))",
             )
             .bind(&id)
@@ -144,7 +149,12 @@ pub async fn resolve(
             .bind(name)
             .execute(&state.pool)
             .await?;
-            id
+            // Another request for the same GitHub identity may have won the
+            // unique-key race; always use the canonical row id.
+            sqlx::query_scalar("SELECT id FROM users WHERE github_id = ?")
+                .bind(github_id)
+                .fetch_one(&state.pool)
+                .await?
         }
     };
 
@@ -162,6 +172,16 @@ pub async fn resolve(
 /// Bootstrap rule for a user with no memberships: the very first user becomes
 /// `owner` of `default`; everyone after starts as `viewer`.
 async fn ensure_bootstrap_membership(state: &AppState, user_id: &str) -> Result<()> {
+    let owned: i64 = sqlx::query_scalar("SELECT count(*) FROM memberships WHERE user_id = ?")
+        .bind(user_id)
+        .fetch_one(&state.pool)
+        .await?;
+    if owned > 0 {
+        return Ok(());
+    }
+    let _guard = BOOTSTRAP_MEMBERSHIP_LOCK.lock().await;
+    // A concurrent request for this same user may have populated membership
+    // while this request waited.
     let owned: i64 = sqlx::query_scalar("SELECT count(*) FROM memberships WHERE user_id = ?")
         .bind(user_id)
         .fetch_one(&state.pool)

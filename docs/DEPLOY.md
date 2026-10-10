@@ -298,7 +298,14 @@ systemctl status beruang-a beruang-b   # slots; one is active
 turaes app show beruang                # status + cpu/mem/visitors/health
 curl -s 127.0.0.1:8000/health         # base port (slot A when active)
 curl -sk https://beruang.turaes.rayakala.ink/health
+turaes doctor                           # disk reserve, cert expiry, timer activation
 ```
+
+`doctor` checks free space (512 MiB reserve) on the DB, backup and artifact
+filesystems, expiry for every live certbot `fullchain.pem` (30-day warning in
+the detail; expired or malformed certs fail), and activation of the backup,
+cert and GC timers on Linux/systemd. Timer checks report activation only, not
+the last service-run result.
 
 The generated unit matches the fleet's hardened shape (`ProtectSystem=strict`,
 `NoNewPrivileges`, `Restart=always`, `ReadWritePaths=/var/lib/beruang`).
