@@ -37,20 +37,28 @@ use crate::state::AppState;
 pub const MAX_UPLOAD_BYTES: u64 = 256 * 1024 * 1024;
 /// `manifest.json` ceiling inside bundles.
 const MAX_MANIFEST_BYTES: usize = 64 * 1024;
+/// Bundle extraction ceilings (zip-bomb defense): total uncompressed bytes,
+/// member count, per-member bytes, and archive path length. Members stay in
+/// memory but bounded; a counting reader aborts past the totals.
+const MAX_BUNDLE_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_BUNDLE_FILES: usize = 32;
+const MAX_MEMBER_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_BUNDLE_PATH: usize = 256;
 
 /// Query-string fields the upload endpoint understands. Anything else that
 /// looks like runtime config is collected into `ignored_hints`, never applied;
-/// anything else entirely is reported as `ignored_unknown` so misspelled
+/// anything else entirely is rejected (`ignored_unknown`) so misspelled
 /// fields (e.g. `versoin=`) fail loudly instead of silently.
 const KNOWN_UPLOAD_FIELDS: &[&str] = &[
     "app",
     "repo",
     "version",
     "commit",
+    "commit_sha",
+    "sha256",
     "arch",
     "build_url",
     "notes",
-    "filename",
 ];
 /// Runtime-flavored keys a push may carry; always ignored, always reported.
 const RUNTIME_HINT_FIELDS: &[&str] = &[
@@ -293,6 +301,24 @@ async fn ensure_artifact_row(
         .map_err(Error::Db)
 }
 
+/// Required-string manifest field: present-but-not-a-string is a 400, so
+/// `{"version": 123}` can never silently downgrade to an artifact-only push.
+fn req_str_field(
+    manifest: &HashMap<String, serde_json::Value>,
+    key: &str,
+) -> Result<Option<String>> {
+    match manifest.get(key) {
+        None => Ok(None),
+        Some(v) => match v.as_str() {
+            Some(s) => Ok(Some(s.to_string())),
+            None => Err(Error::FieldValidation {
+                field: "manifest.json".into(),
+                detail: format!("manifest key '{key}' must be a string"),
+            }),
+        },
+    }
+}
+
 /// Move a channel pointer to a release (upsert).
 async fn set_channel(
     pool: &Pool,
@@ -360,7 +386,14 @@ pub async fn create_link(
     .bind(&repo)
     .bind(&user.login)
     .execute(&state.pool)
-    .await?;
+    .await
+    .map_err(|e| {
+        map_unique_violation(
+            e,
+            "repo",
+            format!("repo '{repo}' is already linked to '{}'", app.name),
+        )
+    })?;
     audit::record(
         &state,
         Some(&org_id),
@@ -439,13 +472,50 @@ pub async fn list_links(
     Ok(Json(serde_json::json!({ "links": links })))
 }
 
-/// Stream the request body to a temp file (256 MiB cap), returning its path
+/// Staged upload temp file, deleted on drop. Every early return below is
+/// leak-proof: the file lives only as long as this holder.
+struct StagedTemp {
+    path: Option<std::path::PathBuf>,
+}
+
+impl StagedTemp {
+    fn new(path: std::path::PathBuf) -> Self {
+        Self { path: Some(path) }
+    }
+
+    fn path(&self) -> &std::path::Path {
+        self.path.as_ref().expect("staged temp taken")
+    }
+}
+
+impl Drop for StagedTemp {
+    fn drop(&mut self) {
+        if let Some(p) = self.path.take() {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+/// Map SQLite unique violations to 409 with the offending field; anything
+/// else stays a 500-class DB error. Closes check-then-INSERT races (CI
+/// retries, parallel matrix pushes) with a documented conflict.
+fn map_unique_violation(e: sqlx::Error, field: &str, detail: String) -> Error {
+    match &e {
+        sqlx::Error::Database(db) if db.message().contains("UNIQUE") => Error::FieldConflict {
+            field: field.into(),
+            detail,
+        },
+        _ => Error::Db(e),
+    }
+}
+
+/// Stream the request body to a temp file (256 MiB cap), returning its holder
 /// and size. Single pass; hashing happens at store time via `put_file`.
-async fn buffer_upload(state: &AppState, body: Body) -> Result<(std::path::PathBuf, u64)> {
+async fn buffer_upload(state: &AppState, body: Body) -> Result<(StagedTemp, u64)> {
     let dir = state.artifacts.root().join("sha256");
     tokio::fs::create_dir_all(&dir).await?;
-    let tmp = dir.join(format!(".tmp-{}", uuid::Uuid::new_v4()));
-    let mut out = tokio::fs::File::create(&tmp).await?;
+    let tmp = StagedTemp::new(dir.join(format!(".tmp-{}", uuid::Uuid::new_v4())));
+    let mut out = tokio::fs::File::create(tmp.path()).await?;
     let mut total: u64 = 0;
     let mut stream = body.into_data_stream();
     use tokio::io::AsyncWriteExt;
@@ -455,7 +525,6 @@ async fn buffer_upload(state: &AppState, body: Body) -> Result<(std::path::PathB
         total += chunk.len() as u64;
         if total > MAX_UPLOAD_BYTES {
             drop(out);
-            let _ = tokio::fs::remove_file(&tmp).await;
             return Err(Error::BadRequest(format!(
                 "upload exceeds the {} MiB limit",
                 MAX_UPLOAD_BYTES / 1024 / 1024
@@ -466,7 +535,6 @@ async fn buffer_upload(state: &AppState, body: Body) -> Result<(std::path::PathB
     out.flush().await?;
     drop(out);
     if total == 0 {
-        let _ = tokio::fs::remove_file(&tmp).await;
         return Err(Error::BadRequest("upload body is empty".into()));
     }
     // Service binaries must stay executable end to end: `put_file` preserves
@@ -475,7 +543,7 @@ async fn buffer_upload(state: &AppState, body: Body) -> Result<(std::path::PathB
     {
         use std::os::unix::fs::PermissionsExt;
         let perms = std::fs::Permissions::from_mode(0o755);
-        tokio::fs::set_permissions(&tmp, perms).await?;
+        tokio::fs::set_permissions(tmp.path(), perms).await?;
     }
     Ok((tmp, total))
 }
@@ -492,24 +560,74 @@ async fn read_head(tmp: &std::path::Path) -> Result<Vec<u8>> {
 }
 
 /// Unpacked bundle: manifest fields plus `(archive path, bytes)` members.
+/// Members stay in memory but bounded by the extraction ceilings above.
 type UnpackedBundle = (HashMap<String, serde_json::Value>, Vec<(String, Vec<u8>)>);
+
+/// Read adapter that errors past a byte budget (zip-bomb defense for the
+/// gunzip layer: compressed bytes are small, expansion is not).
+struct Capped<R> {
+    inner: R,
+    remaining: u64,
+    context: &'static str,
+}
+
+impl<R: std::io::Read> std::io::Read for Capped<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.remaining == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::QuotaExceeded,
+                self.context,
+            ));
+        }
+        let cap = (self.remaining as usize).min(buf.len());
+        let n = self.inner.read(&mut buf[..cap])?;
+        self.remaining -= n as u64;
+        Ok(n)
+    }
+}
+
+fn capped_error(context: &'static str) -> Error {
+    Error::BadRequest(format!("bundle exceeds limits ({context})"))
+}
 
 /// Unpack a gzip tarball in a blocking task: returns `(manifest, members)`
 /// where members are `(archive path, bytes)` for every `files/` entry.
+/// Bounded: total uncompressed bytes, member count, per-member bytes, and
+/// path shape are all capped; symlinks/hardlinks are rejected (only their
+/// target bytes could otherwise smuggle in as blobs).
 fn unpack_bundle(tmp: std::path::PathBuf) -> Result<UnpackedBundle> {
-    let data = std::fs::read(&tmp).map_err(turaes_core::Error::Io)?;
-    if data.len() < 2 || data[0] != 0x1f || data[1] != 0x8b {
-        return Err(Error::BadRequest("bundle is not a gzip tarball".into()));
+    let file = std::fs::File::open(&tmp).map_err(turaes_core::Error::Io)?;
+    let mut buf = std::io::BufReader::new(file);
+    {
+        // Peek the magic without consuming: the decoder below must see the
+        // stream from offset zero.
+        use std::io::BufRead;
+        let peek = buf
+            .fill_buf()
+            .map_err(|_| Error::BadRequest("bundle is not a gzip tarball".into()))?;
+        if peek.len() < 2 || peek[0] != 0x1f || peek[1] != 0x8b {
+            return Err(Error::BadRequest("bundle is not a gzip tarball".into()));
+        }
     }
-    let decoder = flate2::read::GzDecoder::new(&data[..]);
-    let mut archive = tar::Archive::new(decoder);
+    let decoder = flate2::read::GzDecoder::new(buf);
+    let capped = Capped {
+        inner: decoder,
+        remaining: MAX_BUNDLE_BYTES,
+        context: "total uncompressed size",
+    };
+    let mut archive = tar::Archive::new(capped);
     let mut manifest: Option<Vec<u8>> = None;
     let mut members: Vec<(String, Vec<u8>)> = Vec::new();
     let mut entries = archive
         .entries()
         .map_err(|e| Error::BadRequest(format!("cannot read bundle entries: {e}")))?;
     for item in entries.by_ref() {
-        let mut entry = item.map_err(|e| Error::BadRequest(format!("bad bundle entry: {e}")))?;
+        let entry = item.map_err(|e| Error::BadRequest(format!("bad bundle entry: {e}")))?;
+        if entry.header().entry_type().is_symlink() || entry.header().entry_type().is_hard_link() {
+            return Err(Error::BadRequest(
+                "bundle links are not installable files".into(),
+            ));
+        }
         let path = entry
             .path()
             .map_err(|e| Error::BadRequest(format!("bad bundle path: {e}")))?
@@ -535,10 +653,18 @@ fn unpack_bundle(tmp: std::path::PathBuf) -> Result<UnpackedBundle> {
         if !path.starts_with("files/") || path.ends_with('/') {
             continue;
         }
+        if members.len() >= MAX_BUNDLE_FILES {
+            return Err(Error::BadRequest(format!(
+                "bundle carries more than {MAX_BUNDLE_FILES} files"
+            )));
+        }
         let rel = path["files/".len()..].to_string();
         if rel.is_empty()
+            || rel.len() > MAX_BUNDLE_PATH
             || rel.starts_with('/')
-            || rel.split('/').any(|c| c == ".." || c.is_empty())
+            || rel
+                .split('/')
+                .any(|c| c.is_empty() || c == "." || c == "..")
         {
             return Err(Error::BadRequest(format!(
                 "bundle path '{path}' escapes files/"
@@ -546,8 +672,15 @@ fn unpack_bundle(tmp: std::path::PathBuf) -> Result<UnpackedBundle> {
         }
         let mut buf = Vec::new();
         entry
+            .take(MAX_MEMBER_BYTES + 1)
             .read_to_end(&mut buf)
-            .map_err(|e| Error::BadRequest(format!("cannot read bundle file '{path}': {e}")))?;
+            .map_err(|e| match e.kind() {
+                std::io::ErrorKind::QuotaExceeded => capped_error("per-file size"),
+                _ => Error::BadRequest(format!("cannot read bundle file '{path}': {e}")),
+            })?;
+        if buf.len() as u64 > MAX_MEMBER_BYTES {
+            return Err(capped_error("per-file size"));
+        }
         members.push((rel, buf));
     }
     let manifest = manifest
@@ -633,9 +766,15 @@ pub async fn upload(
         })
         .cloned()
         .collect();
+    if !ignored_unknown.is_empty() {
+        return Err(Error::FieldValidation {
+            field: ignored_unknown.join(","),
+            detail: "unknown query fields (did you misspell one?)".into(),
+        });
+    }
 
     let (tmp, _size) = buffer_upload(&state, body).await?;
-    let head = read_head(&tmp).await?;
+    let head = read_head(tmp.path()).await?;
     let is_bundle = head.len() >= 2 && head[0] == 0x1f && head[1] == 0x8b;
 
     // Effective release metadata: explicit query fields win, the manifest
@@ -644,14 +783,20 @@ pub async fn upload(
     // before buffering the body.)
     let mut release_version = version.clone();
     let mut release_arch = params.get("arch").cloned();
-    let mut release_commit = params.get("commit").cloned().filter(|s| !s.is_empty());
+    // Canonical `commit_sha`, back-compat `commit`.
+    let mut release_commit = params
+        .get("commit_sha")
+        .or_else(|| params.get("commit"))
+        .cloned()
+        .filter(|s| !s.is_empty());
 
     // (primary hash, files_json entries, arch)
     let (primary_hash, files_json, arch): (String, Vec<serde_json::Value>, Option<String>) =
         if is_bundle {
-            let (manifest, members) = tokio::task::spawn_blocking(move || unpack_bundle(tmp))
-                .await
-                .map_err(|e| Error::Internal(format!("bundle unpack failed: {e}")))??;
+            let (manifest, members) =
+                tokio::task::spawn_blocking(move || unpack_bundle(tmp.path().to_path_buf()))
+                    .await
+                    .map_err(|e| Error::Internal(format!("bundle unpack failed: {e}")))??;
             for key in manifest.keys() {
                 if !MANIFEST_FIELDS.contains(&key.as_str()) {
                     return Err(Error::FieldValidation {
@@ -662,8 +807,8 @@ pub async fn upload(
             }
             // Manifest/app agreement: identity fields must match the push, or the
             // push is ambiguous about what it is.
-            let str_field = |k: &str| manifest.get(k).and_then(|v| v.as_str()).map(str::to_string);
-            if let Some(name) = str_field("name") {
+            let str_field = |k: &str| -> Result<Option<String>> { req_str_field(&manifest, k) };
+            if let Some(name) = str_field("name")? {
                 if name != app.name {
                     return Err(Error::FieldValidation {
                         field: "manifest.json".into(),
@@ -671,7 +816,7 @@ pub async fn upload(
                     });
                 }
             }
-            if let Some(mv) = str_field("version") {
+            if let Some(mv) = str_field("version")? {
                 match &release_version {
                     Some(v) if v != &mv => {
                         return Err(Error::FieldValidation {
@@ -688,7 +833,7 @@ pub async fn upload(
                     }
                 }
             }
-            if let Some(ma) = str_field("arch") {
+            if let Some(ma) = str_field("arch")? {
                 match &release_arch {
                     Some(a) if a != &ma => {
                         return Err(Error::FieldValidation {
@@ -703,7 +848,7 @@ pub async fn upload(
                 }
             }
             if release_commit.is_none() {
-                release_commit = str_field("commit");
+                release_commit = str_field("commit")?;
             }
             // A manifest-sourced version skipped the pre-upload dup check.
             if version.is_none() {
@@ -724,11 +869,16 @@ pub async fn upload(
                     }
                 }
             }
-            let declared: Vec<serde_json::Value> = manifest
-                .get("files")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
+            let declared: Vec<serde_json::Value> = match manifest.get("files") {
+                None => Vec::new(),
+                Some(v) => v
+                    .as_array()
+                    .cloned()
+                    .ok_or_else(|| Error::FieldValidation {
+                        field: "manifest.json".into(),
+                        detail: "manifest key 'files' must be an array".into(),
+                    })?,
+            };
             if declared.is_empty() && members.is_empty() {
                 return Err(Error::FieldValidation {
                     field: "manifest.json".into(),
@@ -758,6 +908,17 @@ pub async fn upload(
                     })?;
                     out.push((p.to_string(), bytes));
                 }
+                if !by_path.is_empty() {
+                    let mut extra: Vec<String> = by_path.keys().cloned().collect();
+                    extra.sort();
+                    return Err(Error::FieldValidation {
+                        field: "manifest.json".into(),
+                        detail: format!(
+                            "files/ carries undeployable extras not in files[]: {}",
+                            extra.join(", ")
+                        ),
+                    });
+                }
                 out
             };
             if ordered.is_empty() {
@@ -771,20 +932,23 @@ pub async fn upload(
                 if i == 0 {
                     arch_out = elf_arch(bytes)?.map(str::to_string);
                 }
-                let member_tmp = state
-                    .artifacts
-                    .root()
-                    .join("sha256")
-                    .join(format!(".tmp-{}-{i}", uuid::Uuid::new_v4()));
-                tokio::fs::write(&member_tmp, bytes).await?;
+                let member_tmp = StagedTemp::new(
+                    state
+                        .artifacts
+                        .root()
+                        .join("sha256")
+                        .join(format!(".tmp-{}-{i}", uuid::Uuid::new_v4())),
+                );
+                tokio::fs::write(member_tmp.path(), bytes).await?;
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
                     let perms = std::fs::Permissions::from_mode(0o755);
-                    tokio::fs::set_permissions(&member_tmp, perms).await?;
+                    tokio::fs::set_permissions(member_tmp.path(), perms).await?;
                 }
-                let hash = state.artifacts.put_file(&member_tmp).await?;
-                let _ = tokio::fs::remove_file(&member_tmp).await;
+                // Dropped (deleted) here unless stored: put_file copies into
+                // the store, so the staging copy is always garbage after.
+                let hash = state.artifacts.put_file(member_tmp.path()).await?;
                 entries.push(serde_json::json!({"path": rel, "hash": hash}));
                 hashes.push(hash);
             }
@@ -816,14 +980,32 @@ pub async fn upload(
                     }
                 }
             }
-            let hash = state.artifacts.put_file(&tmp).await?;
-            let _ = tokio::fs::remove_file(&tmp).await;
+            let hash = state.artifacts.put_file(tmp.path()).await?;
             (hash, vec![], arch_found)
         };
 
     // Prefer the declared arch (already cross-checked against ELF); fall
     // back to what the binary headers reported.
     let arch = release_arch.or(arch);
+
+    // Optional client-pinned digest: the CI that built the bytes asserts what
+    // must have arrived, catching corruption or substitution in transit.
+    if let Some(expect) = params.get("sha256").cloned().filter(|s| !s.is_empty()) {
+        let want = expect
+            .strip_prefix("sha256:")
+            .unwrap_or(&expect)
+            .to_lowercase();
+        let got = primary_hash
+            .strip_prefix("sha256:")
+            .unwrap_or(&primary_hash)
+            .to_lowercase();
+        if want != got {
+            return Err(Error::FieldValidation {
+                field: "sha256".into(),
+                detail: "uploaded bytes do not match the pinned digest".into(),
+            });
+        }
+    }
 
     let size_bytes: i64 = state
         .artifacts
@@ -894,7 +1076,14 @@ pub async fn upload(
             .bind(&files_str)
             .bind(&user.login)
             .execute(&state.pool)
-            .await?;
+            .await
+            .map_err(|e| {
+                map_unique_violation(
+                    e,
+                    "version",
+                    format!("release {v} already exists for '{}'", app.name),
+                )
+            })?;
             // No auto-promotion: `latest` moves only via the explicit,
             // Admin-gated promote call, so a push can never silently
             // redirect the channel other deploys resolve.
@@ -987,7 +1176,14 @@ pub async fn create_release(
     .bind(input.get("notes").cloned().filter(|s| !s.is_empty()))
     .bind(&user.login)
     .execute(&state.pool)
-    .await?;
+    .await
+    .map_err(|e| {
+        map_unique_violation(
+            e,
+            "version",
+            format!("release {version} already exists for '{}'", app.name),
+        )
+    })?;
     audit::record(
         &state,
         Some(&org_id),

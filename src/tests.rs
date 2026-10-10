@@ -4670,3 +4670,136 @@ async fn registry_write_endpoints_require_admin() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn registry_bundle_push_enforces_hardening_rules() {
+    use std::io::Write;
+
+    fn gzip_tar(entries: Vec<(tar::Header, &str, Vec<u8>)>) -> Vec<u8> {
+        let mut tar_data = Vec::new();
+        {
+            let mut tar = tar::Builder::new(&mut tar_data);
+            for (mut header, path, bytes) in entries {
+                header.set_size(bytes.len() as u64);
+                header.set_cksum();
+                tar.append_data(&mut header, path, &bytes[..]).unwrap();
+            }
+            tar.finish().unwrap();
+        }
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(&tar_data).unwrap();
+        enc.finish().unwrap()
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+    let _id = registry_app(&state, &router, "regharden").await;
+    let push = |uri: String, body: Vec<u8>| {
+        let router = router.clone();
+        async move {
+            router
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        }
+    };
+    let tmp_count = || {
+        std::fs::read_dir(dir.path().join("artifacts").join("sha256"))
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .filter(|e| e.file_name().to_string_lossy().starts_with(".tmp-"))
+                    .count()
+            })
+            .unwrap_or(0)
+    };
+    let manifest =
+        |v: &str| format!(r#"{{"name":"regharden","version":"{v}","files":[{{"path":"app"}}]}}"#);
+
+    // Symlink members are rejected and leave no temp files.
+    let mut link_header = tar::Header::new_gnu();
+    let bundle = gzip_tar(vec![
+        (
+            {
+                let mut h = tar::Header::new_gnu();
+                h.set_size(manifest("9.0.0").len() as u64);
+                h.set_cksum();
+                h
+            },
+            "manifest.json",
+            manifest("9.0.0").into_bytes(),
+        ),
+        (
+            {
+                link_header.set_size(0);
+                link_header.set_entry_type(tar::EntryType::Symlink);
+                link_header.set_link_name("target").unwrap();
+                link_header.set_cksum();
+                link_header
+            },
+            "files/evil",
+            vec![],
+        ),
+    ]);
+    let resp = push(upload_uri("regharden", "&version=9.0.0"), bundle).await;
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(tmp_count(), 0);
+
+    // Non-string identity fields are rejected, not silently downgraded.
+    let bundle = bundle_bytes(
+        r#"{"name":"regharden","version":123,"files":[{"path":"app"}]}"#,
+        &[("app", elf_bytes(62))],
+    );
+    let resp = push(upload_uri("regharden", "&version=9.0.1"), bundle).await;
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(tmp_count(), 0);
+
+    // Undeclared files/ extras are rejected.
+    let bundle = bundle_bytes(
+        &manifest("9.0.2"),
+        &[("app", elf_bytes(62)), ("extra", elf_bytes(62))],
+    );
+    let resp = push(upload_uri("regharden", "&version=9.0.2"), bundle).await;
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(tmp_count(), 0);
+
+    // Unknown query fields fail loudly.
+    let resp = push(
+        upload_uri("regharden", "&version=9.0.3&versoin=1"),
+        elf_bytes(62),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // commit_sha is accepted as the canonical commit field.
+    let resp = push(
+        upload_uri("regharden", "&version=9.0.4&commit_sha=abc123"),
+        elf_bytes(62),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // Pinned digest mismatch is rejected; match succeeds.
+    use sha2::Digest;
+    let raw = elf_bytes(62);
+    let hex = format!("{:x}", sha2::Sha256::digest(&raw));
+    let resp = push(
+        upload_uri("regharden", "&version=9.0.5&sha256=sha256:00"),
+        raw.clone(),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let resp = push(
+        upload_uri("regharden", &format!("&version=9.0.6&sha256={hex}")),
+        raw,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(tmp_count(), 0);
+}
