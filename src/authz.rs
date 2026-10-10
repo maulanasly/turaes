@@ -256,7 +256,10 @@ pub async fn resolve_token(state: &AppState, token: &str) -> Result<CurrentUser>
 }
 
 /// Resolve an org path segment (id or slug) and enforce a role floor.
-/// Unknown orgs yield `NotFound`; insufficient roles yield `Forbidden`.
+///
+/// Unknown orgs and orgs the caller is not a member of both yield
+/// `NotFound`, so slugs cannot be enumerated by status code; members below
+/// the floor still get `Forbidden`.
 pub async fn authorize_org(
     state: &AppState,
     user: &CurrentUser,
@@ -271,6 +274,9 @@ pub async fn authorize_org(
             .await?;
     match org_id {
         Some(id) => {
+            if user.role_in(&id).is_none() {
+                return Err(Error::NotFound(format!("organization {org_ref}")));
+            }
             user.require(&id, floor)?;
             Ok(id)
         }

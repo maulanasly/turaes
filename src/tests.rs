@@ -1454,7 +1454,8 @@ async fn cross_org_apps_are_invisible() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
-    // An org the caller is not a member of is forbidden...
+    // An org the caller is not a member of is indistinguishable from
+    // an unknown org (both 404, so slugs cannot be enumerated)...
     let router = app::build_router(state.clone());
     let resp = router
         .oneshot(
@@ -1465,7 +1466,7 @@ async fn cross_org_apps_are_invisible() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
     // ...while an unknown org is not found.
     let router = app::build_router(state.clone());
@@ -1626,7 +1627,7 @@ async fn audit_is_org_scoped() {
     .await;
     assert!(body["audit"].as_array().unwrap().is_empty());
 
-    // ...and the other org itself is forbidden to this principal.
+    // ...and the other org itself is indistinguishable from unknown.
     let router = app::build_router(state.clone());
     let resp = router
         .oneshot(
@@ -1637,7 +1638,7 @@ async fn audit_is_org_scoped() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
 async fn mint_token(router: axum::Router, scopes: &str) -> (String, String) {
@@ -1768,7 +1769,7 @@ async fn token_rejects_unknown_and_cross_org() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 
-    // A token is bound to its org: another org is forbidden.
+    // A token is bound to its org: another org reads as unknown.
     sqlx::query("INSERT INTO organizations (id, slug, name) VALUES ('other', 'other', 'Other')")
         .execute(&state.pool)
         .await
@@ -1778,7 +1779,7 @@ async fn token_rejects_unknown_and_cross_org() {
         .oneshot(bearer("/api/v1/orgs/other/apps", &token))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
     // Invalid scopes are rejected at mint time.
     let router = app::build_router(state.clone());
@@ -1953,7 +1954,7 @@ async fn org_create_and_membership_lifecycle() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
 
-    // Removed members lose access entirely (403, not a guard trip).
+    // Removed members lose access entirely (unknown org, not a guard trip).
     let router = app::build_router(state.clone());
     let resp = router
         .oneshot(
@@ -1966,7 +1967,7 @@ async fn org_create_and_membership_lifecycle() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
     // The sole-owner demote guard trips where the caller is still a member.
     let router = app::build_router(state.clone());
@@ -4525,7 +4526,7 @@ async fn registry_links_crud_and_scoping() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
-    // Another org cannot see this org's registry surface.
+    // Another org cannot see this org's registry surface (unknown, not forbidden).
     sqlx::query("INSERT INTO organizations (id, slug, name) VALUES ('other', 'other', 'Other')")
         .execute(&state.pool)
         .await
@@ -4539,7 +4540,7 @@ async fn registry_links_crud_and_scoping() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -4581,7 +4582,8 @@ async fn catalog_is_org_scoped() {
         .await
         .unwrap();
 
-    // An org the caller is not a member of is forbidden...
+    // An org the caller is not a member of is indistinguishable from
+    // an unknown org...
     let resp = router
         .clone()
         .oneshot(
@@ -4592,7 +4594,7 @@ async fn catalog_is_org_scoped() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
     // ...while an unknown org is not found.
     let resp = router
@@ -5737,6 +5739,51 @@ async fn rollback_rejects_foreign_hash() {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     let body = body_json(resp).await;
     assert!(body["detail"].as_str().unwrap().contains("never ran under"));
+}
+
+#[tokio::test]
+async fn quota_put_and_validate_are_audited() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/v1/orgs/default/quota")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"max_apps": 7}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let action: Option<String> =
+        sqlx::query_scalar("SELECT action FROM audit_log WHERE action = 'quota.set'")
+            .fetch_optional(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(action.as_deref(), Some("quota.set"));
+
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/servers/local/validate")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let action: Option<String> =
+        sqlx::query_scalar("SELECT action FROM audit_log WHERE action = 'server.validate'")
+            .fetch_optional(&state.pool)
+            .await
+            .unwrap();
+    assert_eq!(action.as_deref(), Some("server.validate"));
 }
 
 #[test]

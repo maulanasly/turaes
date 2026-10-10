@@ -11,6 +11,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
+use cookie::time::Duration as CookieDuration;
 use serde::{Deserialize, Serialize};
 
 use turaes_core::crypto::random_token;
@@ -80,11 +81,14 @@ fn login_error(state: &AppState, jar: CookieJar, msg: &str) -> Response {
     (jar, Redirect::temporary(&location)).into_response()
 }
 
-fn state_cookie(value: String) -> Cookie<'static> {
+fn state_cookie(state: &AppState, value: String) -> Cookie<'static> {
     let mut cookie = Cookie::new(STATE_COOKIE, value);
     cookie.set_http_only(true);
     cookie.set_same_site(SameSite::Lax);
     cookie.set_path("/");
+    cookie.set_secure(state.cfg.secure_cookies());
+    // Nonce lives only for the authorization round-trip.
+    cookie.set_max_age(CookieDuration::seconds(600));
     cookie
 }
 
@@ -134,7 +138,7 @@ pub async fn login(State(state): State<AppState>, jar: CookieJar) -> Result<Resp
         urlencoding::encode(&callback),
         urlencoding::encode(&nonce),
     );
-    let jar = jar.add(state_cookie(nonce));
+    let jar = jar.add(state_cookie(&state, nonce));
     Ok((jar, Redirect::temporary(&url)).into_response())
 }
 
@@ -268,13 +272,21 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar) -> Response {
 fn bearer_token(req: &axum::extract::Request) -> Option<String> {
     let value = req.headers().get(axum::http::header::AUTHORIZATION)?;
     let value = value.to_str().ok()?;
-    let token = value
-        .strip_prefix("Bearer ")
-        .or_else(|| value.strip_prefix("bearer "))?;
-    if token.trim().is_empty() {
+    bearer_scheme_token(value).map(str::to_string)
+}
+
+/// Split an `Authorization` value into its bearer token, accepting any
+/// casing of the scheme (`Bearer`, `bearer`, `BEARER`, ...).
+pub(crate) fn bearer_scheme_token(value: &str) -> Option<&str> {
+    let (scheme, token) = value.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("bearer") {
         return None;
     }
-    Some(token.to_string())
+    let token = token.trim();
+    if token.is_empty() {
+        return None;
+    }
+    Some(token)
 }
 
 /// Middleware: reject unauthenticated requests, and attach both the OAuth
@@ -303,4 +315,21 @@ pub async fn require_auth(
     req.extensions_mut().insert(user);
     req.extensions_mut().insert(current);
     Ok(next.run(req).await)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bearer_scheme_token;
+
+    #[test]
+    fn bearer_scheme_is_case_insensitive_but_strict() {
+        assert_eq!(bearer_scheme_token("Bearer abc123"), Some("abc123"));
+        assert_eq!(bearer_scheme_token("bearer abc123"), Some("abc123"));
+        assert_eq!(bearer_scheme_token("BEARER abc123"), Some("abc123"));
+        assert_eq!(bearer_scheme_token("Bearer   spaced  "), Some("spaced"));
+        assert_eq!(bearer_scheme_token("Bearer "), None);
+        assert_eq!(bearer_scheme_token("Bearer"), None);
+        assert_eq!(bearer_scheme_token("Basic abc123"), None);
+        assert_eq!(bearer_scheme_token(""), None);
+    }
 }

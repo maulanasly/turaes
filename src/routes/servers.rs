@@ -221,6 +221,17 @@ pub async fn validate(
     authz::require_operator(&user)?;
     let server = fetch_server(&state, &id).await?;
     if server.is_local {
+        audit::record(
+            &state,
+            None,
+            Some(&user),
+            None,
+            "server.validate",
+            Some("server"),
+            Some(&id),
+            Some(&serde_json::json!({"reachable": true, "status": "online"}).to_string()),
+        )
+        .await?;
         return Ok(Json(
             serde_json::json!({ "reachable": true, "status": "online" }),
         ));
@@ -243,6 +254,17 @@ pub async fn validate(
         .bind(&id)
         .execute(&state.pool)
         .await;
+    audit::record(
+        &state,
+        None,
+        Some(&user),
+        None,
+        "server.validate",
+        Some("server"),
+        Some(&id),
+        Some(&serde_json::json!({"reachable": reachable, "status": status}).to_string()),
+    )
+    .await?;
     Ok(Json(
         serde_json::json!({ "reachable": reachable, "status": status }),
     ))

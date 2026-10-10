@@ -70,7 +70,14 @@ impl AppState {
         }
         Self {
             artifacts: ArtifactStore::new(&cfg.runtime.artifact_dir),
-            issuer: TokenIssuer::new(&cfg.auth.jwt_secret, cfg.auth.session_ttl_days),
+            issuer: if cfg.auth.secret_previous.is_empty() {
+                TokenIssuer::new(&cfg.auth.jwt_secret, cfg.auth.session_ttl_days)
+            } else {
+                // Sessions minted before the rotation keep verifying until
+                // they expire; new sessions sign with the primary.
+                TokenIssuer::new(&cfg.auth.jwt_secret, cfg.auth.session_ttl_days)
+                    .with_previous(&cfg.auth.secret_previous)
+            },
             secrets: if cfg.auth.secret_previous.is_empty() {
                 SecretBox::new(&cfg.auth.jwt_secret)
             } else {

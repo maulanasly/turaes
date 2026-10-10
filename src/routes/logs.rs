@@ -13,7 +13,7 @@ use tokio::process::Command;
 
 use turaes_core::config::Config;
 use turaes_core::models::Application;
-use turaes_core::Result;
+use turaes_core::{Error, Result};
 
 use crate::authz::{self, CurrentUser, Role};
 use crate::routes::apps::fetch_org_app;
@@ -68,15 +68,61 @@ pub async fn stream(
     State(state): State<AppState>,
     Extension(user): Extension<CurrentUser>,
     Path((org, id)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Result<Response> {
     let org_id = authz::authorize_org(&state, &user, &org, Role::Developer).await?;
     let app = fetch_org_app(&state.pool, &org_id, &id).await?;
+    // Browsers always send Origin on WS upgrades: reject cross-origin opens
+    // (no CORS layer exists to grant them). Non-browser clients send none
+    // and are unaffected.
+    if let Some(origin) = headers
+        .get(axum::http::header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+    {
+        if !origin_allowed(origin, &state.cfg.auth.app_origin) {
+            return Err(Error::Forbidden(
+                "cross-origin log streams are not allowed".into(),
+            ));
+        }
+    }
     let cfg = state.cfg.clone();
+    let _ = crate::audit::record(
+        &state,
+        Some(&org_id),
+        Some(&user),
+        Some(&app.id),
+        "log.stream",
+        Some("application"),
+        Some(&app.id),
+        None,
+    )
+    .await;
     Ok(ws.on_upgrade(move |socket| pump(cfg, app, socket)))
 }
 
+/// Whether a WS `Origin` value matches the dashboard origin (scheme, host,
+/// and effective port). Absent origins are handled by the caller.
+fn origin_allowed(origin: &str, app_origin: &str) -> bool {
+    fn parts(uri: &str) -> Option<(String, String, u16)> {
+        let uri: axum::http::Uri = uri.parse().ok()?;
+        let scheme = uri.scheme_str()?.to_ascii_lowercase();
+        let host = uri.host()?.to_ascii_lowercase();
+        let port = uri
+            .port_u16()
+            .unwrap_or(if scheme == "https" { 443 } else { 80 });
+        Some((scheme, host, port))
+    }
+    match (parts(origin), parts(app_origin)) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
+}
+
 async fn pump(cfg: std::sync::Arc<Config>, app: Application, socket: WebSocket) {
+    /// Idle streams (no output, no client activity) close with a notice
+    /// instead of holding a child process open forever.
+    const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
     let (mut sender, mut receiver) = socket.split();
 
     if app.server_id != "local" {
@@ -108,21 +154,33 @@ async fn pump(cfg: std::sync::Arc<Config>, app: Application, socket: WebSocket) 
 
     if let Some(stdout) = child.stdout.take() {
         let mut lines = BufReader::new(stdout).lines();
+        let mut idle = Box::pin(tokio::time::sleep(IDLE_TIMEOUT));
+        let deadline = || tokio::time::Instant::now() + IDLE_TIMEOUT;
         loop {
             tokio::select! {
                 incoming = receiver.next() => {
                     // Client closed (or sent something); either way, stop.
                     if incoming.is_none() { break; }
+                    idle.as_mut().reset(deadline());
                 }
                 line = lines.next_line() => {
                     match line {
                         Ok(Some(text)) => {
+                            idle.as_mut().reset(deadline());
                             if sender.send(Message::Text(text.into())).await.is_err() {
                                 break;
                             }
                         }
                         _ => break,
                     }
+                }
+                _ = &mut idle => {
+                    let _ = sender
+                        .send(Message::Text(
+                            "idle timeout (15m without output); reconnect to resume".into(),
+                        ))
+                        .await;
+                    break;
                 }
             }
         }
@@ -202,5 +260,21 @@ mod tests {
         let (program, args) = log_argv(&cfg, &app("proc", "demo", None));
         assert_eq!(program, "tail");
         assert!(args.iter().any(|a| a.ends_with("/demo/demo.log")));
+    }
+
+    #[test]
+    fn origin_must_match_dashboard() {
+        use super::origin_allowed;
+        let dash = "https://turaes.rayakala.ink";
+        assert!(origin_allowed("https://turaes.rayakala.ink", dash));
+        assert!(origin_allowed("https://TURAES.rayakala.ink:443", dash));
+        assert!(!origin_allowed("https://evil.test", dash));
+        assert!(!origin_allowed("http://turaes.rayakala.ink", dash));
+        assert!(!origin_allowed(
+            "https://turaes.rayakala.ink.evil.test",
+            dash
+        ));
+        assert!(!origin_allowed("not-a-url", dash));
+        assert!(!origin_allowed("https://turaes.rayakala.ink", "not-a-url"));
     }
 }

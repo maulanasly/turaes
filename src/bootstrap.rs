@@ -97,9 +97,29 @@ pub async fn run(plan: &BootstrapPlan) -> Result<String> {
     result
 }
 
+/// Warn when connecting to a host with no pinned key: `accept-new` trusts
+/// pre-seeded `~/.ssh/known_hosts` entries, so operators can pin keys ahead
+/// of time — but a first connection is pure TOFU and should be noticed.
+fn warn_if_tofu(host: &str) {
+    let known = std::process::Command::new("ssh-keygen")
+        .arg("-F")
+        .arg(host)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !known {
+        tracing::warn!(
+            host,
+            "no pinned SSH host key found; trusting the presented key on first use (TOFU). \
+             Pre-seed ~/.ssh/known_hosts to pin it"
+        );
+    }
+}
+
 async fn run_inner(plan: &BootstrapPlan, key_path: &std::path::Path) -> Result<String> {
     let exe = std::env::current_exe()
         .map_err(|e| Error::Internal(format!("cannot locate own binary: {e}")))?;
+    warn_if_tofu(&plan.host);
 
     // 1. Push the control-plane binary.
     let target = format!("{}@{}", plan.user, plan.host);
