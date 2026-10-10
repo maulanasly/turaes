@@ -26,6 +26,7 @@ Rust (Axum + SQLite) + embedded zero-build UI. The proxy is
 
 - Always interact in English — chat, commits, PR titles/bodies, code comments.
 - App UI strings and user-provided Indonesian domain terms stay as-is.
+- UI copy must not use the em dash character; use commas, periods, colons or parentheses instead.
 
 ## AI guide rail (anti-slop)
 

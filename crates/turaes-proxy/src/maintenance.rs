@@ -34,7 +34,7 @@ pub fn body(app: &str, reason: ParkedReason) -> String {
          <html lang=\"en\">\n\
          <head><meta charset=\"utf-8\" />\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\
-         <title>{app} {headline} — turaes</title>\
+         <title>{app} {headline}: turaes</title>\
          <style>:root{{color-scheme:dark}}body{{margin:0;background:#0f1115;color:#e6e8ee;\
          font:16px/1.5 ui-sans-serif,system-ui,sans-serif;display:flex;min-height:100vh;\
          align-items:center;justify-content:center}}main{{text-align:center;padding:24px}}\
@@ -57,6 +57,7 @@ mod tests {
         let html = body("beruang-dev", ParkedReason::Stopped);
         assert!(html.contains("beruang-dev"));
         assert!(html.contains("temporarily unavailable"));
+        assert!(!html.contains('\u{2014}'));
         assert!(!html.contains("beruang-dev.rayakala.ink"));
         let html = body("dev-lp", ParkedReason::Unhealthy);
         assert!(html.contains("experiencing problems"));

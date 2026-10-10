@@ -26,6 +26,12 @@ barely surfaced.
   pale-pink warnings (`#fecef1` dark / `#8a4b08` light), pink danger
   (`#ef9cda` dark / `#8f2d68` light), cerulean visits (`#00a5e0` dark /
   `#4a5fc0` light), green ok kept, purple mem kept for CPU/MEM separation.
+- Palette decisions: dark ink on pastel primary buttons is required for AA
+  contrast; neutral light surfaces prevent pale accents from washing out.
+  Green `ok` and purple `mem` stay distinct from the five-color palette so
+  success, warning and telemetry categories remain easy to tell apart.
+- The existing blue brand assets remain unchanged by explicit direction;
+  palette changes apply to interface tokens and the maintenance page only.
 - Brand lockup: icon-only `turaes-web-assets` favicon PNG (single blue set for
   both themes) + lowercase "turaes" wordmark; square PNG favicon/touch sizes
   copied verbatim (`16/32/48/192/512`, dark/light identical). The full
