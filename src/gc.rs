@@ -21,6 +21,11 @@ use crate::state::AppState;
 /// Minimum file age before it becomes collectible.
 const GRACE: Duration = Duration::from_secs(3600);
 
+/// Artifact metadata rows survive this long with no release pinning them
+/// (pushed-but-never-released, superseded members) before their blob and row
+/// expire. Yanked releases keep their rows, so yanked bytes stay pinned.
+const ORPHAN_DAYS: i64 = 30;
+
 /// Outcome of a collection run.
 #[derive(Debug, Default)]
 pub struct GcReport {
@@ -32,26 +37,91 @@ pub struct GcReport {
     pub tmps_swept: usize,
     /// Blobs kept (referenced or too fresh).
     pub blobs_kept: usize,
+    /// Expired unpinned artifact metadata rows deleted.
+    pub rows_expired: usize,
 }
 
-/// Hashes any deployment row still names, plus every blob the registry
-/// metadata table pins (pushed artifacts and bundle members, even before
-/// their first deploy).
+/// Hashes any deployment row still names, plus every blob a release pins
+/// (primary artifact + bundle `files_json` members). Yanked releases keep
+/// their rows, so yanked bytes stay pinned by design.
 async fn referenced_hashes(state: &AppState) -> Result<HashSet<String>> {
-    let rows: Vec<Option<String>> = sqlx::query_scalar(
+    let mut rows: Vec<Option<String>> = sqlx::query_scalar(
         "SELECT artifact_hash FROM deployments WHERE artifact_hash IS NOT NULL \
          UNION \
-         SELECT previous_artifact FROM deployments WHERE previous_artifact IS NOT NULL \
-         UNION \
-         SELECT hash FROM artifacts WHERE hash IS NOT NULL",
+         SELECT previous_artifact FROM deployments WHERE previous_artifact IS NOT NULL",
     )
     .fetch_all(&state.pool)
     .await?;
+    let release_hashes: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT hash FROM artifacts WHERE id IN (SELECT artifact_id FROM releases)",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    rows.extend(release_hashes);
+    let files: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT files_json FROM releases WHERE files_json IS NOT NULL AND files_json != ''",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    for doc in files.into_iter().flatten() {
+        if let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(&doc) {
+            for item in items {
+                if let Some(h) = item.get("hash").and_then(|v| v.as_str()) {
+                    rows.push(Some(h.to_string()));
+                }
+            }
+        }
+    }
     let mut out = HashSet::with_capacity(rows.len());
     for hash in rows.into_iter().flatten() {
         out.insert(hash.strip_prefix("sha256:").unwrap_or(&hash).to_string());
     }
     Ok(out)
+}
+
+/// Expire artifact metadata rows nothing pins (no release references the row
+/// as primary artifact or bundle member) older than `ORPHAN_DAYS`, deleting
+/// their blobs when unreferenced. Returns (rows, bytes).
+async fn expire_orphans(
+    state: &AppState,
+    referenced: &HashSet<String>,
+    dry_run: bool,
+) -> Result<(usize, u64)> {
+    let cutoff = format!("-{ORPHAN_DAYS} days");
+    let rows: Vec<(String, String)> = sqlx::query_as(&format!(
+        "SELECT id, hash FROM artifacts WHERE created_at < datetime('now', '{cutoff}')"
+    ))
+    .fetch_all(&state.pool)
+    .await?;
+    let dir = PathBuf::from(&state.cfg.runtime.artifact_dir).join("sha256");
+    let mut rows_expired = 0;
+    let mut bytes_freed = 0;
+    for (id, hash) in rows {
+        let bare = hash.strip_prefix("sha256:").unwrap_or(&hash);
+        if referenced.contains(bare) {
+            continue;
+        }
+        let path = dir.join(bare);
+        let stale = path
+            .metadata()
+            .and_then(|m| m.modified())
+            .map(|t| !fresh_enough(t))
+            .unwrap_or(true);
+        if !stale {
+            continue;
+        }
+        let bytes = path.metadata().map(|m| m.len()).unwrap_or(0);
+        if !dry_run {
+            let _ = std::fs::remove_file(&path);
+            sqlx::query("DELETE FROM artifacts WHERE id = ?")
+                .bind(&id)
+                .execute(&state.pool)
+                .await?;
+        }
+        rows_expired += 1;
+        bytes_freed += bytes;
+    }
+    Ok((rows_expired, bytes_freed))
 }
 
 fn fresh_enough(mtime: SystemTime) -> bool {
@@ -133,11 +203,15 @@ pub async fn collect_artifacts(state: &AppState, dry_run: bool) -> Result<GcRepo
             }
         }
     }
-    if !dry_run && (report.blobs_removed > 0 || report.tmps_swept > 0) {
+    let (rows_expired, orphan_bytes) = expire_orphans(state, &referenced, dry_run).await?;
+    report.rows_expired = rows_expired;
+    report.bytes_freed += orphan_bytes;
+    if !dry_run && (report.blobs_removed > 0 || report.tmps_swept > 0 || report.rows_expired > 0) {
         let meta = serde_json::json!({
             "blobs_removed": report.blobs_removed,
             "bytes_freed": report.bytes_freed,
             "tmps_swept": report.tmps_swept,
+            "rows_expired": report.rows_expired,
         })
         .to_string();
         audit::record(

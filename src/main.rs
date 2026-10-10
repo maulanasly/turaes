@@ -190,11 +190,12 @@ async fn main() {
                 println!("dry run: nothing deleted");
             }
             println!(
-                "artifacts: removed {} blob(s) ({} bytes), swept {} temp upload(s), kept {} blob(s)",
+                "artifacts: removed {} blob(s) ({} bytes), swept {} temp upload(s), kept {} blob(s), expired {} orphan row(s)",
                 report.blobs_removed,
                 report.bytes_freed,
                 report.tmps_swept,
-                report.blobs_kept
+                report.blobs_kept,
+                report.rows_expired
             );
         }
         Command::Serve => serve(cfg).await,

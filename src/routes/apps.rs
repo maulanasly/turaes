@@ -282,6 +282,8 @@ fn draft_from_update(app: &Application, org_id: &str, input: &UpdateApp) -> Chec
 pub struct RollbackBody {
     /// Artifact hash to roll back to (defaults to the previous build).
     pub artifact_hash: Option<String>,
+    /// Redeploy even a yanked release (Admin only).
+    pub force: Option<bool>,
 }
 
 pub(crate) fn validate_name(name: &str) -> Result<()> {
@@ -1066,6 +1068,14 @@ pub async fn deploy(
                 )));
             }
             let (dep_id, out) = deploy_app_hash(&state, &app, &hash).await?;
+            // Pin provenance: which release (and human version) this deploy
+            // resolved, so yanked builds stay answerable after the fact.
+            sqlx::query("UPDATE deployments SET release_id = ?, resolved_version = ? WHERE id = ?")
+                .bind(&release.id)
+                .bind(&release.version)
+                .bind(&dep_id)
+                .execute(&state.pool)
+                .await?;
             (dep_id, out, Some(release.version))
         }
     };
@@ -1659,7 +1669,8 @@ pub async fn rollback(
             detail: "command apps do not retain previous argv configurations; restore the desired command in turaes.yaml, run turaes apply, then deploy".into(),
         });
     }
-    let target = body.and_then(|Json(b)| b.artifact_hash);
+    let target = body.as_ref().and_then(|Json(b)| b.artifact_hash.clone());
+    let force = body.as_ref().is_some_and(|Json(b)| b.force == Some(true));
     let previous = match target {
         Some(hash) => hash,
         None => {
@@ -1681,6 +1692,30 @@ pub async fn rollback(
         return Err(Error::NotFound(format!(
             "build {previous} is no longer in the store"
         )));
+    }
+    // Yanked releases stay redeployable only deliberately: explicit force by
+    // an admin. Otherwise a yanked (bad) binary comes straight back.
+    let bare = previous
+        .strip_prefix("sha256:")
+        .unwrap_or(&previous)
+        .to_string();
+    let yanked: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM releases r JOIN artifacts t ON t.id = r.artifact_id \
+         WHERE r.application_id = ? AND r.is_yanked != 0 \
+           AND (t.hash = ? OR t.hash = ?)",
+    )
+    .bind(&app.id)
+    .bind(&previous)
+    .bind(&bare)
+    .fetch_one(&state.pool)
+    .await?;
+    if yanked > 0 {
+        if !force {
+            return Err(Error::Conflict(format!(
+                "build {previous} was yanked; pass {{\"force\":true}} as an admin to redeploy it"
+            )));
+        }
+        authz::authorize_org(&state, &user, &org, Role::Admin).await?;
     }
     let source = state
         .artifacts
@@ -2111,7 +2146,7 @@ pub async fn deployments(
     let limit = q.limit.unwrap_or(20).clamp(1, 200);
     let rows = sqlx::query_as::<_, Deployment>(
         "SELECT id, application_id, status, artifact_hash, substr(log, 1, 2000) AS log, \
-         previous_artifact, started_at, finished_at \
+         previous_artifact, release_id, resolved_version, started_at, finished_at \
          FROM deployments WHERE application_id = ? ORDER BY rowid DESC LIMIT ?",
     )
     .bind(&id)

@@ -103,6 +103,10 @@ pub struct Deployment {
     pub status: String,
     /// Content hash of the installed artifact.
     pub artifact_hash: Option<String>,
+    /// Registry release this deploy resolved, if version-pinned.
+    pub release_id: Option<String>,
+    /// Human version the deploy resolved (denormalized for listings).
+    pub resolved_version: Option<String>,
     /// Captured build/install log.
     pub log: Option<String>,
     /// Path of the artifact replaced by this deploy (for rollback).

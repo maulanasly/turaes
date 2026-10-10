@@ -4670,3 +4670,673 @@ async fn registry_write_endpoints_require_admin() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn registry_bundle_push_enforces_hardening_rules() {
+    use std::io::Write;
+
+    fn gzip_tar(entries: Vec<(tar::Header, &str, Vec<u8>)>) -> Vec<u8> {
+        let mut tar_data = Vec::new();
+        {
+            let mut tar = tar::Builder::new(&mut tar_data);
+            for (mut header, path, bytes) in entries {
+                header.set_size(bytes.len() as u64);
+                header.set_cksum();
+                tar.append_data(&mut header, path, &bytes[..]).unwrap();
+            }
+            tar.finish().unwrap();
+        }
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(&tar_data).unwrap();
+        enc.finish().unwrap()
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+    let _id = registry_app(&state, &router, "regharden").await;
+    let push = |uri: String, body: Vec<u8>| {
+        let router = router.clone();
+        async move {
+            router
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        }
+    };
+    let tmp_count = || {
+        std::fs::read_dir(dir.path().join("artifacts").join("sha256"))
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .filter(|e| e.file_name().to_string_lossy().starts_with(".tmp-"))
+                    .count()
+            })
+            .unwrap_or(0)
+    };
+    let manifest =
+        |v: &str| format!(r#"{{"name":"regharden","version":"{v}","files":[{{"path":"app"}}]}}"#);
+
+    // Symlink members are rejected and leave no temp files.
+    let mut link_header = tar::Header::new_gnu();
+    let bundle = gzip_tar(vec![
+        (
+            {
+                let mut h = tar::Header::new_gnu();
+                h.set_size(manifest("9.0.0").len() as u64);
+                h.set_cksum();
+                h
+            },
+            "manifest.json",
+            manifest("9.0.0").into_bytes(),
+        ),
+        (
+            {
+                link_header.set_size(0);
+                link_header.set_entry_type(tar::EntryType::Symlink);
+                link_header.set_link_name("target").unwrap();
+                link_header.set_cksum();
+                link_header
+            },
+            "files/evil",
+            vec![],
+        ),
+    ]);
+    let resp = push(upload_uri("regharden", "&version=9.0.0"), bundle).await;
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(tmp_count(), 0);
+
+    // Non-string identity fields are rejected, not silently downgraded.
+    let bundle = bundle_bytes(
+        r#"{"name":"regharden","version":123,"files":[{"path":"app"}]}"#,
+        &[("app", elf_bytes(62))],
+    );
+    let resp = push(upload_uri("regharden", "&version=9.0.1"), bundle).await;
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(tmp_count(), 0);
+
+    // Undeclared files/ extras are rejected.
+    let bundle = bundle_bytes(
+        &manifest("9.0.2"),
+        &[("app", elf_bytes(62)), ("extra", elf_bytes(62))],
+    );
+    let resp = push(upload_uri("regharden", "&version=9.0.2"), bundle).await;
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(tmp_count(), 0);
+
+    // Unknown query fields fail loudly.
+    let resp = push(
+        upload_uri("regharden", "&version=9.0.3&versoin=1"),
+        elf_bytes(62),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // commit_sha is accepted as the canonical commit field.
+    let resp = push(
+        upload_uri("regharden", "&version=9.0.4&commit_sha=abc123"),
+        elf_bytes(62),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // Pinned digest mismatch is rejected; match succeeds.
+    use sha2::Digest;
+    let raw = elf_bytes(62);
+    let hex = format!("{:x}", sha2::Sha256::digest(&raw));
+    let resp = push(
+        upload_uri("regharden", "&version=9.0.5&sha256=sha256:00"),
+        raw.clone(),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let resp = push(
+        upload_uri("regharden", &format!("&version=9.0.6&sha256={hex}")),
+        raw,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    assert_eq!(tmp_count(), 0);
+}
+
+#[tokio::test]
+async fn registry_create_release_rejects_foreign_hash() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+    // Victim org (default): app + pushed bytes.
+    let _victim = registry_app(&state, &router, "victim").await;
+    let pushed = body_json(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(upload_uri("victim", "&version=1.0.0"))
+                    .body(Body::from(elf_bytes(62)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    let victim_hash = pushed["artifact"]["hash"].as_str().unwrap().to_string();
+
+    // Attacker org with its own app + linked repo; dev user joined as owner.
+    sqlx::query("INSERT INTO organizations (id, slug, name) VALUES ('other', 'other', 'Other')")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    let dev_id: String = sqlx::query_scalar("SELECT id FROM users WHERE github_id = 0")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO memberships (id, org_id, user_id, role) VALUES ('m9', 'other', ?, 'owner')",
+    )
+    .bind(&dev_id)
+    .execute(&state.pool)
+    .await
+    .unwrap();
+    let payload = json!({"name": "attacker", "binary_path": "/srv/attacker/bin", "port": 19100});
+    let created = body_json(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/orgs/other/apps")
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    let attacker_id = created["application"]["id"].as_str().unwrap().to_string();
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/other/registry/links")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"application_id": attacker_id, "repo": "acme/other"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // Pinning the victim's hash into the attacker org is rejected...
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/other/registry/releases")
+                .header("content-type", "application/json")
+                .body(
+                    Body::from(
+                        json!({"application_id": attacker_id, "version": "1.0.0", "artifact_hash": victim_hash})
+                            .to_string(),
+                    ),
+                )
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    // ...while the org's own pushed bytes pin fine.
+    let own = body_json(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/orgs/other/registry/artifacts?app=attacker&repo=acme%2Fother&version=2.0.0")
+                    .body(Body::from(elf_bytes(183)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    let own_hash = own["artifact"]["hash"].as_str().unwrap().to_string();
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/other/registry/releases")
+                .header("content-type", "application/json")
+                .body(
+                    Body::from(
+                        json!({"application_id": attacker_id, "version": "1.0.0", "artifact_hash": own_hash})
+                            .to_string(),
+                    ),
+                )
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn registry_agent_download_scoped_to_placement() {
+    use crate::grpc::pb::RegisterRequest;
+
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+    let reg_w1 = crate::grpc::register(
+        &state,
+        RegisterRequest {
+            join_token: "test-join".into(),
+            name: "w1".into(),
+            address: "10.0.0.9".into(),
+            version: "0".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let reg_w2 = crate::grpc::register(
+        &state,
+        RegisterRequest {
+            join_token: "test-join".into(),
+            name: "w2".into(),
+            address: "10.0.0.10".into(),
+            version: "0".into(),
+        },
+    )
+    .await
+    .unwrap();
+
+    // App placed on w1 with a pushed release.
+    let payload = json!({"name": "nodeapp", "binary_path": "/srv/nodeapp/bin", "port": 19200, "server_id": reg_w1.server_id});
+    let created = body_json(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/orgs/default/apps")
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    let app_id = created["application"]["id"].as_str().unwrap().to_string();
+    let link = json!({"application_id": app_id, "repo": "acme/nodeapp"});
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/registry/links")
+                .header("content-type", "application/json")
+                .body(Body::from(link.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let pushed = body_json(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/orgs/default/registry/artifacts?app=nodeapp&repo=acme%2Fnodeapp&version=1.0.0")
+                    .body(Body::from(elf_bytes(62)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    let hash = pushed["artifact"]["hash"].as_str().unwrap().to_string();
+
+    // Placed node's agent fetches fine...
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agent/artifacts/{hash}"))
+                .header("authorization", format!("Bearer {}", reg_w1.agent_token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // ...an unplaced node's agent cannot, same 404 as missing.
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agent/artifacts/{hash}"))
+                .header("authorization", format!("Bearer {}", reg_w2.agent_token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn registry_provenance_caps_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+    let app_id = registry_app(&state, &router, "regprov").await;
+
+    // Oversized notes, bogus arch, non-http build URL all fail.
+    let big = "n".repeat(5000);
+    for query in [
+        format!("&version=5.0.0&notes={big}"),
+        "&version=5.0.1&arch=bogus".to_string(),
+        "&version=5.0.2&build_url=ftp://example.com/x".to_string(),
+    ] {
+        let resp = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(upload_uri("regprov", &query))
+                    .body(Body::from(elf_bytes(62)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    // create_release inputs capped too.
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/registry/releases")
+                .header("content-type", "application/json")
+                .body(
+                    Body::from(
+                        json!({"application_id": app_id, "version": "1.0.0", "artifact_hash": "sha256:00", "notes": big})
+                            .to_string(),
+                    ),
+                )
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn registry_rollback_refuses_yanked_without_force_admin() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+    // Local app: rollback executes here.
+    let payload = json!({"name": "localrb", "binary_path": "/srv/localrb/bin", "port": 19300});
+    let created = body_json(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/orgs/default/apps")
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    let app_id = created["application"]["id"].as_str().unwrap().to_string();
+    let link = json!({"application_id": app_id, "repo": "acme/localrb"});
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/orgs/default/registry/links")
+                .header("content-type", "application/json")
+                .body(Body::from(link.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let pushed = body_json(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/orgs/default/registry/artifacts?app=localrb&repo=acme%2Flocalrb&version=1.0.0")
+                    .body(Body::from(elf_bytes(62)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    let hash = pushed["artifact"]["hash"].as_str().unwrap().to_string();
+    let rel_id = pushed["release"]["id"].as_str().unwrap().to_string();
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/orgs/default/registry/releases/{rel_id}/yank"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Yanked hash cannot come back by default...
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/default/apps/{app_id}/rollback"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"artifact_hash": hash}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+
+    // ...nor with force on a deploy-scoped (Developer-floor) token.
+    let (_, deploy_token) = mint_token(test_router(dir.path()).await, "deploy").await;
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/default/apps/{app_id}/rollback"))
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {deploy_token}"))
+                .body(Body::from(
+                    json!({"artifact_hash": hash, "force": true}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn registry_version_deploy_records_provenance() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+    let app_id = registry_app(&state, &router, "regprov2").await;
+    let pushed = body_json(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(upload_uri("regprov2", "&version=7.1.0"))
+                    .body(Body::from(elf_bytes(62)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    let rel_id = pushed["release"]["id"].as_str().unwrap().to_string();
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/orgs/default/apps/{app_id}/deploy"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"version":"7.1.0"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let row: (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT release_id, resolved_version FROM deployments WHERE application_id = ? ORDER BY rowid DESC LIMIT 1",
+    )
+    .bind(&app_id)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap();
+    assert_eq!(row, (Some(rel_id), Some("7.1.0".to_string())));
+}
+
+#[tokio::test]
+async fn registry_gc_expires_orphans_and_delete_endpoint_guards_pins() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = test_state(dir.path()).await;
+    let router = app::build_router(state.clone());
+    let app_id = registry_app(&state, &router, "reggc").await;
+
+    // Pinned blob: push + release, then backdate both row and file.
+    let pushed = body_json(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(upload_uri("reggc", "&version=1.0.0"))
+                    .body(Body::from(elf_bytes(62)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    let pinned_hash: String = pushed["artifact"]["hash"].as_str().unwrap().to_string();
+    // Orphan blob: pushed with no version (no release row).
+    let orphan = body_json(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(upload_uri("reggc", ""))
+                    .body(Body::from(elf_bytes(183)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    let orphan_hash: String = orphan["artifact"]["hash"].as_str().unwrap().to_string();
+
+    sqlx::query("UPDATE artifacts SET created_at = datetime('now', '-31 days')")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(31 * 86400);
+    for h in [&pinned_hash, &orphan_hash] {
+        let bare = h.strip_prefix("sha256:").unwrap_or(h);
+        let p = dir.path().join("artifacts").join("sha256").join(bare);
+        std::fs::File::options()
+            .write(true)
+            .open(&p)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+    }
+
+    let report = crate::gc::collect_artifacts(&state, false).await.unwrap();
+    assert_eq!(report.rows_expired, 1);
+    // Orphan blob + row gone; pinned blob + row survive.
+    let bare_orphan = orphan_hash.strip_prefix("sha256:").unwrap_or(&orphan_hash);
+    assert!(!dir
+        .path()
+        .join("artifacts")
+        .join("sha256")
+        .join(bare_orphan)
+        .exists());
+    let gone: i64 = sqlx::query_scalar("SELECT count(*) FROM artifacts WHERE hash = ?")
+        .bind(&orphan_hash)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+    assert_eq!(gone, 0);
+    let bare_pinned = pinned_hash.strip_prefix("sha256:").unwrap_or(&pinned_hash);
+    assert!(dir
+        .path()
+        .join("artifacts")
+        .join("sha256")
+        .join(bare_pinned)
+        .exists());
+
+    // DELETE refuses the pinned blob...
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!(
+                    "/api/v1/orgs/default/registry/artifacts/{pinned_hash}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+
+    // ...and 404s a blob that was never stored.
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/v1/orgs/default/registry/artifacts/sha256:00")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let _ = app_id;
+}

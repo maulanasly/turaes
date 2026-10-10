@@ -50,6 +50,32 @@ pub async fn download(
     if !state.artifacts.has(&hash) {
         return Err(Error::NotFound(format!("artifact {hash}")));
     }
+    // Tenancy: the hash must serve this server — pinned by one of its
+    // deployments or releases. A bare store hit is not enough; agents must
+    // not exfiltrate other tenants' pre-deploy blobs. Same 404 either way
+    // so missing and forbidden are indistinguishable.
+    let bare = hash.strip_prefix("sha256:").unwrap_or(&hash);
+    let serves: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM (
+           SELECT 1 FROM deployments d JOIN app_servers p ON p.application_id = d.application_id \
+            WHERE (d.artifact_hash = ? OR d.artifact_hash = ?) AND p.server_id = ?
+           UNION
+           SELECT 1 FROM releases r JOIN artifacts t ON t.id = r.artifact_id \
+            JOIN app_servers p ON p.application_id = r.application_id \
+            WHERE (t.hash = ? OR t.hash = ?) AND p.server_id = ?
+         )",
+    )
+    .bind(&hash)
+    .bind(bare)
+    .bind(&server.id)
+    .bind(&hash)
+    .bind(bare)
+    .bind(&server.id)
+    .fetch_one(&state.pool)
+    .await?;
+    if serves == 0 {
+        return Err(Error::NotFound(format!("artifact {hash}")));
+    }
     let path = state.artifacts.path_for(&hash)?;
     let bytes = tokio::fs::read(&path)
         .await
