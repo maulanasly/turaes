@@ -92,6 +92,7 @@ pub async fn resolve(
     .bind(&id)
     .execute(&state.pool)
     .await?;
+    crate::alerts::queue_resolved(&state, &id).await;
     audit::record(
         &state,
         Some(&org_id),
@@ -103,5 +104,6 @@ pub async fn resolve(
         None,
     )
     .await?;
+    crate::alerts::drain_outbox(&state).await;
     Ok(Json(serde_json::json!({ "id": id, "status": "resolved" })))
 }
